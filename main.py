@@ -1,4 +1,4 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Response
 import models
 from database import engine
 
@@ -37,4 +37,6 @@ app.include_router(admin_router)
 app.include_router(teacher_router)
 app.include_router(student_router)
 
-
+@app.options("/{rest_of_path:path}")
+async def options_handler():
+    return Response(status_code=200)
