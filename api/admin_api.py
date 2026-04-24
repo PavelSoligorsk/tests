@@ -104,11 +104,12 @@ def get_task(task_id: int, db: Session = Depends(get_db),
 @router.post("/rebuild-all-static-tests")
 def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: models.User = Depends(auth.check_admin)):
     try:
-        # Получаем уникальные пары (класс и номер темы)
+        # ЭТАП 1: Создание и обновление актуальных тестов
+        # Берем только те пары (класс, тема), для которых реально СУЩЕСТВУЮТ задачи
         unique_categories = db.query(Task.task_class, Task.topic_number).distinct().all()
 
         for t_class, t_num in unique_categories:
-            # 1. Ищем или создаем тест
+            # Ищем существующий или создаем новый тест
             test = db.query(Test).filter(
                 Test.target_class == str(t_class),
                 Test.target_topic == str(t_num),
@@ -118,30 +119,42 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: model
             if not test:
                 test = Test(
                     title=f"Тест: {t_class}, Тема {t_num}",
-                    target_class=t_class,
-                    target_topic=t_num,
+                    target_class=str(t_class),
+                    target_topic=str(t_num),
                     is_autocompile=True,
                     creator_id=current_admin.id
                 )
                 db.add(test)
                 db.flush()
 
-            # 2. Формируем список задач с заданной сортировкой:
-            # Сначала идут False (задания с вариантами), потом True (открытые ответы)
-            # Внутри каждой группы — по возрастанию сложности
+            # Получаем актуальные задачи с твоей сортировкой
             relevant_tasks = db.query(Task).filter(
                 Task.task_class == t_class,
                 Task.topic_number == t_num
             ).order_by(
-                Task.is_open_answer.asc(), # False (0) идет перед True (1)
-                Task.difficulty.asc()      # Затем по возрастанию сложности (1, 2, 3...)
+                Task.is_open_answer.asc(),
+                Task.difficulty.asc()
             ).all()
 
-            # 3. Синхронизируем список задач
+            # Синхронизируем список (даже если он пустой на этом этапе, 
+            # но unique_categories гарантирует, что задачи есть)
             test.tasks = relevant_tasks
 
+        db.flush() # Фиксируем изменения в сессии перед зачисткой
+
+        # ЭТАП 2: Удаление "пустых" авто-тестов
+        # Удаляем все тесты с флагом is_autocompile, у которых нет связанных задач
+        # (Это покроет и те тесты, темы которых вообще исчезли из таблицы Task)
+        deleted_count = db.query(Test).filter(
+            Test.is_autocompile == True,
+            ~Test.tasks.any()
+        ).delete(synchronize_session=False)
+
         db.commit()
-        return {"status": "success", "message": "Tests rebuilt with sorted tasks"}
+        return {
+            "status": "success", 
+            "message": f"Tests rebuilt. Removed {deleted_count} empty tests."
+        }
     
     except Exception as e:
         db.rollback()

@@ -8,3 +8,5 @@ __pycache__/
 edu-frontend/
 node_modules/
 *.json
+*.db
+tasks_database.db
