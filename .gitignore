@@ -1,12 +1,7 @@
 __pycache__/
-*.pyc
 .venv/
 .env
-.vscode/
-.DS_Store
-*.log
-edu-frontend/
 node_modules/
-*.json
+edu-frontend/
 *.db
-tasks_database.db
+*json

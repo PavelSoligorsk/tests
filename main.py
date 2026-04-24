@@ -20,7 +20,8 @@ app = FastAPI(title="Education Platform API (SQLite)")
 origins = [
     "http://localhost:5173",    # Стандартный порт Vite (React)
     "http://127.0.0.1:5173",
-    "http://localhost:3000",    # Если используешь Create React App
+    "http://localhost:3000",
+    "https://edu-frontend.vercel.app"  # Ваш Vercel домен
 ]
 
 app.add_middleware(
