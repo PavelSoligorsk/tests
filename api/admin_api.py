@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 import models, dto, auth
 from database import get_db
 from typing import List
-from models import Task, Test, TestTaskAssociation, User
+from models import Task, Test, TestTaskAssociation, User, UserAnswer
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -102,39 +102,21 @@ def get_task(task_id: int, db: Session = Depends(get_db),
     return task
 
 @router.post("/rebuild-all-static-tests")
-def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: models.User = Depends(auth.check_admin)):
+def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User = Depends(auth.check_admin)):
     try:
-        # Получаем уникальные пары (класс и номер темы) из таблицы задач
-        unique_categories = db.query(Task.task_class, Task.topic_number).distinct().all()
+        # 1. Собираем актуальные темы из задач
+        active_categories = db.query(Task.task_class, Task.topic_number).distinct().all()
+        updated_test_ids = []
 
-        for t_class, t_num in unique_categories:
-            # 1. Ищем существующий авто-тест
+        for t_class, t_num in active_categories:
             test = db.query(Test).filter(
                 Test.target_class == str(t_class),
-                Test.target_topic == str(t_num),
-                Test.is_autocompile == True
+                Test.target_topic == str(t_num)
             ).first()
 
-            # 2. Получаем подходящие задачи с сортировкой
-            relevant_tasks = db.query(Task).filter(
-                Task.task_class == t_class,
-                Task.topic_number == t_num
-            ).order_by(
-                Task.is_open_answer.asc(),
-                Task.difficulty.asc()
-            ).all()
-
-            # ЛОГИКА УДАЛЕНИЯ / ОБНОВЛЕНИЯ
-            if not relevant_tasks:
-                # Если задач нет, а тест существует — удаляем его
-                if test:
-                    db.delete(test)
-                continue  # Переходим к следующей категории
-
-            # Если задачи есть, но теста нет — создаем
             if not test:
                 test = Test(
-                    title=f"Тест: {t_class}, Тема {t_num}",
+                    title=f"Тест: {t_class} класс, Тема {t_num}",
                     target_class=str(t_class),
                     target_topic=str(t_num),
                     is_autocompile=True,
@@ -143,15 +125,49 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: model
                 db.add(test)
                 db.flush()
 
-            # 3. Синхронизируем список задач
+            relevant_tasks = db.query(Task).filter(
+                Task.task_class == t_class,
+                Task.topic_number == t_num
+            ).order_by(Task.is_open_answer.asc(), Task.difficulty.asc()).all()
+
             test.tasks = relevant_tasks
+            updated_test_ids.append(test.id)
+
+        db.flush()
+
+        # 2. ЖЕСТКАЯ ЗАЧИСТКА (Снизу вверх по иерархии FK)
+        # Находим ID всех тестов, которые либо не в списке живых, либо стали пустыми
+        bad_tests_query = db.query(Test.id).filter(
+            (Test.id.not_in(updated_test_ids)) | (~Test.tasks.any())
+        )
+        bad_test_ids = [t[0] for t in bad_tests_query.all()]
+
+        if bad_test_ids:
+            # Находим все ID результатов (попыток), связанных с плохими тестами
+            bad_result_ids = [r[0] for r in db.query(TestResult.id).filter(TestResult.test_id.in_(bad_test_ids)).all()]
+
+            if bad_result_ids:
+                # А. Удаляем ответы пользователей (самый низ иерархии)
+                db.query(UserAnswer).filter(UserAnswer.result_id.in_(bad_result_ids)).delete(synchronize_session=False)
+                # Б. Удаляем результаты тестов
+                db.query(TestResult).filter(TestResult.id.in_(bad_result_ids)).delete(synchronize_session=False)
+
+            # В. Удаляем связи тестов с задачами в ассоциативной таблице
+            db.execute(
+                TestTaskAssociation.__table__.delete().where(TestTaskAssociation.test_id.in_(bad_test_ids))
+            )
+
+            # Г. И только теперь удаляем сами тесты
+            deleted_count = db.query(Test).filter(Test.id.in_(bad_test_ids)).delete(synchronize_session=False)
+        else:
+            deleted_count = 0
 
         db.commit()
-        return {"status": "success", "message": "Tests rebuilt: empty tests removed, others updated"}
-    
+        return {"status": "success", "message": f"Deleted {deleted_count} empty tests and their history."}
+
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=str(e))
+        raise HTTPException(status_code=500, detail=f"Postgres Error: {str(e)}")
     
 @router.delete("/tasks/{task_id}")
 def delete_task(
@@ -159,8 +175,7 @@ def delete_task(
     db: Session = Depends(get_db), 
     current_admin: models.User = Depends(auth.check_admin)
 ):
-    """Полностью удалить задание из базы данных"""
-    # 1. Ищем задачу
+    """Полностью удалить задание из базы данных и всех связанных записей"""
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     
     if not task:
@@ -170,10 +185,23 @@ def delete_task(
         )
     
     try:
-        # 2. Удаляем
+        # 1. Удаляем ответы пользователей на эту задачу
+        # Без этого Postgres не даст удалить задачу из-за связи в UserAnswer
+        db.query(models.UserAnswer).filter(models.UserAnswer.task_id == task_id).delete(synchronize_session=False)
+
+        # 2. Удаляем связи задачи с тестами в ассоциативной таблице
+        # SQLAlchemy может делать это сам через relationship, но для надежности в Postgres делаем явно
+        db.execute(
+            models.TestTaskAssociation.__table__.delete().where(
+                models.TestTaskAssociation.task_id == task_id
+            )
+        )
+
+        # 3. Удаляем саму задачу
         db.delete(task)
+        
         db.commit()
-        return {"message": f"Задание с ID {task_id} успешно удалено"}
+        return {"message": f"Задание с ID {task_id} и связанные данные успешно удалены"}
         
     except Exception as e:
         db.rollback()
@@ -181,6 +209,7 @@ def delete_task(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, 
             detail=f"Ошибка при удалении: {str(e)}"
         )
+        
     
 from sqlalchemy import func
 from models import TestResult, Test
