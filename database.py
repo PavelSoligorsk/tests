@@ -1,26 +1,14 @@
 from sqlalchemy import create_engine
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
-import os
 
-# Пытаемся взять URL из переменных окружения (Railway)
-DATABASE_URL = os.getenv("DATABASE_URL")
+# Имя файла базы данных
+SQLALCHEMY_DATABASE_URL = "sqlite:///./tasks_database.db"
 
-# Если переменной нет (локальная разработка) — используем SQLite
-if not DATABASE_URL:
-    DATABASE_URL = "sqlite:///./tasks_database.db"
-    # Для SQLite нужен этот параметр
-    connect_args = {"check_same_thread": False}
-else:
-    # Для PostgreSQL этот параметр не нужен
-    connect_args = {}
-
-# Создаем engine
+# Параметр check_same_thread нужен только для SQLite
 engine = create_engine(
-    DATABASE_URL,
-    connect_args=connect_args
+    SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
 )
-
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 Base = declarative_base()
