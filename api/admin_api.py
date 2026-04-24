@@ -104,12 +104,10 @@ def get_task(task_id: int, db: Session = Depends(get_db),
 @router.post("/rebuild-all-static-tests")
 def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: models.User = Depends(auth.check_admin)):
     try:
-        # ЭТАП 1: Создание и обновление актуальных тестов
-        # Берем только те пары (класс, тема), для которых реально СУЩЕСТВУЮТ задачи
+        # 1. Сначала актуализируем то, что есть в задачах
         unique_categories = db.query(Task.task_class, Task.topic_number).distinct().all()
 
         for t_class, t_num in unique_categories:
-            # Ищем существующий или создаем новый тест
             test = db.query(Test).filter(
                 Test.target_class == str(t_class),
                 Test.target_topic == str(t_num),
@@ -127,7 +125,6 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: model
                 db.add(test)
                 db.flush()
 
-            # Получаем актуальные задачи с твоей сортировкой
             relevant_tasks = db.query(Task).filter(
                 Task.task_class == t_class,
                 Task.topic_number == t_num
@@ -136,24 +133,18 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: model
                 Task.difficulty.asc()
             ).all()
 
-            # Синхронизируем список (даже если он пустой на этом этапе, 
-            # но unique_categories гарантирует, что задачи есть)
             test.tasks = relevant_tasks
 
-        db.flush() # Фиксируем изменения в сессии перед зачисткой
+        db.flush()
 
-        # ЭТАП 2: Удаление "пустых" авто-тестов
-        # Удаляем все тесты с флагом is_autocompile, у которых нет связанных задач
-        # (Это покроет и те тесты, темы которых вообще исчезли из таблицы Task)
-        deleted_count = db.query(Test).filter(
-            Test.is_autocompile == True,
-            ~Test.tasks.any()
-        ).delete(synchronize_session=False)
+        # 2. А теперь тотальная чистка: удаляем ЛЮБОЙ тест, в котором 0 задач
+        # Вообще любой, плевать на is_autocompile и автора
+        deleted_count = db.query(Test).filter(~Test.tasks.any()).delete(synchronize_session=False)
 
         db.commit()
         return {
             "status": "success", 
-            "message": f"Tests rebuilt. Removed {deleted_count} empty tests."
+            "message": f"Done. Cleaned up {deleted_count} empty tests."
         }
     
     except Exception as e:
