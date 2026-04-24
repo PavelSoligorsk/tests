@@ -100,24 +100,19 @@ def get_task(task_id: int, db: Session = Depends(get_db),
     if not task:
         raise HTTPException(status_code=404, detail="Task not found")
     return task
-
 @router.post("/rebuild-all-static-tests")
 def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: models.User = Depends(auth.check_admin)):
     try:
-        # 1. Получаем все уникальные комбинации (Класс + Тема), которые реально есть в задачах
+        # 1. Синхронизируем актуальное
         active_categories = db.query(Task.task_class, Task.topic_number).distinct().all()
-        
-        # Список ID тестов, которые мы обновим (чтобы знать, кого НЕ удалять)
         updated_test_ids = []
 
         for t_class, t_num in active_categories:
-            # Ищем тест для этой категории (все тесты считаем статичными)
             test = db.query(Test).filter(
                 Test.target_class == str(t_class),
                 Test.target_topic == str(t_num)
             ).first()
 
-            # Если теста под эти задачи нет — создаем
             if not test:
                 test = Test(
                     title=f"Тест: {t_class} класс, Тема {t_num}",
@@ -129,33 +124,36 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: model
                 db.add(test)
                 db.flush()
 
-            # Выгребаем задачи СТРОГО этой категории
             relevant_tasks = db.query(Task).filter(
                 Task.task_class == t_class,
                 Task.topic_number == t_num
-            ).order_by(
-                Task.is_open_answer.asc(),
-                Task.difficulty.asc()
-            ).all()
+            ).order_by(Task.is_open_answer.asc(), Task.difficulty.asc()).all()
 
-            # Принудительная синхронизация: всё лишнее из test.tasks вылетит само
             test.tasks = relevant_tasks
             updated_test_ids.append(test.id)
 
         db.flush()
 
-        # 2. ТОТАЛЬНАЯ ЗАЧИСТКА
-        # Удаляем любые тесты, которые:
-        # а) Не попали в список обновленных (значит их категории больше нет в Task)
-        # б) Или у которых почему-то 0 задач (даже если ID в списке)
-        deleted_count = db.query(Test).filter(
+        # 2. ЖЕСТКАЯ ЗАЧИСТКА ДЛЯ POSTGRES
+        # Сначала находим ID тестов, которые пойдут "под нож"
+        bad_tests_query = db.query(Test.id).filter(
             (Test.id.not_in(updated_test_ids)) | (~Test.tasks.any())
-        ).delete(synchronize_session=False)
+        )
+        bad_test_ids = [t[0] for t in bad_tests_query.all()]
+
+        deleted_count = 0
+        if bad_test_ids:
+            # ШАГ А: Удаляем все результаты этих тестов (чистим Foreign Key)
+            # Убедись, что модель называется TestResult или как у тебя в коде
+            db.query(models.TestResult).filter(models.TestResult.test_id.in_(bad_test_ids)).delete(synchronize_session=False)
+            
+            # ШАГ Б: Теперь удаляем сами тесты
+            deleted_count = db.query(Test).filter(Test.id.in_(bad_test_ids)).delete(synchronize_session=False)
 
         db.commit()
         return {
             "status": "success", 
-            "message": f"Rebuild complete. Active tests: {len(updated_test_ids)}, Deleted: {deleted_count}"
+            "message": f"Rebuild complete. Active: {len(updated_test_ids)}, Deleted: {deleted_count}"
         }
     
     except Exception as e:
