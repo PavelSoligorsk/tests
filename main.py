@@ -22,8 +22,7 @@ origins = [
     "http://127.0.0.1:5173",
     "http://localhost:3000",
     "https://edu-frontend.vercel.app",
-    "https://tsst-three.vercel.app",     # ← ВАШ ТОЧНЫЙ ФРОНТ
-    "https://tsst-three.vercel.app"  # Ваш Vercel домен
+    "https://test-front-lac.vercel.app" # Ваш Vercel домен
 ]
 
 app.add_middleware(
