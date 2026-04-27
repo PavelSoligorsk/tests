@@ -21,7 +21,9 @@ origins = [
     "http://localhost:5173",    # Стандартный порт Vite (React)
     "http://127.0.0.1:5173",
     "http://localhost:3000",
-    "https://edu-frontend.vercel.app"  # Ваш Vercel домен
+    "https://edu-frontend.vercel.app",
+    "https://tsst-three.vercel.app",     # ← ВАШ ТОЧНЫЙ ФРОНТ
+    "https://tsst-three.vercel.app"  # Ваш Vercel домен
 ]
 
 app.add_middleware(
