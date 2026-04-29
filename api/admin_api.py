@@ -4,6 +4,12 @@ import models, dto, auth
 from database import get_db
 from typing import List
 from models import Task, Test, TestTaskAssociation, User, UserAnswer
+import base64
+import requests
+from dto import ImageUploadResponse
+import uuid  # ← добавь эту строку
+import boto3
+from botocore.config import Config
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -410,3 +416,89 @@ def get_admin_detailed_result(
         },
         "details": details
     }
+
+import base64
+import requests
+from dotenv import load_dotenv
+import os
+load_dotenv()
+R2_ACCESS_KEY_ID = os.getenv("R2_ACCESS_KEY_ID")
+R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
+R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL")
+R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
+R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL")
+@router.post("/upload-image", response_model=ImageUploadResponse)
+async def upload_to_r2(
+    payload: dict,
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(auth.check_admin)
+):
+    """
+    Загружает изображение в Cloudflare R2 и возвращает прямую ссылку.
+    Точная копия логики из test_r2.py
+    """
+    print("🚀 Начинаем загрузку в Cloudflare R2...")
+    
+    try:
+        # 1. Настраиваем клиент (как в тестовом файле)
+        print("📡 Подключаюсь к R2...")
+        s3_client = boto3.client(
+            's3',
+            endpoint_url=R2_ENDPOINT_URL,
+            aws_access_key_id=R2_ACCESS_KEY_ID,
+            aws_secret_access_key=R2_SECRET_ACCESS_KEY,
+            region_name='auto',
+            config=Config(signature_version='s3v4')
+        )
+        print("✅ Клиент создан")
+        
+        # 2. Получаем base64 из запроса
+        image_data = payload.get("image") or payload.get("image_data", "")
+        
+        if not image_data:
+            raise HTTPException(
+                status_code=400, 
+                detail="Missing image data. Send 'image' or 'image_data' field with base64"
+            )
+        
+        # 3. Убираем префикс data:image/...;base64, если есть
+        if "," in image_data:
+            image_base64 = image_data.split(",")[1]
+        else:
+            image_base64 = image_data
+        
+        # 4. Декодируем base64 в байты (как в тестовом файле)
+        print("🖼️ Декодирую изображение...")
+        image_bytes = base64.b64decode(image_base64)
+        print(f"✅ Размер изображения: {len(image_bytes)} байт")
+        
+        # 5. Генерируем имя файла (как в тестовом файле)
+        filename = f"tasks/{uuid.uuid4().hex}.png"
+        print(f"📝 Имя файла: {filename}")
+        
+        # 6. Загружаем в R2 (как в тестовом файле)
+        print("☁️ Загружаю в R2...")
+        s3_client.put_object(
+            Bucket=R2_BUCKET_NAME,
+            Key=filename,
+            Body=image_bytes,
+            ContentType='image/png',
+            CacheControl='max-age=31536000'
+        )
+        print("✅ Загрузка успешна!")
+        
+        # 7. Формируем публичную ссылку (как в тестовом файле)
+        file_url = f"{R2_PUBLIC_URL}/{filename}"
+        
+        # 8. Возвращаем ответ
+        return ImageUploadResponse(
+            url=file_url,
+            filename=filename,
+            size=len(image_bytes)
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        print(f"\n❌ ОШИБКА: {str(e)}")
+        raise HTTPException(status_code=500, detail=str(e))
