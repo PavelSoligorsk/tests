@@ -7,6 +7,7 @@ from models import Task, Test, TestTaskAssociation, User, UserAnswer
 import base64
 import requests
 from dto import ImageUploadResponse
+from dto import AllowedEmailResponse
 import uuid  # ← добавь эту строку
 import boto3
 from botocore.config import Config
@@ -278,10 +279,23 @@ def get_user_profile(
 
 # --- УПРАВЛЕНИЕ ДОСТУПОМ (Allowed Emails) ---
 
-@router.get("/allowed/emails") # Убрали response_model
+@router.get("/allowed/emails", response_model=list[AllowedEmailResponse])
 def get_allowed_emails(db: Session = Depends(get_db)):
-    # Просто возвращаем результат запроса как есть
-    return db.query(models.AllowedEmail).all()
+    allowed_emails = db.query(models.AllowedEmail).all()
+    
+    result = []
+    for ae in allowed_emails:
+        # Ищем пользователя по username = email
+        user = db.query(models.User).filter(models.User.username == ae.email).first()
+        
+        result.append({
+            "email": ae.email,
+            "first_name": user.first_name if user else None,
+            "last_name": user.last_name if user else None,
+            "tg_username": user.tg_username if user else None,
+        })
+    
+    return result
 
 @router.post("/allowed-emails") # Убрали response_model
 def add_allowed_email(payload: dict, db: Session = Depends(get_db)):
@@ -427,6 +441,7 @@ R2_SECRET_ACCESS_KEY = os.getenv("R2_SECRET_ACCESS_KEY")
 R2_ENDPOINT_URL = os.getenv("R2_ENDPOINT_URL")
 R2_BUCKET_NAME = os.getenv("R2_BUCKET_NAME")
 R2_PUBLIC_URL = os.getenv("R2_PUBLIC_URL")
+
 @router.post("/upload-image", response_model=ImageUploadResponse)
 async def upload_to_r2(
     payload: dict,
