@@ -3,5 +3,5 @@ __pycache__/
 .env
 node_modules/
 edu-frontend/
-*.db
+.db
 *json
