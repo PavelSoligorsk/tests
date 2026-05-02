@@ -192,7 +192,7 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User 
                         # Для открытых ответов: сравниваем строки (без учета регистра и пробелов)
                         is_correct_now = ua.user_text_answer.strip().lower() == task.answer.strip().lower()
                     else:
-                        # Для закрытых тестов: ищем в вариантах ответа
+                        # Для закрытых тестов: проверяем совпадение с правильным ответом
                         if task.options and ua.user_text_answer in task.options:
                             # Если ответ пользователя совпадает с правильным вариантом
                             if task.answer in task.options and ua.user_text_answer == task.answer:
@@ -210,16 +210,24 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User 
                         ua.is_correct = is_correct_now
                         answers_changed = True
                     
-                    # Обновляем баллы (1 за правильный, 0 за неправильный)
-                    new_points = 1 if is_correct_now else 0
+                    # ОБНОВЛЕННАЯ ЛОГИКА БАЛЛОВ:
+                    # 2 балла за открытый правильный ответ
+                    # 1 балл за закрытый правильный ответ
+                    # 0 баллов за неправильный ответ
+                    if is_correct_now:
+                        if task.is_open_answer:
+                            new_points = 2  # Открытый вопрос - 2 балла
+                        else:
+                            new_points = 1  # Закрытый вопрос (тест) - 1 балл
+                    else:
+                        new_points = 0
+                    
                     if ua.points_earned != new_points:
                         ua.points_earned = new_points
                         answers_changed = True
                     
                     if is_correct_now:
-                        total_points += 1
-                    else:
-                        answers_changed = True  # Если ответ стал неправильным, тоже меняем
+                        total_points += new_points
                 
                 # Пересчитываем общий балл за тест
                 if answers_changed or result.total_points != total_points:
