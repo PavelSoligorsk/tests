@@ -254,38 +254,33 @@ def get_my_students(
     current_teacher: models.User = Depends(check_teacher)
 ):
     return db.query(models.User).filter(models.User.role == "student").all()
+# api/student_api.py — исправь эндпоинт /history
 
-@router.get("/students/{user_id}/history")
-def get_student_history(
-    user_id: int,
+@router.get("/history", response_model=list[dto.TestResultResponse])
+def get_my_history(
     db: Session = Depends(get_db),
-    current_teacher: models.User = Depends(check_teacher)
+    current_user: models.User = Depends(auth.get_current_user)
 ):
-    """Посмотреть историю тестов конкретного ученика"""
-    user = db.query(models.User).filter(
-        models.User.id == user_id,
-        models.User.role == "student"
-    ).first()
-    if not user:
-        raise HTTPException(status_code=404, detail="Ученик не найден")
-    
     results = db.query(models.TestResult)\
                 .options(joinedload(models.TestResult.test))\
-                .filter(models.TestResult.user_id == user_id)\
+                .filter(models.TestResult.user_id == current_user.id)\
                 .order_by(models.TestResult.completed_at.desc())\
                 .all()
     
+    # Возвращаем данные вручную, чтобы избежать ошибок валидации
     return [
         {
-            "test_title": r.test.title if r.test else "Тест удалён",
-            "result": {
-                "id": r.id,
-                "total_points": r.total_points,
-                "completed_at": r.completed_at
-            }
+            "id": r.id,
+            "test_id": r.test_id or 0,  # Если None — подставляем 0
+            "user_id": r.user_id,
+            "total_points": r.total_points or 0,
+            "completed_at": r.completed_at,
+            "test": {
+                "id": r.test.id if r.test else 0,
+                "title": r.test.title if r.test else "Тест удалён"
+            } if r.test else None
         } for r in results
     ]
-
 
 @router.get("/results/{result_id}")
 def get_teacher_detailed_result(
