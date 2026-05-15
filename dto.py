@@ -110,6 +110,14 @@ class TestResultResponse(BaseModel):
             data.test_title = data.test.title or f"Тест №{data.test.id}"
         return data
 
+class TestCreate(BaseModel):
+    title: str
+    target_class: Optional[str] = None
+    target_topic: Optional[str] = None
+    is_autocompile: bool = False
+    task_ids: Optional[List[int]] = None
+    is_active: bool = True
+
 class UserRegister(BaseModel):
     username: str
     password: str
