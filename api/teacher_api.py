@@ -51,28 +51,11 @@ def get_all_tasks(
     return query.all()
 
 
-@router.get("/tasks-grouped", response_model=dict)
+@router.get("/tasks-grouped")
 def get_tasks_grouped(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
-    """
-    Возвращает задания, сгруппированные по классам и номерам тем.
-    Нужно фронтенду для отображения дерева банка заданий.
-    
-    Ответ:
-    {
-        "grouped": {
-            "7": {
-                "1": [{task1}, {task2}],
-                "2": [{task3}]
-            },
-            "8": { ... }
-        },
-        "total_tasks": 150,
-        "available_classes": ["7", "8", "9", "10", "11"]
-    }
-    """
     tasks = db.query(models.Task).order_by(
         models.Task.task_class,
         models.Task.topic_number,
@@ -105,12 +88,18 @@ def get_tasks_grouped(
             "difficulty": task.difficulty
         })
     
+    # Безопасная сортировка: числа первыми, текст в конце
+    def sort_key(cls):
+        if cls.isdigit():
+            return (0, int(cls))  # Числа сортируем как числа
+        else:
+            return (1, cls)  # Текст сортируем по алфавиту
+    
     return {
         "grouped": grouped,
         "total_tasks": len(tasks),
-        "available_classes": sorted(grouped.keys(), key=lambda x: int(x))
+        "available_classes": sorted(grouped.keys(), key=sort_key)
     }
-
 
 @router.get("/tasks/{task_id}", response_model=dto.TaskResponse)
 def get_single_task(
