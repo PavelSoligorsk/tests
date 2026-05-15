@@ -256,29 +256,73 @@ def get_my_students(
     return db.query(models.User).filter(models.User.role == "student").all()
 # api/student_api.py — исправь эндпоинт /history
 
-@router.get("/history", response_model=list[dto.TestResultResponse])
-def get_my_history(
+# api/teacher_api.py
+
+@router.get("/students-profile/{user_id}")
+def get_student_profile(
+    user_id: int,
     db: Session = Depends(get_db),
-    current_user: models.User = Depends(auth.get_current_user)
+    current_teacher: models.User = Depends(check_teacher)
 ):
+    """Профиль ученика"""
+    user = db.query(models.User).filter(
+        models.User.id == user_id,
+        models.User.role == "student"
+    ).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="Ученик не найден")
+
+    total_attempts = db.query(models.TestResult).filter(
+        models.TestResult.user_id == user_id
+    ).count()
+
+    return {
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "role": user.role,
+            "phone": user.phone,
+            "tg_username": user.tg_username
+        },
+        "stats": {
+            "total_attempts": total_attempts,
+            "avg_score": 0
+        }
+    }
+
+
+@router.get("/students-history/{user_id}")
+def get_student_history(
+    user_id: int,
+    db: Session = Depends(get_db),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """История тестов ученика"""
+    user = db.query(models.User).filter(
+        models.User.id == user_id,
+        models.User.role == "student"
+    ).first()
+    
+    if not user:
+        raise HTTPException(status_code=404, detail="Ученик не найден")
+
     results = db.query(models.TestResult)\
                 .options(joinedload(models.TestResult.test))\
-                .filter(models.TestResult.user_id == current_user.id)\
+                .filter(models.TestResult.user_id == user_id)\
                 .order_by(models.TestResult.completed_at.desc())\
                 .all()
     
-    # Возвращаем данные вручную, чтобы избежать ошибок валидации
     return [
         {
-            "id": r.id,
-            "test_id": r.test_id or 0,  # Если None — подставляем 0
-            "user_id": r.user_id,
-            "total_points": r.total_points or 0,
-            "completed_at": r.completed_at,
-            "test": {
-                "id": r.test.id if r.test else 0,
-                "title": r.test.title if r.test else "Тест удалён"
-            } if r.test else None
+            "test_title": r.test.title if r.test else "Тест удалён",
+            "result": {
+                "id": r.id,
+                "total_points": r.total_points or 0,
+                "completed_at": r.completed_at
+            }
         } for r in results
     ]
 
@@ -290,7 +334,7 @@ def get_teacher_detailed_result(
 ):
     """
     Детальный просмотр результата теста ученика.
-    Учитель может видеть все ответы.
+    Учитель видит все ответы, правильные ответы и решения.
     """
     result = db.query(models.TestResult).options(
         joinedload(models.TestResult.test),
@@ -299,6 +343,21 @@ def get_teacher_detailed_result(
 
     if not result:
         raise HTTPException(status_code=404, detail="Результат не найден")
+
+    # Защита от удалённого теста
+    if not result.test:
+        return {
+            "test_title": "Тест удалён",
+            "total_points": result.total_points or 0,
+            "max_points": 0,
+            "completed_at": result.completed_at,
+            "difficulty_stats": {},
+            "user": {
+                "first_name": result.user.first_name if result.user else "Неизвестный",
+                "last_name": result.user.last_name if result.user else ""
+            },
+            "details": []
+        }
 
     # Получаем все задания теста
     all_tasks = (
@@ -310,9 +369,9 @@ def get_teacher_detailed_result(
     )
 
     # Получаем ответы ученика
-    user_answers = db.query(models.UserAnswer).filter(
-        models.UserAnswer.result_id == result_id
-    ).all()
+    user_answers = db.query(models.UserAnswer)\
+                     .filter(models.UserAnswer.result_id == result_id)\
+                     .all()
     answers_map = {ua.task_id: ua for ua in user_answers}
 
     details = []
@@ -351,13 +410,13 @@ def get_teacher_detailed_result(
 
     return {
         "test_title": result.test.title,
-        "total_points": result.total_points,
+        "total_points": result.total_points or 0,
         "max_points": total_max_points,
         "completed_at": result.completed_at,
         "difficulty_stats": difficulty_stats,
         "user": {
-            "first_name": result.user.first_name,
-            "last_name": result.user.last_name,
+            "first_name": result.user.first_name if result.user else "Неизвестный",
+            "last_name": result.user.last_name if result.user else ""
         },
         "details": details
     }
