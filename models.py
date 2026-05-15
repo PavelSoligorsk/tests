@@ -37,15 +37,19 @@ class Task(Base):
     task_class = Column(String(50), nullable=False, index=True) 
     topic_number = Column(String(50), nullable=False, index=True)
     
-    # Контент (используем Text для больших объемов Markdown)
-    content = Column(Text, nullable=False) # Текст задачи + Markdown ссылки на фото
-    hint = Column(Text, nullable=True)    # Подсказка
-    solution = Column(Text, nullable=True) # Полное решение
+    # НОВЫЕ ПОЛЯ
+    topic = Column(Text, nullable=True)   # Тема
+    section = Column(Text, nullable=True) # Раздел
+    
+    # Контент
+    content = Column(Text, nullable=False)
+    hint = Column(Text, nullable=True)
+    solution = Column(Text, nullable=True)
     
     # Ответы
-    answer = Column(String, nullable=False) # Правильный ответ
-    is_open_answer = Column(Boolean, default=False) # True - число/текст, False - выбор варианта
-    options = Column(JSON, nullable=True) # Список вариантов ["1", "2", "3", "4"]
+    answer = Column(String, nullable=False)
+    is_open_answer = Column(Boolean, default=False)
+    options = Column(JSON, nullable=True)
     difficulty = Column(Integer, default=1, nullable=False)
 
 class Test(Base):

@@ -3,9 +3,10 @@ from typing import List, Optional
 from datetime import datetime
 
 class TaskBase(BaseModel):
-    # Изменяем на str
     task_class: str 
     topic_number: str 
+    topic: Optional[str] = None      # НОВОЕ
+    section: Optional[str] = None    # НОВОЕ
     content: str
     options: Optional[List[str]] = None
     answer: str
@@ -19,7 +20,6 @@ class TaskResponse(TaskBase):
     class Config:
         from_attributes = True
 
-
 class TaskCreate(TaskBase):
     """Схема для создания задания (то, что присылает админ)"""
     pass
@@ -32,14 +32,17 @@ class TaskCreateRequest(TaskBase):
         return self
 
 class TaskUpdateRequest(BaseModel):
-    task_class: Optional[int] = Field(None, ge=1, le=11)
-    topic_number: Optional[int] = None
+    task_class: Optional[str] = None  # Было int, исправил на str
+    topic_number: Optional[str] = None  # Было int, исправил на str
+    topic: Optional[str] = None       # НОВОЕ
+    section: Optional[str] = None     # НОВОЕ
     content: Optional[str] = None
     options: Optional[List[str]] = None
     answer: Optional[str] = None
     hint: Optional[str] = None
     solution: Optional[str] = None
     is_open_answer: Optional[bool] = None
+    difficulty: Optional[int] = None  # Добавил, чтобы можно было обновлять сложность
 
 
 from pydantic import BaseModel

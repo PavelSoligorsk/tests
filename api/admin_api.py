@@ -111,8 +111,13 @@ def get_task(task_id: int, db: Session = Depends(get_db),
 @router.post("/rebuild-all-static-tests")
 def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User = Depends(auth.check_admin)):
     try:
-        # 1. Собираем актуальные темы из задач
-        active_categories = db.query(Task.task_class, Task.topic_number).distinct().all()
+        # 1. Собираем актуальные категории из задач (учитываем topic и section)
+        active_categories = db.query(
+            Task.task_class, 
+            Task.topic_number, 
+            Task.topic,      # НОВОЕ
+            Task.section     # НОВОЕ
+        ).distinct().all()        
         updated_test_ids = []
 
         for t_class, t_num in active_categories:
@@ -249,6 +254,7 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User 
     except Exception as e:
         db.rollback()
         raise HTTPException(status_code=500, detail=f"Postgres Error: {str(e)}")
+  
     
 @router.delete("/tasks/{task_id}")
 def delete_task(
