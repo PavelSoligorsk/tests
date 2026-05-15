@@ -51,7 +51,7 @@ def get_all_tasks(
     return query.all()
 
 
-@router.get("/tasks/grouped", response_model=dict)
+@router.get("/tasks-grouped", response_model=dict)
 def get_tasks_grouped(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
