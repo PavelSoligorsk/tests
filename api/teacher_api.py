@@ -259,6 +259,13 @@ def get_test_detail(
 
 # ==================== РЕЗУЛЬТАТЫ УЧЕНИКОВ ====================
 
+@router.get("/students")
+def get_my_students(
+    db: Session = Depends(get_db),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    return db.query(models.User).filter(models.User.role == "student").all()
+
 @router.get("/students/{user_id}/history")
 def get_student_history(
     user_id: int,
