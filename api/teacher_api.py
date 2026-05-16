@@ -5,6 +5,7 @@ from sqlalchemy import func, case, select as sa_select
 import models, dto, auth
 from database import get_db
 from typing import List, Optional
+import datetime
 
 router = APIRouter(prefix="/teacher", tags=["Teacher API"])
 
