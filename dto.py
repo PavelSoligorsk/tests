@@ -74,16 +74,13 @@ class TestCreateRequest(BaseModel):
 class TestResponse(BaseModel):
     id: int
     title: Optional[str] = None
-    target_class: Optional[str] = None # Изменено на str
-    target_topic: Optional[str] = None # Изменено на str
+    target_class: Optional[str] = None
+    target_topic: Optional[str] = None
     is_active: bool
-    # Используем Optional, так как этих полей может не быть в объекте модели Test
+    is_autocompile: Optional[bool] = True  # <--- ДОБАВИТЬ
     creator_id: Optional[int] = None 
     tasks: List[TaskResponse] = []
-    hint: Optional[str] = None  # <--- Добавляем это поле
-    
-    # Эти поля вызывали ошибку, так как их нет в модели Test напрямую
-    # Если они нужны для чего-то другого, оставляем их Optional
+    hint: Optional[str] = None
     total_score: Optional[int] = 0 
     answers: List[AnswerResponse] = [] 
 

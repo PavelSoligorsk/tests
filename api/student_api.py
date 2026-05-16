@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, Optional, Query
 from sqlalchemy import func, select, case
 import models, dto, auth
 from database import get_db
@@ -55,12 +55,33 @@ def get_student_profile(
 
 
 @router.get("/tests", response_model=List[dto.TestResponse])
-def get_student_tests(db: Session = Depends(get_db)):
-    return db.query(models.Test)\
+def get_student_tests(
+    autocompile: Optional[bool] = Query(None, description="Фильтр: true - только автосборка, false - только ручные"),
+    db: Session = Depends(get_db)
+):
+    """
+    Получить тесты для студента.
+    По умолчанию возвращает все активные тесты.
+    Параметр autocompile:
+    - не указан: все тесты
+    - true: только автособираемые (is_autocompile != False)
+    - false: только ручная сборка (is_autocompile == False)
+    """
+    query = db.query(models.Test)\
              .options(joinedload(models.Test.tasks))\
-             .filter(models.Test.is_active == True)\
-             .all()
-
+             .filter(models.Test.is_active == True)
+    
+    # Фильтрация по autocompile
+    if autocompile is True:
+        # Только автосборка: is_autocompile = True или None (старые тесты без флага)
+        query = query.filter(
+            (models.Test.is_autocompile == True) | (models.Test.is_autocompile == None)
+        )
+    elif autocompile is False:
+        # Только ручная сборка
+        query = query.filter(models.Test.is_autocompile == False)
+    
+    return query.all()
 
 @router.get("/history")  # ← Убрал response_model, возвращаем dict вручную
 def get_my_history(
