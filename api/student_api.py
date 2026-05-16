@@ -1,87 +1,27 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session, joinedload, Optional, Query
+from sqlalchemy.orm import Session, joinedload, Query
 from sqlalchemy import func, select, case
 import models, dto, auth
 from database import get_db
-from typing import List
+from typing import List, Optional
 from datetime import datetime
 
 router = APIRouter(prefix="/student", tags=["Student API"])
 
 
-@router.get("/me", response_model=dto.UserResponseWithStats)
-def get_student_profile(
-    db: Session = Depends(get_db), 
-    current_user: models.User = Depends(auth.get_current_user)
-):
-    task_points_expr = case(
-        (models.Task.is_open_answer == True, 2),
-        else_=1
-    )
-
-    test_max_points_sub = (
-        select(
-            models.TestTaskAssociation.test_id,
-            func.sum(task_points_expr).label("max_total")
-        )
-        .join(models.Task, models.TestTaskAssociation.task_id == models.Task.id)
-        .group_by(models.TestTaskAssociation.test_id)
-        .subquery()
-    )
-
-    total_attempts = db.query(models.TestResult).filter(
-        models.TestResult.user_id == current_user.id
-    ).count()
-    
-    avg_percentage = db.query(
-        func.avg(
-            (models.TestResult.total_points * 100.0) / test_max_points_sub.c.max_total
-        )
-    ).join(
-        test_max_points_sub, 
-        models.TestResult.test_id == test_max_points_sub.c.test_id
-    ).filter(
-        models.TestResult.user_id == current_user.id,
-        test_max_points_sub.c.max_total > 0
-    ).scalar() or 0
-
-    return {
-        "user": current_user,
-        "stats": {
-            "total_attempts": total_attempts,
-            "avg_score": round(float(avg_percentage), 1)
-        }
-    }
-
-
 @router.get("/tests", response_model=List[dto.TestResponse])
-def get_student_tests(
-    autocompile: Optional[bool] = Query(None, description="Фильтр: true - только автосборка, false - только ручные"),
-    db: Session = Depends(get_db)
-):
+def get_student_tests(db: Session = Depends(get_db)):
     """
     Получить тесты для студента.
-    По умолчанию возвращает все активные тесты.
-    Параметр autocompile:
-    - не указан: все тесты
-    - true: только автособираемые (is_autocompile != False)
-    - false: только ручная сборка (is_autocompile == False)
+    Возвращает ТОЛЬКО autocompile тесты (is_autocompile != False).
     """
-    query = db.query(models.Test)\
+    return db.query(models.Test)\
              .options(joinedload(models.Test.tasks))\
-             .filter(models.Test.is_active == True)
-    
-    # Фильтрация по autocompile
-    if autocompile is True:
-        # Только автосборка: is_autocompile = True или None (старые тесты без флага)
-        query = query.filter(
-            (models.Test.is_autocompile == True) | (models.Test.is_autocompile == None)
-        )
-    elif autocompile is False:
-        # Только ручная сборка
-        query = query.filter(models.Test.is_autocompile == False)
-    
-    return query.all()
+             .filter(
+                 models.Test.is_active == True,
+                 (models.Test.is_autocompile == True) | (models.Test.is_autocompile == None)
+             )\
+             .all()
 
 @router.get("/history")  # ← Убрал response_model, возвращаем dict вручную
 def get_my_history(
