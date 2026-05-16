@@ -328,6 +328,7 @@ def get_student_history(
 
 @router.get("/results/{result_id}")
 def get_teacher_detailed_result(
+
     result_id: int,
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
@@ -420,3 +421,217 @@ def get_teacher_detailed_result(
         },
         "details": details
     }
+
+# В routers/teacher.py добавьте:
+
+# ==================== НАЗНАЧЕНИЕ ТЕСТОВ ====================
+
+@router.post("/assign-test", response_model=List[dto.TestAssignmentResponse])
+def assign_test_to_students(
+    assignment: dto.TestAssignmentCreate,
+    db: Session = Depends(get_db),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """
+    Назначить тест одному или нескольким студентам.
+    
+    Пример body:
+    {
+        "test_id": 1,
+        "user_ids": [2, 3, 5],
+        "due_date": "2024-12-31T23:59:59"
+    }
+    """
+    # Проверяем, что тест существует
+    test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
+    if not test:
+        raise HTTPException(status_code=404, detail="Тест не найден")
+    
+    # Проверяем, что все указанные пользователи - студенты
+    students = db.query(models.User).filter(
+        models.User.id.in_(assignment.user_ids),
+        models.User.role == "student"
+    ).all()
+    
+    if len(students) != len(assignment.user_ids):
+        raise HTTPException(status_code=400, detail="Некоторые пользователи не найдены или не являются студентами")
+    
+    # Создаём назначения
+    created_assignments = []
+    for user_id in assignment.user_ids:
+        # Проверяем, не назначен ли уже этот тест студенту
+        existing = db.query(models.TestAssignment).filter(
+            models.TestAssignment.test_id == assignment.test_id,
+            models.TestAssignment.user_id == user_id
+        ).first()
+        
+        if existing:
+            continue  # Пропускаем уже назначенные
+        
+        new_assignment = models.TestAssignment(
+            test_id=assignment.test_id,
+            user_id=user_id,
+            due_date=assignment.due_date,
+            assigned_at=datetime.datetime.utcnow()
+        )
+        db.add(new_assignment)
+        created_assignments.append(new_assignment)
+    
+    db.commit()
+    
+    # Загружаем созданные назначения с дополнительной информацией
+    result = []
+    for ca in created_assignments:
+        db.refresh(ca)
+        student = db.query(models.User).filter(models.User.id == ca.user_id).first()
+        result.append({
+            "id": ca.id,
+            "test_id": ca.test_id,
+            "test_title": test.title,
+            "user_id": ca.user_id,
+            "student_name": f"{student.first_name} {student.last_name}" if student else "Неизвестный",
+            "assigned_at": ca.assigned_at,
+            "due_date": ca.due_date,
+            "is_completed": ca.is_completed,
+            "completed_at": ca.completed_at
+        })
+    
+    return result
+
+
+@router.get("/test/{test_id}/assignments", response_model=List[dto.TestAssignmentResponse])
+def get_test_assignments(
+    test_id: int,
+    db: Session = Depends(get_db),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """
+    Получить список студентов, которым назначен тест
+    """
+    test = db.query(models.Test).filter(models.Test.id == test_id).first()
+    if not test:
+        raise HTTPException(status_code=404, detail="Тест не найден")
+    
+    assignments = db.query(models.TestAssignment).filter(
+        models.TestAssignment.test_id == test_id
+    ).all()
+    
+    result = []
+    for assignment in assignments:
+        student = db.query(models.User).filter(models.User.id == assignment.user_id).first()
+        result.append({
+            "id": assignment.id,
+            "test_id": assignment.test_id,
+            "test_title": test.title,
+            "user_id": assignment.user_id,
+            "student_name": f"{student.first_name} {student.last_name}" if student else "Неизвестный",
+            "assigned_at": assignment.assigned_at,
+            "due_date": assignment.due_date,
+            "is_completed": assignment.is_completed,
+            "completed_at": assignment.completed_at
+        })
+    
+    return result
+
+
+@router.get("/student/{student_id}/assignments", response_model=List[dto.TestAssignmentResponse])
+def get_student_assignments(
+    student_id: int,
+    db: Session = Depends(get_db),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """
+    Получить все назначенные тесты для конкретного студента
+    """
+    student = db.query(models.User).filter(
+        models.User.id == student_id,
+        models.User.role == "student"
+    ).first()
+    
+    if not student:
+        raise HTTPException(status_code=404, detail="Студент не найден")
+    
+    assignments = db.query(models.TestAssignment).filter(
+        models.TestAssignment.user_id == student_id
+    ).order_by(models.TestAssignment.assigned_at.desc()).all()
+    
+    result = []
+    for assignment in assignments:
+        test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
+        tasks_count = len(test.tasks) if test else 0
+        
+        result.append({
+            "id": assignment.id,
+            "test_id": assignment.test_id,
+            "test_title": test.title if test else "Тест удалён",
+            "user_id": assignment.user_id,
+            "student_name": f"{student.first_name} {student.last_name}",
+            "assigned_at": assignment.assigned_at,
+            "due_date": assignment.due_date,
+            "is_completed": assignment.is_completed,
+            "completed_at": assignment.completed_at,
+            "total_tasks": tasks_count
+        })
+    
+    return result
+
+
+@router.delete("/assignments/{assignment_id}")
+def delete_assignment(
+    assignment_id: int,
+    db: Session = Depends(get_db),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Отменить назначение теста"""
+    assignment = db.query(models.TestAssignment).filter(
+        models.TestAssignment.id == assignment_id
+    ).first()
+    
+    if not assignment:
+        raise HTTPException(status_code=404, detail="Назначение не найдено")
+    
+    db.delete(assignment)
+    db.commit()
+    
+    return {"message": "Назначение удалено"}
+
+
+@router.get("/pending-tests")
+def get_pending_tests_summary(
+    db: Session = Depends(get_db),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """
+    Получить сводку по назначенным тестам:
+    - сколько студентов выполнили
+    - кто ещё не выполнил
+    """
+    assignments = db.query(models.TestAssignment).filter(
+        models.TestAssignment.is_completed == False
+    ).all()
+    
+    # Группируем по тестам
+    tests_summary = {}
+    for assignment in assignments:
+        test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
+        student = db.query(models.User).filter(models.User.id == assignment.user_id).first()
+        
+        if assignment.test_id not in tests_summary:
+            tests_summary[assignment.test_id] = {
+                "test_id": assignment.test_id,
+                "test_title": test.title if test else "Тест удалён",
+                "total_assigned": 0,
+                "completed": 0,
+                "pending_students": []
+            }
+        
+        tests_summary[assignment.test_id]["total_assigned"] += 1
+        if assignment.is_completed:
+            tests_summary[assignment.test_id]["completed"] += 1
+        else:
+            tests_summary[assignment.test_id]["pending_students"].append({
+                "user_id": student.id if student else assignment.user_id,
+                "name": f"{student.first_name} {student.last_name}" if student else "Неизвестный"
+            })
+    
+    return list(tests_summary.values())

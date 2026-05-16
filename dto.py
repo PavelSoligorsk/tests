@@ -181,3 +181,34 @@ class ImageUploadResponse(BaseModel):
     url: str
     filename: Optional[str] = None
     size: Optional[int] = None
+
+# В dto.py добавьте:
+
+class TestAssignmentCreate(BaseModel):
+    test_id: int
+    user_ids: List[int]  # Список ID студентов
+    due_date: Optional[datetime] = None
+
+class TestAssignmentResponse(BaseModel):
+    id: int
+    test_id: int
+    test_title: Optional[str] = None
+    user_id: int
+    student_name: Optional[str] = None
+    assigned_at: datetime
+    due_date: Optional[datetime] = None
+    is_completed: bool
+    completed_at: Optional[datetime] = None
+    
+    class Config:
+        from_attributes = True
+
+class StudentAssignmentResponse(BaseModel):
+    """Для студента - список назначенных тестов"""
+    assignment_id: int
+    test_id: int
+    test_title: Optional[str] = None
+    assigned_at: datetime
+    due_date: Optional[datetime] = None
+    is_completed: bool
+    total_tasks: int = 0

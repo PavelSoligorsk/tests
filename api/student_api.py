@@ -4,6 +4,7 @@ from sqlalchemy import func, select, case
 import models, dto, auth
 from database import get_db
 from typing import List
+from datetime import datetime
 
 router = APIRouter(prefix="/student", tags=["Student API"])
 
@@ -270,3 +271,94 @@ def update_student_profile(
         raise HTTPException(status_code=400, detail="Ошибка при обновлении профиля")
 
     return current_user
+
+@router.get("/my-assignments")
+def get_my_assignments(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """Студент видит назначенные ему тесты"""
+    assignments = db.query(models.TestAssignment).filter(
+        models.TestAssignment.user_id == current_user.id
+    ).order_by(models.TestAssignment.assigned_at.desc()).all()
+    
+    result = []
+    for assignment in assignments:
+        test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
+        tasks_count = len(test.tasks) if test else 0
+        
+        result.append({
+            "assignment_id": assignment.id,
+            "test_id": assignment.test_id,
+            "test_title": test.title if test else "Тест удалён",
+            "assigned_at": assignment.assigned_at,
+            "due_date": assignment.due_date,
+            "is_completed": assignment.is_completed,
+            "completed_at": assignment.completed_at,
+            "total_tasks": tasks_count,
+            "time_left": str(assignment.due_date - datetime.datetime.utcnow()) if assignment.due_date else None
+        })
+    
+    return result
+
+
+@router.post("/start-test/{test_id}")
+def start_assigned_test(
+    test_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """Студент начинает выполнение назначенного теста"""
+    # Проверяем, что тест назначен этому студенту
+    assignment = db.query(models.TestAssignment).filter(
+        models.TestAssignment.test_id == test_id,
+        models.TestAssignment.user_id == current_user.id,
+        models.TestAssignment.is_completed == False
+    ).first()
+    
+    if not assignment:
+        raise HTTPException(
+            status_code=403, 
+            detail="Тест не назначен вам или уже выполнен"
+        )
+    
+    # Проверяем дедлайн
+    if assignment.due_date and assignment.due_date < datetime.datetime.utcnow():
+        raise HTTPException(status_code=400, detail="Срок выполнения теста истёк")
+    
+    # Здесь вызываем логику начала теста (создание TestResult)
+    test = db.query(models.Test).options(
+        joinedload(models.Test.tasks)
+    ).filter(models.Test.id == test_id).first()
+    
+    if not test or not test.tasks:
+        raise HTTPException(status_code=404, detail="Тест не содержит заданий")
+    
+    # Создаём результат (попытку)
+    new_result = models.TestResult(
+        test_id=test_id,
+        user_id=current_user.id,
+        total_points=0
+    )
+    db.add(new_result)
+    db.commit()
+    db.refresh(new_result)
+    
+    # Возвращаем задания теста
+    tasks = []
+    for task in test.tasks:
+        tasks.append({
+            "id": task.id,
+            "content": task.content,
+            "options": task.options,
+            "is_open_answer": task.is_open_answer,
+            "difficulty": task.difficulty,
+            # НЕ возвращаем правильный ответ!
+        })
+    
+    return {
+        "result_id": new_result.id,
+        "test_title": test.title,
+        "tasks": tasks,
+        "time_limit": None  # Можно добавить ограничение по времени
+    }

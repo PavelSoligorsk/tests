@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Column, Integer, String, Boolean, JSON, ForeignKey, Enum, Text, DateTime
+from sqlalchemy import Column, Integer, String, Boolean, JSON, ForeignKey, Enum, Text, DateTime, UniqueConstraint
 from sqlalchemy.orm import relationship
 from database import Base
 import datetime
@@ -111,3 +111,23 @@ class AllowedEmail(Base):
     
     # Email теперь и ID, и уникальное поле
     email = Column(String(255), primary_key=True, index=True, nullable=False)
+
+# В models.py добавьте:
+
+class TestAssignment(Base):
+    """Назначение теста студенту"""
+    __tablename__ = "test_assignments"
+    id = Column(Integer, primary_key=True, index=True)
+    test_id = Column(Integer, ForeignKey("tests.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    assigned_at = Column(DateTime, default=datetime.datetime.utcnow)
+    due_date = Column(DateTime, nullable=True)
+    is_completed = Column(Boolean, default=False)
+    completed_at = Column(DateTime, nullable=True)
+    
+    test = relationship("Test")
+    user = relationship("User", backref="test_assignments")
+    
+    __table_args__ = (
+        UniqueConstraint('test_id', 'user_id', name='unique_test_user_assignment'),
+    )
