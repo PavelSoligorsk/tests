@@ -9,6 +9,51 @@ from datetime import datetime
 router = APIRouter(prefix="/student", tags=["Student API"])
 
 
+@router.get("/me", response_model=dto.UserResponseWithStats)
+def get_student_profile(
+    db: Session = Depends(get_db), 
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    task_points_expr = case(
+        (models.Task.is_open_answer == True, 2),
+        else_=1
+    )
+
+    test_max_points_sub = (
+        select(
+            models.TestTaskAssociation.test_id,
+            func.sum(task_points_expr).label("max_total")
+        )
+        .join(models.Task, models.TestTaskAssociation.task_id == models.Task.id)
+        .group_by(models.TestTaskAssociation.test_id)
+        .subquery()
+    )
+
+    total_attempts = db.query(models.TestResult).filter(
+        models.TestResult.user_id == current_user.id
+    ).count()
+    
+    avg_percentage = db.query(
+        func.avg(
+            (models.TestResult.total_points * 100.0) / test_max_points_sub.c.max_total
+        )
+    ).join(
+        test_max_points_sub, 
+        models.TestResult.test_id == test_max_points_sub.c.test_id
+    ).filter(
+        models.TestResult.user_id == current_user.id,
+        test_max_points_sub.c.max_total > 0
+    ).scalar() or 0
+
+    return {
+        "user": current_user,
+        "stats": {
+            "total_attempts": total_attempts,
+            "avg_score": round(float(avg_percentage), 1)
+        }
+    }
+
+
 @router.get("/tests", response_model=List[dto.TestResponse])
 def get_student_tests(db: Session = Depends(get_db)):
     """
