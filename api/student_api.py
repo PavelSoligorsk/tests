@@ -290,13 +290,20 @@ def get_my_assignments(
     
     result = []
     for assignment in assignments:
-        test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
+        test = db.query(models.Test).options(
+            joinedload(models.Test.tasks)
+        ).filter(models.Test.id == assignment.test_id).first()
+        
         tasks_count = len(test.tasks) if test else 0
         
         result.append({
             "assignment_id": assignment.id,
             "test_id": assignment.test_id,
             "test_title": test.title if test else "Тест удалён",
+            "target_class": test.target_class if test else "",
+            "target_topic": test.target_topic if test else "",
+            "is_autocompile": test.is_autocompile if test else None,
+            "tasks": [{"id": t.id, "content": t.content} for t in (test.tasks if test else [])],
             "assigned_at": assignment.assigned_at,
             "due_date": assignment.due_date,
             "is_completed": assignment.is_completed,
