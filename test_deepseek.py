@@ -14,7 +14,7 @@ client = Mistral(api_key=SECRET_KEY)
 response = client.chat.complete(
     model="mistral-large-latest",
     messages=[
-        {"role": "user", "content": "А ты умеешь читать картинки по url"}
+        {"role": "user", "content": "https://i.postimg.cc/8cD2X9Qp/изображение.png"}
     ],
 )
 
