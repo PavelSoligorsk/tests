@@ -534,3 +534,134 @@ $$
             "topic_mastery_percent": topic_mastery
         }
     }
+
+@router.post("/tasks/{task_id}/ai-solve")
+def get_ai_solution(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """
+    Получить решение задачи от ИИ.
+    Нейронка сначала решает, потом сверяется с правильным ответом.
+    """
+    # 1. Задание
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Задание не найдено")
+
+    # 2. Статистика студента (для контекста)
+    all_results = db.query(models.TestResult).filter(
+        models.TestResult.user_id == current_user.id
+    ).all()
+    result_ids = [r.id for r in all_results]
+
+    if result_ids:
+        answers_same_topic = db.query(models.UserAnswer).join(
+            models.Task
+        ).filter(
+            models.UserAnswer.result_id.in_(result_ids),
+            models.Task.topic_number == task.topic_number
+        ).all()
+        same_topic_total = len(answers_same_topic)
+        same_topic_correct = sum(1 for a in answers_same_topic if a.is_correct)
+        topic_mastery = round((same_topic_correct / same_topic_total) * 100) if same_topic_total > 0 else None
+    else:
+        topic_mastery = None
+
+    # 3. Промпт для решения
+    solve_prompt = f"""Ты — AI-репетитор по математике. Реши задачу и дай полное, подробное решение.
+
+=== ЗАДАНИЕ ===
+Класс: {task.task_class}
+Тема №: {task.topic_number}
+Тема: {task.topic or 'Не указана'}
+Раздел: {task.section or 'Не указан'}
+Сложность (1-5): {task.difficulty}
+Тип: {'открытый ответ' if task.is_open_answer else 'выбор варианта'}
+
+Условие:
+{task.content}
+
+Варианты ответа: {task.options if task.options else 'Нет (открытый вопрос)'}
+
+=== ТРЕБОВАНИЯ ===
+1. Реши задачу пошагово
+2. В конце напиши: "=== ОТВЕТ === ..." (если выбор варианта — напиши букву варианта, если открытый — число или выражение)
+3. Используй $...$ для формул в тексте и $$...$$ для вынесенных формул
+4. НЕ используй списки, маркеры, звёздочки
+5. Пиши связным текстом
+"""
+
+    # 4. Отправка в Mistral для решения
+    try:
+        response = mistral_client.chat.complete(
+            model="mistral-large-latest",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Ты — математический эксперт. Решай задачи подробно, показывай все шаги. В конце обязательно укажи ответ в формате '=== ОТВЕТ === ...'"
+                },
+                {
+                    "role": "user",
+                    "content": solve_prompt
+                }
+            ],
+            temperature=0.3,  # Низкая температура для более точного решения
+            max_tokens=1500
+        )
+        ai_solution = response.choices[0].message.content
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка AI: {str(e)}")
+
+    # 5. Извлечение ответа ИИ
+    import re
+    answer_pattern = r'=== ОТВЕТ ===\s*(.+?)(?:\n|$)'
+    match = re.search(answer_pattern, ai_solution, re.IGNORECASE)
+    
+    if not match:
+        return {
+            "task_id": task_id,
+            "success": False,
+            "message": "Решение ИИ не найдено",
+            "ai_solution": ai_solution,
+            "verified": False
+        }
+    
+    ai_answer = match.group(1).strip()
+    
+    # 6. Сверка с правильным ответом
+    correct_answer = task.correct_answer.strip() if task.correct_answer else None
+    
+    if not correct_answer:
+        return {
+            "task_id": task_id,
+            "success": False,
+            "message": "В задании нет правильного ответа для сверки",
+            "ai_solution": ai_solution,
+            "ai_answer": ai_answer,
+            "verified": False
+        }
+    
+    # Нормализация ответов для сравнения
+    ai_normalized = ai_answer.lower().replace(' ', '').replace('(', '').replace(')', '')
+    correct_normalized = correct_answer.lower().replace(' ', '').replace('(', '').replace(')', '')
+    
+    is_correct = ai_normalized == correct_normalized
+    
+    # 7. Результат
+    return {
+        "task_id": task_id,
+        "success": True,
+        "verified": is_correct,
+        "message": "Решение найдено и проверено" if is_correct else "Решение найдено, но не совпадает с правильным ответом",
+        "ai_solution": ai_solution,
+        "ai_answer": ai_answer,
+        "correct_answer": correct_answer,
+        "context": {
+            "task_class": task.task_class,
+            "topic_number": task.topic_number,
+            "difficulty": task.difficulty,
+            "topic_mastery_percent": topic_mastery
+        }
+    }
