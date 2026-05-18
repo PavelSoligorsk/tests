@@ -41,3 +41,4 @@ app.include_router(student_router)
 @app.options("/{rest_of_path:path}")
 async def options_handler():
     return Response(status_code=200)
+

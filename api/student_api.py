@@ -5,6 +5,13 @@ import models, dto, auth
 from database import get_db
 from typing import List, Optional
 from datetime import datetime
+import os
+from mistralai.client import Mistral
+from dotenv import load_dotenv
+
+load_dotenv()
+MISTRAL_TOKEN = os.getenv("MISTRAL_TOKEN")
+mistral_client = Mistral(api_key=MISTRAL_TOKEN)
 
 router = APIRouter(prefix="/student", tags=["Student API"])
 
@@ -374,4 +381,108 @@ def start_assigned_test(
         "test_title": test.title,
         "tasks": tasks,
         "time_limit": None  # Можно добавить ограничение по времени
+    }
+
+@router.post("/tasks/{task_id}/hint")
+def get_ai_hint_while_solving(
+    task_id: int,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """
+    Получить ИИ-подсказку во время решения.
+    Без проверок — просто задание + контекст студента.
+    """
+    # 1. Задание
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Задание не найдено")
+
+    # 2. Статистика студента по теме
+    all_results = db.query(models.TestResult).filter(
+        models.TestResult.user_id == current_user.id
+    ).all()
+    result_ids = [r.id for r in all_results]
+
+    if result_ids:
+        answers_same_topic = db.query(models.UserAnswer).join(
+            models.Task
+        ).filter(
+            models.UserAnswer.result_id.in_(result_ids),
+            models.Task.topic_number == task.topic_number
+        ).all()
+
+        same_topic_total = len(answers_same_topic)
+        same_topic_correct = sum(1 for a in answers_same_topic if a.is_correct)
+        topic_mastery = round((same_topic_correct / same_topic_total) * 100) if same_topic_total > 0 else None
+    else:
+        same_topic_total = 0
+        same_topic_correct = 0
+        topic_mastery = None
+
+    # 3. Промпт
+    prompt = f"""Ты — AI-репетитор по математике. Студент решает задание и просит подсказку.
+НЕ ДАВАЙ ГОТОВЫЙ ОТВЕТ. Объясни подход, метод, наведи на мысль.
+
+=== ЗАДАНИЕ ===
+Класс: {task.task_class}
+Тема №: {task.topic_number}
+Тема: {task.topic or 'Не указана'}
+Раздел: {task.section or 'Не указан'}
+Сложность (1-5): {task.difficulty}
+Тип: {'открытый ответ' if task.is_open_answer else 'выбор варианта'}
+
+Условие:
+{task.content}
+
+Варианты: {task.options if task.options else 'Нет (открытый вопрос)'}
+"""
+
+    if topic_mastery is not None:
+        prompt += f"""
+=== УСВОЕНИЕ ТЕМЫ ===
+Решено задач по этой теме: {same_topic_total}
+Правильно: {same_topic_correct} ({topic_mastery}%)
+"""
+
+    prompt += """
+=== ИНСТРУКЦИЯ ===
+1. Определи, какая тема и какой метод нужен.
+2. Объясни подход простыми словами.
+3. Если есть варианты — научи исключать неверные.
+4. Дай формулу или правило, которое нужно применить.
+5. 3-5 предложений на русском.
+6. НЕ пиши ответ. НЕ решай до конца.
+"""
+
+    # 4. Отправка в Mistral
+    try:
+        response = mistral_client.chat.complete(
+            model="mistral-large-latest",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Ты — терпеливый ИИ-репетитор. Помогаешь понять, а не решаешь за студента."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=500
+        )
+        hint_text = response.choices[0].message.content
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка AI: {str(e)}")
+
+    return {
+        "task_id": task_id,
+        "hint": hint_text,
+        "context": {
+            "task_class": task.task_class,
+            "topic_number": task.topic_number,
+            "difficulty": task.difficulty,
+            "topic_mastery_percent": topic_mastery
+        }
     }
