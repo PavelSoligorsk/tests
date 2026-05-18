@@ -534,7 +534,6 @@ $$
             "topic_mastery_percent": topic_mastery
         }
     }
-
 @router.post("/tasks/{task_id}/ai-solve")
 def get_ai_solution(
     task_id: int,
@@ -587,7 +586,9 @@ def get_ai_solution(
 
 === ТРЕБОВАНИЯ ===
 1. Реши задачу пошагово
-2. В конце напиши: "=== ОТВЕТ === ..." (если выбор варианта — напиши букву варианта, если открытый — число или выражение)
+2. В конце напиши: "=== ОТВЕТ === ..." 
+   - Если выбор варианта — напиши букву варианта (например: "=== ОТВЕТ === B")
+   - Если открытый ответ — напиши число или выражение (например: "=== ОТВЕТ === 42" или "=== ОТВЕТ === x^2 + 3")
 3. Используй $...$ для формул в тексте и $$...$$ для вынесенных формул
 4. НЕ используй списки, маркеры, звёздочки
 5. Пиши связным текстом
@@ -607,7 +608,7 @@ def get_ai_solution(
                     "content": solve_prompt
                 }
             ],
-            temperature=0.3,  # Низкая температура для более точного решения
+            temperature=0.3,
             max_tokens=1500
         )
         ai_solution = response.choices[0].message.content
@@ -623,15 +624,15 @@ def get_ai_solution(
         return {
             "task_id": task_id,
             "success": False,
-            "message": "Решение ИИ не найдено",
+            "message": "Решение ИИ не найдено (нет маркера '=== ОТВЕТ ===')",
             "ai_solution": ai_solution,
             "verified": False
         }
     
     ai_answer = match.group(1).strip()
     
-    # 6. Сверка с правильным ответом
-    correct_answer = task.correct_answer.strip() if task.correct_answer else None
+    # 6. Сверка с правильным ответом (поле answer в модели Task)
+    correct_answer = task.answer.strip() if task.answer else None
     
     if not correct_answer:
         return {
@@ -644,8 +645,13 @@ def get_ai_solution(
         }
     
     # Нормализация ответов для сравнения
-    ai_normalized = ai_answer.lower().replace(' ', '').replace('(', '').replace(')', '')
-    correct_normalized = correct_answer.lower().replace(' ', '').replace('(', '').replace(')', '')
+    def normalize_answer(text):
+        if not text:
+            return ""
+        return text.lower().strip().replace(' ', '').replace('(', '').replace(')', '').replace('.', '')
+    
+    ai_normalized = normalize_answer(ai_answer)
+    correct_normalized = normalize_answer(correct_answer)
     
     is_correct = ai_normalized == correct_normalized
     
@@ -654,7 +660,7 @@ def get_ai_solution(
         "task_id": task_id,
         "success": True,
         "verified": is_correct,
-        "message": "Решение найдено и проверено" if is_correct else "Решение найдено, но не совпадает с правильным ответом",
+        "message": "Решение найдено и проверено. Ответ совпадает." if is_correct else "Решение найдено, но ответ не совпадает с правильным.",
         "ai_solution": ai_solution,
         "ai_answer": ai_answer,
         "correct_answer": correct_answer,
