@@ -534,6 +534,7 @@ $$
             "topic_mastery_percent": topic_mastery
         }
     }
+
 @router.post("/tasks/{task_id}/ai-solve")
 def get_ai_solution(
     task_id: int,
@@ -601,13 +602,13 @@ def get_ai_solution(
 Вспомни основное правило умножения степеней:
 
 $$
-a^m \cdot a^n = a^{m+n}
+a^m \cdot a^n = 
 $$
 
 Теперь примени это правило к выражению $a \cdot a^2$:
 
 $$
-a^1 \cdot a^2 = a^{1+2} = a^3
+a^1 \cdot a^2 = a^3 = a^3
 $$
 
 Получили $a^3$, значит этот вариант подходит.
