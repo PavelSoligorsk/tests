@@ -499,7 +499,7 @@ $$a^m \cdot a^n = a^{m+n}$$
                 }
             ],
             temperature=0.7,
-            max_tokens=500
+            max_tokens=800
         )
         hint_text = response.choices[0].message.content
     except Exception as e:
