@@ -113,11 +113,9 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User 
     try:
         # 1. Собираем актуальные категории из задач (учитываем topic и section)
         active_categories = db.query(
-            Task.task_class, 
-            Task.topic_number, 
-            Task.topic,      # НОВОЕ
-            Task.section     # НОВОЕ
-        ).distinct().all()        
+    Task.task_class, 
+    Task.topic_number
+).distinct().all()               
         updated_test_ids = []
 
         for t_class, t_num in active_categories:
