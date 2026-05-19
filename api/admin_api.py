@@ -152,6 +152,29 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User 
         bad_test_ids = [t[0] for t in bad_tests_query.all()]
 
         if bad_test_ids:
+            # 1. Удаляем UserAnswer (через TestResult)
+            bad_result_ids = [r[0] for r in db.query(TestResult.id).filter(TestResult.test_id.in_(bad_test_ids)).all()]
+
+            if bad_result_ids:
+                db.query(UserAnswer).filter(UserAnswer.result_id.in_(bad_result_ids)).delete(synchronize_session=False)
+                db.query(TestResult).filter(TestResult.id.in_(bad_result_ids)).delete(synchronize_session=False)
+
+            # 2. Удаляем связи test_task_association
+            db.execute(
+                TestTaskAssociation.__table__.delete().where(TestTaskAssociation.test_id.in_(bad_test_ids))
+            )
+
+            # 3. Удаляем назначения тестов (TestAssignment)
+            db.query(TestAssignment).filter(TestAssignment.test_id.in_(bad_test_ids)).delete(synchronize_session=False)
+
+            # 4. Теперь можно удалять tests
+            deleted_count = db.query(Test).filter(Test.id.in_(bad_test_ids)).delete(synchronize_session=False)
+        else:
+            deleted_count = 0
+        
+        bad_test_ids = [t[0] for t in bad_tests_query.all()]
+
+        if bad_test_ids:
             bad_result_ids = [r[0] for r in db.query(TestResult.id).filter(TestResult.test_id.in_(bad_test_ids)).all()]
 
             if bad_result_ids:
