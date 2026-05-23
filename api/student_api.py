@@ -806,3 +806,96 @@ def get_theory_by_topic_section(
         )
     
     return theory
+
+@router.post("/theory/ask-ai")
+def ask_ai_about_theory(
+    request: dict,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """
+    Задать вопрос ИИ по теоретическому материалу.
+    Нейронка получает полный контекст теории и вопрос студента.
+    """
+    theory_id = request.get("theory_id")
+    question = request.get("question", "").strip()
+    theory_content = request.get("theory_content", "")  # опционально, если передан с фронта
+    
+    if not question:
+        raise HTTPException(status_code=400, detail="Вопрос не может быть пустым")
+    
+    # Если передан theory_id, загружаем теорию из БД
+    theory_context = ""
+    topic_name = ""
+    section_name = ""
+    
+    if theory_id:
+        theory = db.query(models.Theory).filter(models.Theory.id == theory_id).first()
+        if theory:
+            theory_context = theory.content or ""
+            topic_name = theory.topic or ""
+            section_name = theory.section or ""
+    elif theory_content:
+        theory_context = theory_content
+    else:
+        raise HTTPException(status_code=400, detail="Не указан theory_id или theory_content")
+    
+    # Собираем промпт
+    prompt = f"""Ты — AI-репетитор по математике. Студент изучает теорию и задаёт вопрос.
+Твоя задача — объяснить материал понятно, с примерами, но не давать готовых ответов, если студент не просит решить задачу.
+
+=== ФОРМАТ ФОРМУЛ ===
+- Для формул внутри строки используй $...$ (например, $ax^2 + bx + c = 0$)
+- Для вынесенных формул и выражений используй $$...$$ (например, $$\\frac{{a}}{{b}}$$)
+- Все математические записи ОБЯЗАТЕЛЬНО заключай в $...$ или $$...$$
+- НИКОГДА не используй \\( ... \\) или \\[ ... \\]
+
+=== ТЕОРЕТИЧЕСКИЙ МАТЕРИАЛ ===
+Тема: {topic_name or 'Не указана'}
+Раздел: {section_name or 'Не указан'}
+
+Содержание теории:
+{theory_context[:8000]}
+
+=== ВОПРОС СТУДЕНТА ===
+{question}
+
+=== ИНСТРУКЦИЯ ДЛЯ AI ===
+1. Отвечай простыми, понятными предложениями
+2. Используй примеры для иллюстрации
+3. Объясняй «почему», а не только «как»
+4. Если вопрос не по теме — вежливо направь к материалу
+5. ВСЕ математические выражения оформляй в $...$ или $$...$$
+6. Не используй списки с маркерами, пиши связным текстом
+7. Если студент просит решить задачу — реши пошагово с объяснениями
+"""
+
+    try:
+        response = mistral_client.chat.complete(
+            model="mistral-large-latest",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Ты — терпеливый ИИ-репетитор по математике. Объясняешь теорию, отвечаешь на вопросы, помогаешь понять материал. ВСЕ математические формулы и выражения ОБЯЗАТЕЛЬНО оформляй в $...$ (строчные) или $$...$$ (вынесенные). НИКОГДА не используй \\(...\\) или \\[...\\]."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.7,
+            max_tokens=1500
+        )
+        ai_answer = response.choices[0].message.content
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка AI: {str(e)}")
+
+    return {
+        "success": True,
+        "question": question,
+        "answer": ai_answer,
+        "context": {
+            "topic": topic_name,
+            "section": section_name
+        }
+    }
