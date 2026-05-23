@@ -647,7 +647,7 @@ def create_theory(
     
     return new_theory
 
-@router.get("/theory", response_model=list[dto.TheoryResponse])
+@router.get("/theory/getall", response_model=list[dto.TheoryResponse])
 def get_all_theory(
     db: Session = Depends(get_db),
     current_admin: models.User = Depends(auth.check_admin)
