@@ -903,7 +903,7 @@ $$
                 }
             ],
             temperature=0.7,
-            max_tokens=1500
+            max_tokens=3000
         )
         ai_answer = response.choices[0].message.content
     except Exception as e:
