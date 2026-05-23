@@ -855,7 +855,7 @@ def ask_ai_about_theory(
 Раздел: {section_name or 'Не указан'}
 
 Содержание теории:
-{theory_context[:8000]}
+{theory_context}
 
 === ВОПРОС СТУДЕНТА ===
 {question}
