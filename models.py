@@ -131,3 +131,16 @@ class TestAssignment(Base):
     __table_args__ = (
         UniqueConstraint('test_id', 'user_id', name='unique_test_user_assignment'),
     )
+
+class Theory(Base):
+    __tablename__ = "theory"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    topic = Column(String(255), nullable=False, index=True)      # Тема
+    section = Column(String(255), nullable=False, index=True)    # Раздел
+    content = Column(Text, nullable=False)                       # Содержание теории
+    
+    # Уникальность: одна теория на комбинацию topic + section
+    __table_args__ = (
+        UniqueConstraint('topic', 'section', name='unique_topic_section'),
+    )

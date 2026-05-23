@@ -617,3 +617,136 @@ async def upload_to_r2(
     except Exception as e:
         print(f"\n❌ ОШИБКА: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
+    
+# ==================== УПРАВЛЕНИЕ ТЕОРИЕЙ ====================
+
+@router.post("/theory", response_model=dto.TheoryResponse)
+def create_theory(
+    payload: dto.TheoryCreate,
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(auth.check_admin)
+):
+    """Создать новый теоретический материал"""
+    
+    # Проверяем, нет ли уже теории с такой комбинацией topic + section
+    existing = db.query(models.Theory).filter(
+        models.Theory.topic == payload.topic,
+        models.Theory.section == payload.section
+    ).first()
+    
+    if existing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Теория для темы '{payload.topic}' и раздела '{payload.section}' уже существует"
+        )
+    
+    new_theory = models.Theory(**payload.dict())
+    db.add(new_theory)
+    db.commit()
+    db.refresh(new_theory)
+    
+    return new_theory
+
+@router.get("/theory", response_model=list[dto.TheoryResponse])
+def get_all_theory(
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(auth.check_admin)
+):
+    """Получить весь теоретический материал"""
+    return db.query(models.Theory).order_by(
+        models.Theory.topic, 
+        models.Theory.section
+    ).all()
+
+@router.get("/theory/{theory_id}", response_model=dto.TheoryResponse)
+def get_theory_by_id(
+    theory_id: int,
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(auth.check_admin)
+):
+    """Получить теорию по ID"""
+    theory = db.query(models.Theory).filter(models.Theory.id == theory_id).first()
+    
+    if not theory:
+        raise HTTPException(status_code=404, detail="Теория не найдена")
+    
+    return theory
+
+@router.get("/theory/by-topic/{topic}/section/{section}", response_model=dto.TheoryResponse)
+def get_theory_by_topic_section(
+    topic: str,
+    section: str,
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(auth.check_admin)
+):
+    """Получить теорию по теме и разделу"""
+    theory = db.query(models.Theory).filter(
+        models.Theory.topic == topic,
+        models.Theory.section == section
+    ).first()
+    
+    if not theory:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Теория для темы '{topic}' и раздела '{section}' не найдена"
+        )
+    
+    return theory
+
+@router.put("/theory/{theory_id}", response_model=dto.TheoryResponse)
+def update_theory(
+    theory_id: int,
+    payload: dto.TheoryUpdate,
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(auth.check_admin)
+):
+    """Обновить теоретический материал"""
+    theory = db.query(models.Theory).filter(models.Theory.id == theory_id).first()
+    
+    if not theory:
+        raise HTTPException(status_code=404, detail="Теория не найдена")
+    
+    # Если меняются topic или section, проверяем уникальность
+    if payload.topic is not None or payload.section is not None:
+        new_topic = payload.topic if payload.topic is not None else theory.topic
+        new_section = payload.section if payload.section is not None else theory.section
+        
+        # Проверяем, не занята ли новая комбинация
+        existing = db.query(models.Theory).filter(
+            models.Theory.topic == new_topic,
+            models.Theory.section == new_section,
+            models.Theory.id != theory_id
+        ).first()
+        
+        if existing:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Теория для темы '{new_topic}' и раздела '{new_section}' уже существует"
+            )
+    
+    # Обновляем поля
+    update_data = payload.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(theory, key, value)
+    
+    db.commit()
+    db.refresh(theory)
+    
+    return theory
+
+@router.delete("/theory/{theory_id}")
+def delete_theory(
+    theory_id: int,
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(auth.check_admin)
+):
+    """Удалить теоретический материал"""
+    theory = db.query(models.Theory).filter(models.Theory.id == theory_id).first()
+    
+    if not theory:
+        raise HTTPException(status_code=404, detail="Теория не найдена")
+    
+    db.delete(theory)
+    db.commit()
+    
+    return {"message": f"Теория для темы '{theory.topic}' и раздела '{theory.section}' успешно удалена"}
