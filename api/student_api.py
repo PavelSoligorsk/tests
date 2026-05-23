@@ -877,13 +877,13 @@ def ask_ai_about_theory(
 Применим правило умножения степеней:
 
 $$
-a^m \\cdot a^n = a^{m+n}
+a^m \\cdot a^n = 
 $$
 
 Подставим $m=1$, $n=2$:
 
 $$
-a^1 \\cdot a^2 = a^{1+2} = a^3
+a^1 \\cdot a^2 = a^3 = a^3
 $$
 
 
