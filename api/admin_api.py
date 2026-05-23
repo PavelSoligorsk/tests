@@ -618,6 +618,99 @@ async def upload_to_r2(
         print(f"\n❌ ОШИБКА: {str(e)}")
         raise HTTPException(status_code=500, detail=str(e))
     
+
+# ==================== ЭНДПОИНТЫ ДЛЯ СТУДЕНТА (ТЕОРИЯ) ====================
+
+@router.get("/theory/topics")
+def get_theory_topics(
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """Получить все доступные темы (уникальные topic)"""
+    topics = db.query(models.Theory.topic).distinct().all()
+    
+    # Словарь для красивых названий
+    MAIN_TOPICS = {
+        'numbers': 'Числа и вычисления',
+        'expressions': 'Выражения и их преобразования',
+        'equations': 'Уравнения и неравенства',
+        'functions': 'Координаты и функции',
+        'geometry': 'Геометрия'
+    }
+    
+    result = []
+    for topic in topics:
+        if topic[0]:
+            result.append({
+                "topic": topic[0],
+                "label": MAIN_TOPICS.get(topic[0], topic[0]),
+                "sections_count": db.query(models.Theory).filter(models.Theory.topic == topic[0]).count()
+            })
+    
+    return result
+
+
+@router.get("/theory/sections/{topic}")
+def get_theory_sections(
+    topic: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """Получить все разделы по теме"""
+    theories = db.query(models.Theory).filter(
+        models.Theory.topic == topic
+    ).order_by(models.Theory.section).all()
+    
+    result = []
+    for theory in theories:
+        result.append({
+            "section": theory.section,
+            "theory_id": theory.id
+        })
+    
+    return result
+
+
+@router.get("/theory/by-topic/{topic}")
+def get_theory_by_topic(
+    topic: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """Получить всю теорию по теме (все разделы)"""
+    theories = db.query(models.Theory).filter(
+        models.Theory.topic == topic
+    ).order_by(models.Theory.section).all()
+    
+    if not theories:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Теория для темы '{topic}' не найдена"
+        )
+    
+    return theories
+
+
+@router.get("/theory/by-topic/{topic}/section/{section}")
+def get_theory_by_topic_section(
+    topic: str,
+    section: str,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """Получить теорию по теме и разделу"""
+    theory = db.query(models.Theory).filter(
+        models.Theory.topic == topic,
+        models.Theory.section == section
+    ).first()
+    
+    if not theory:
+        raise HTTPException(
+            status_code=404,
+            detail=f"Теория для темы '{topic}' и раздела '{section}' не найдена"
+        )
+    
+    return theory
 # ==================== УПРАВЛЕНИЕ ТЕОРИЕЙ ====================
 
 @router.post("/theory", response_model=dto.TheoryResponse)
