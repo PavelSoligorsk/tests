@@ -230,8 +230,15 @@ class TheoryResponse(TheoryBase):
     class Config:
         from_attributes = True
 
+# schemas.py
 class AITestRequest(BaseModel):
     prompt: str
+    topics: Optional[List[str]] = None  # должно быть
+    sections: Optional[List[str]] = None  # должно быть
+    target_class: Optional[int] = None
+    difficulty: Optional[str] = None
     task_count: int = 10
-    difficulty: str = "medium"
-    target_class: Optional[str] = None
+    
+    # Добавьте для отладки
+    class Config:
+        extra = "forbid"  # Запрещает лишние поля
