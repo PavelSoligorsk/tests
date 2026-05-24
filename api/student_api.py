@@ -946,15 +946,6 @@ def generate_ai_test(
     """
     AI подбирает задания из базы по промпту студента с умным фолбеком.
     """
-
-    print("=" * 80)
-    print(f"[LOG] Новая генерация теста")
-    print(f"[LOG] Время: {datetime.now()}")
-    print(f"[LOG] Пользователь: {current_user.id} ({current_user.email or 'no email'})")
-    print(f"[LOG] Запрос студента: {request.prompt}")
-    print(f"[LOG] Сложность: {request.difficulty}")
-    print(f"[LOG] Количество задач: {request.task_count}")
-    print("=" * 80)
     
     # ========== ШАГ 1: AI определяет темы и разделы ==========
     # Выбираем только непустые темы для экономии контекста
@@ -972,9 +963,6 @@ def generate_ai_test(
         hierarchy_context.append(f"- Тема: {topic}")
         if sections:
             hierarchy_context.append(f"  Разделы: {', '.join(sorted(sections))}")
-
-    print(f"\n[LOG] Всего уникальных тем в БД: {len(topics_structure)}")
-    print(f"[LOG] Темы в БД: {list(topics_structure.keys())[:10]}..." if len(topics_structure) > 10 else f"[LOG] Темы в БД: {list(topics_structure.keys())}")
             
     topic_prompt = f"""Ты — классификатор учебных заданий по математике.
 Анализируй запрос студента и сопоставляй его исключительно с ТЕМАМИ и РАЗДЕЛАМИ из реальной структуры базы данных ниже.
@@ -1013,12 +1001,6 @@ def generate_ai_test(
             classification = json.loads(json_match.group())
             detected_topics = [t for t in classification.get("topics", []) if t]
             detected_sections = [s for s in classification.get("sections", []) if s]
-            # ВЫВОДИМ ТО, ЧТО НАШЁЛ AI
-            print("\n" + "=" * 80)
-            print("🎯 AI ОПРЕДЕЛИЛ:")
-            print(f"   📚 Темы ({len(detected_topics)}): {detected_topics}")
-            print(f"   📖 Разделы ({len(detected_sections)}): {detected_sections}")
-            print("=" * 80 + "\n")
     except Exception as e:
         print(f"[ERROR] AI classification failed: {e}")
 
