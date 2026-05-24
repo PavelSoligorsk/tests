@@ -925,7 +925,6 @@ $$
             "section": section_name
         }
     }
-
 @router.post("/generate-test")
 def generate_ai_test(
     request: AITestRequest,
@@ -947,7 +946,7 @@ def generate_ai_test(
         models.Task.task_class,
         models.Task.topic_number,
         models.Task.content,
-        models.Task.is_open_answer  # ← ДОБАВИЛ
+        models.Task.is_open_answer
     ).all()
     
     if not all_tasks_meta:
@@ -964,20 +963,29 @@ def generate_ai_test(
                 "difficulties": [],
                 "count": 0
             }
-        topics_summary[key]["sections"].add(task.section)
-        topics_summary[key]["classes"].add(str(task.task_class))
-        topics_summary[key]["difficulties"].append(task.difficulty)
+        # ИСПРАВЛЕНИЕ: добавляем section только если не None
+        if task.section:
+            topics_summary[key]["sections"].add(task.section)
+        if task.task_class:
+            topics_summary[key]["classes"].add(str(task.task_class))
+        if task.difficulty is not None:
+            topics_summary[key]["difficulties"].append(task.difficulty)
         topics_summary[key]["count"] += 1
     
-    # Преобразуем sets в списки для JSON
+    # Преобразуем sets в списки для JSON (фильтруем None)
     meta_context = []
     for topic, data in topics_summary.items():
+        # ИСПРАВЛЕНИЕ: фильтруем None значения перед сортировкой
+        sections_list = sorted([s for s in data['sections'] if s is not None])
+        classes_list = sorted([c for c in data['classes'] if c is not None])
+        difficulties_list = sorted(set(d for d in data['difficulties'] if d is not None))
+        
         meta_context.append(
             f"Тема: {topic}\n"
-            f"  Разделы: {', '.join(sorted(data['sections']))}\n"
-            f"  Классы: {', '.join(sorted(data['classes']))}\n"
+            f"  Разделы: {', '.join(sections_list) if sections_list else 'Нет'}\n"
+            f"  Классы: {', '.join(classes_list) if classes_list else 'Нет'}\n"
             f"  Доступно заданий: {data['count']}\n"
-            f"  Сложности: {sorted(set(data['difficulties']))}"
+            f"  Сложности: {difficulties_list if difficulties_list else 'Нет'}"
         )
     
     # 3. Промпт для AI
@@ -999,7 +1007,7 @@ def generate_ai_test(
 {chr(10).join(meta_context[:30])}
 
 === ЗАДАНИЯ (ID и краткое содержание) ===
-{chr(10).join([f"ID:{t.id} | Класс:{t.task_class} | Тема:{t.topic} | Раздел:{t.section} | Сложность:{t.difficulty} | Тип:{'открытый' if t.is_open_answer else 'закрытый'} | {t.content[:100]}" for t in all_tasks_meta[:200]])}
+{chr(10).join([f"ID:{t.id} | Класс:{t.task_class or 'Н/Д'} | Тема:{t.topic or 'Н/Д'} | Раздел:{t.section or 'Н/Д'} | Сложность:{t.difficulty or 'Н/Д'} | Тип:{'открытый' if t.is_open_answer else 'закрытый'} | {t.content[:100] if t.content else ''}" for t in all_tasks_meta[:200]])}
 
 === ИНСТРУКЦИЯ ===
 1. Подбери задания, соответствующие запросу студента
@@ -1059,22 +1067,21 @@ def generate_ai_test(
     # 7. СОРТИРОВКА: закрытые (по сложности) → открытые (по сложности)
     closed_tasks = sorted(
         [t for t in existing_tasks if not t.is_open_answer],
-        key=lambda t: (t.difficulty or 0)
+        key=lambda t: (t.difficulty if t.difficulty is not None else 0)
     )
     open_tasks = sorted(
         [t for t in existing_tasks if t.is_open_answer],
-        key=lambda t: (t.difficulty or 0)
+        key=lambda t: (t.difficulty if t.difficulty is not None else 0)
     )
     
     sorted_tasks = closed_tasks + open_tasks
     
-    # 8. Создаём тест (как учительский, но is_autocompile=False, is_ai_generated=True)
+    # 8. Создаём тест
     new_test = models.Test(
         title=f"AI: {request.prompt[:50]}",
         target_class=request.target_class,
         target_topic=None,
         is_autocompile=False,
-        is_ai_generated=True,
         creator_id=current_user.id,
         is_active=True
     )
