@@ -934,154 +934,292 @@ def generate_ai_test(
 ):
     """
     AI подбирает задания из базы по промпту студента.
-    Возвращает список task_id → формирует тест через учительский эндпоинт.
-    Задания сортируются: закрытые (по сложности) → открытые (по сложности).
+    Этап 1: Определяем ТЕМЫ и РАЗДЕЛЫ (может быть несколько)
+    Этап 2: Подбираем задания по этим параметрам
     """
     
-    # 1. Собираем метаданные всех заданий (только topic, section, id, difficulty)
-    all_tasks_meta = db.query(
-        models.Task.id,
-        models.Task.topic,
-        models.Task.section,
-        models.Task.difficulty,
-        models.Task.task_class,
-        models.Task.topic_number,
-        models.Task.content,
-        models.Task.is_open_answer
-    ).all()
+    # ========== ЭТАП 1: Определяем темы и разделы ==========
     
-    if not all_tasks_meta:
-        raise HTTPException(status_code=404, detail="В базе нет заданий")
+    # 1.1 Загружаем уникальные темы и разделы из БД
+    available_topics = db.query(models.Task.topic, models.Task.section).distinct().all()
     
-    # 2. Формируем контекст для AI (компактно)
-    topics_summary = {}
-    for task in all_tasks_meta:
-        key = f"{task.topic or 'Без темы'}"
-        if key not in topics_summary:
-            topics_summary[key] = {
-                "sections": set(),
-                "classes": set(),
-                "difficulties": [],
-                "count": 0
-            }
-        # ИСПРАВЛЕНИЕ: добавляем section только если не None
-        if task.section:
-            topics_summary[key]["sections"].add(task.section)
-        if task.task_class:
-            topics_summary[key]["classes"].add(str(task.task_class))
-        if task.difficulty is not None:
-            topics_summary[key]["difficulties"].append(task.difficulty)
-        topics_summary[key]["count"] += 1
+    # Формируем список доступных тем для AI
+    topics_context = []
+    for topic, section in available_topics:
+        if topic:  # пропускаем None
+            topics_context.append(f"- Тема: {topic} | Раздел: {section or 'Общий'}")
     
-    # Преобразуем sets в списки для JSON (фильтруем None)
-    meta_context = []
-    for topic, data in topics_summary.items():
-        # ИСПРАВЛЕНИЕ: фильтруем None значения перед сортировкой
-        sections_list = sorted([s for s in data['sections'] if s is not None])
-        classes_list = sorted([c for c in data['classes'] if c is not None])
-        difficulties_list = sorted(set(d for d in data['difficulties'] if d is not None))
-        
-        meta_context.append(
-            f"Тема: {topic}\n"
-            f"  Разделы: {', '.join(sections_list) if sections_list else 'Нет'}\n"
-            f"  Классы: {', '.join(classes_list) if classes_list else 'Нет'}\n"
-            f"  Доступно заданий: {data['count']}\n"
-            f"  Сложности: {difficulties_list if difficulties_list else 'Нет'}"
-        )
-    
-    # 3. Промпт для AI
-    difficulty_map = {
-        "easy": "1-2",
-        "medium": "2-4",
-        "hard": "4-5"
-    }
-    
-    prompt = f"""Ты — система подбора заданий по математике. На основе запроса студента и доступных заданий верни список ID заданий в JSON формате.
+    # 1.2 Промпт для определения тем (поддерживает несколько)
+    topic_prompt = f"""Ты — классификатор учебных заданий по математике.
+Определи, к каким темам и разделам относится запрос студента.
+
+=== ДОСТУПНЫЕ ТЕМЫ В БАЗЕ ===
+{chr(10).join(topics_context[:50])}
 
 === ЗАПРОС СТУДЕНТА ===
-Тема: {request.prompt}
-Класс: {request.target_class or 'Любой'}
-Сложность: {difficulty_map.get(request.difficulty, '1-5')}
-Количество задач: {request.task_count}
-
-=== ДОСТУПНЫЕ ЗАДАНИЯ ===
-{chr(10).join(meta_context[:30])}
-
-=== ЗАДАНИЯ (ID и краткое содержание) ===
-{chr(10).join([f"ID:{t.id} | Класс:{t.task_class or 'Н/Д'} | Тема:{t.topic or 'Н/Д'} | Раздел:{t.section or 'Н/Д'} | Сложность:{t.difficulty or 'Н/Д'} | Тип:{'открытый' if t.is_open_answer else 'закрытый'} | {t.content[:100] if t.content else ''}" for t in all_tasks_meta[:200]])}
+{request.prompt}
 
 === ИНСТРУКЦИЯ ===
-1. Подбери задания, соответствующие запросу студента
-2. Верни ТОЛЬКО JSON в формате: {{"task_ids": [1, 2, 3, ...]}}
-3. Количество заданий: {request.task_count} (если подходящих меньше — верни сколько есть)
-4. Учитывай сложность: {difficulty_map.get(request.difficulty, '1-5')}
-5. НЕ пиши объяснений, ТОЛЬКО JSON
+1. Выбери ОДНУ ИЛИ НЕСКОЛЬКО тем из списка выше, наиболее подходящих под запрос
+2. Если запрос охватывает несколько тем — укажи их все
+3. Для каждой темы можно указать конкретный раздел (или null, если раздел не важен)
+4. Верни ТОЛЬКО JSON в формате:
+   {{"topics": [
+       {{"topic": "название темы 1", "section": "раздел или null"}},
+       {{"topic": "название темы 2", "section": "раздел или null"}}
+   ]}}
 """
 
-    # 4. Отправляем AI
+    # 1.3 Отправляем первый запрос к AI
     try:
-        response = mistral_client.chat.complete(
+        topic_response = mistral_client.chat.complete(
             model="mistral-large-latest",
             messages=[
                 {
-                    "role": "system",
-                    "content": "Ты — система подбора заданий. Отвечай ТОЛЬКО JSON: {\"task_ids\": [1,2,3]}"
+                    "role": "system", 
+                    "content": "Ты — классификатор. Отвечай ТОЛЬКО JSON: {\"topics\": [{\"topic\": \"...\", \"section\": \"... или null\"}]}"
                 },
-                {
-                    "role": "user",
-                    "content": prompt
-                }
+                {"role": "user", "content": topic_prompt}
             ],
-            temperature=0.3,
-            max_tokens=500
+            temperature=0.2,
+            max_tokens=400
         )
-        ai_response = response.choices[0].message.content
+        topic_ai_response = topic_response.choices[0].message.content
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Ошибка AI: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Ошибка AI на этапе определения тем: {str(e)}")
     
-    # 5. Парсим JSON из ответа
+    # 1.4 Парсим темы и разделы
     import json
     import re
     
-    # Извлекаем JSON из ответа (на случай если AI добавит текст)
-    json_match = re.search(r'\{.*\}', ai_response, re.DOTALL)
+    json_match = re.search(r'\{.*\}', topic_ai_response, re.DOTALL)
     if not json_match:
-        raise HTTPException(status_code=500, detail="AI не вернул JSON с task_ids")
+        raise HTTPException(status_code=500, detail="AI не вернул JSON с темами")
     
     try:
-        task_data = json.loads(json_match.group())
-        task_ids = task_data.get("task_ids", [])
+        topic_data = json.loads(json_match.group())
+        detected_items = topic_data.get("topics", [])
+        
+        # Нормализуем данные
+        topic_filters = []
+        for item in detected_items:
+            topic = item.get("topic")
+            section = item.get("section")
+            if section == "null" or section == "None":
+                section = None
+            if topic:
+                topic_filters.append({"topic": topic, "section": section})
+                
     except json.JSONDecodeError:
-        raise HTTPException(status_code=500, detail="Ошибка парсинга ответа AI")
+        raise HTTPException(status_code=500, detail="Ошибка парсинга ответа AI с темами")
     
-    if not task_ids:
-        raise HTTPException(status_code=400, detail="AI не подобрал задания по вашему запросу")
+    if not topic_filters:
+        raise HTTPException(status_code=400, detail="Не удалось определить темы запроса")
     
-    # 6. Проверяем, что все ID существуют в базе
-    existing_tasks = db.query(models.Task).filter(
-        models.Task.id.in_(task_ids)
-    ).all()
+    # ========== ЭТАП 2: Подбираем задания по определённым темам ==========
     
-    if not existing_tasks:
-        raise HTTPException(status_code=400, detail="Подобранные задания не найдены в базе")
+    # 2.1 Параметры сложности
+    difficulty_map = {
+        "easy": [1, 2],
+        "medium": [2, 3, 4],
+        "hard": [4, 5]
+    }
+    target_difficulties = difficulty_map.get(request.difficulty, [1, 2, 3, 4, 5])
     
-    # 7. СОРТИРОВКА: закрытые (по сложности) → открытые (по сложности)
+    # 2.2 Собираем задания по каждой теме
+    all_candidate_tasks = []
+    tasks_by_topic = {}
+    
+    for filter_item in topic_filters:
+        topic = filter_item["topic"]
+        section = filter_item["section"]
+        
+        # Базовый запрос
+        task_query = db.query(models.Task).filter(models.Task.topic == topic)
+        
+        if section:
+            task_query = task_query.filter(models.Task.section == section)
+        
+        if request.target_class:
+            task_query = task_query.filter(models.Task.task_class == request.target_class)
+        
+        task_query = task_query.filter(models.Task.difficulty.in_(target_difficulties))
+        
+        tasks = task_query.all()
+        
+        if tasks:
+            all_candidate_tasks.extend(tasks)
+            tasks_by_topic[f"{topic}_{section or 'all'}"] = tasks
+    
+    # Удаляем дубликаты (если задание попало в несколько тем)
+    seen_ids = set()
+    unique_tasks = []
+    for task in all_candidate_tasks:
+        if task.id not in seen_ids:
+            seen_ids.add(task.id)
+            unique_tasks.append(task)
+    
+    all_candidate_tasks = unique_tasks
+    
+    if not all_candidate_tasks:
+        # Fallback: пробуем без фильтра по разделу
+        for filter_item in topic_filters:
+            topic = filter_item["topic"]
+            task_query = db.query(models.Task).filter(models.Task.topic == topic)
+            if request.target_class:
+                task_query = task_query.filter(models.Task.task_class == request.target_class)
+            task_query = task_query.filter(models.Task.difficulty.in_(target_difficulties))
+            
+            tasks = task_query.all()
+            if tasks:
+                all_candidate_tasks.extend(tasks)
+        
+        # Снова убираем дубликаты
+        seen_ids = set()
+        unique_tasks = []
+        for task in all_candidate_tasks:
+            if task.id not in seen_ids:
+                seen_ids.add(task.id)
+                unique_tasks.append(task)
+        all_candidate_tasks = unique_tasks
+        
+        if not all_candidate_tasks:
+            topics_list = ", ".join([f"'{f['topic']}'" for f in topic_filters])
+            raise HTTPException(
+                status_code=400, 
+                detail=f"По темам {topics_list} не найдено подходящих заданий"
+            )
+    
+    # 2.3 Распределяем задания по темам (пропорционально)
+    total_needed = request.task_count
+    topics_count = len(topic_filters)
+    
+    # Считаем, сколько заданий на каждую тему
+    tasks_per_topic = {}
+    remaining = total_needed
+    
+    for i, filter_item in enumerate(topic_filters):
+        topic_key = f"{filter_item['topic']}_{filter_item['section'] or 'all'}"
+        available = len(tasks_by_topic.get(topic_key, []))
+        
+        if i == topics_count - 1:
+            # Последней теме отдаём всё остальное
+            target = remaining
+        else:
+            # Пропорциональное распределение
+            target = max(1, min(available, total_needed // topics_count))
+        
+        tasks_per_topic[topic_key] = {
+            "target": min(target, available),
+            "filter": filter_item
+        }
+        remaining -= target
+    
+    # 2.4 Выбираем задания для каждой темы
+    selected_tasks = []
+    
+    for topic_key, config in tasks_per_topic.items():
+        target_count = config["target"]
+        if target_count <= 0:
+            continue
+        
+        available_tasks = tasks_by_topic.get(topic_key, [])
+        
+        if len(available_tasks) <= target_count:
+            # Берём все доступные
+            selected_tasks.extend(available_tasks)
+        else:
+            # Если заданий много — используем AI для точной выборки
+            tasks_context = []
+            for task in available_tasks[:50]:
+                tasks_context.append(
+                    f"ID:{task.id} | Сложность:{task.difficulty} | "
+                    f"Тип:{'открытый' if task.is_open_answer else 'закрытый'} | "
+                    f"Кратко:{task.content[:80] if task.content else ''}"
+                )
+            
+            selection_prompt = f"""Ты — система подбора заданий.
+Из списка выбери {target_count} заданий по теме "{config['filter']['topic']}".
+
+=== ЗАПРОС СТУДЕНТА ===
+{request.prompt}
+
+=== ДОСТУПНЫЕ ЗАДАНИЯ ===
+{chr(10).join(tasks_context)}
+
+=== ИНСТРУКЦИЯ ===
+1. Выбери ровно {target_count} заданий
+2. Верни ТОЛЬКО JSON: {{"task_ids": [1, 2, 3, ...]}}
+"""
+            
+            try:
+                selection_response = mistral_client.chat.complete(
+                    model="mistral-large-latest",
+                    messages=[
+                        {"role": "system", "content": "Отвечай ТОЛЬКО JSON: {\"task_ids\": [1,2,3]}"},
+                        {"role": "user", "content": selection_prompt}
+                    ],
+                    temperature=0.3,
+                    max_tokens=500
+                )
+                selection_ai_response = selection_response.choices[0].message.content
+                json_match = re.search(r'\{.*\}', selection_ai_response, re.DOTALL)
+                if json_match:
+                    selection_data = json.loads(json_match.group())
+                    task_ids = selection_data.get("task_ids", [])
+                    
+                    # Загружаем выбранные задания
+                    for task_id in task_ids:
+                        task = next((t for t in available_tasks if t.id == task_id), None)
+                        if task:
+                            selected_tasks.append(task)
+            except:
+                # Fallback: случайные задания
+                import random
+                selected_tasks.extend(random.sample(available_tasks, target_count))
+    
+    # Убираем дубликаты и ограничиваем нужным количеством
+    seen_ids = set()
+    final_tasks = []
+    for task in selected_tasks:
+        if task.id not in seen_ids and len(final_tasks) < total_needed:
+            seen_ids.add(task.id)
+            final_tasks.append(task)
+    
+    # Если не хватает — добираем из оставшихся
+    if len(final_tasks) < total_needed:
+        remaining_candidates = [t for t in all_candidate_tasks if t.id not in seen_ids]
+        if remaining_candidates:
+            import random
+            needed = total_needed - len(final_tasks)
+            final_tasks.extend(random.sample(remaining_candidates, min(needed, len(remaining_candidates))))
+    
+    # ========== СОРТИРОВКА И СОЗДАНИЕ ТЕСТА ==========
+    
+    # Сортировка: закрытые (по сложности) → открытые (по сложности)
     closed_tasks = sorted(
-        [t for t in existing_tasks if not t.is_open_answer],
-        key=lambda t: (t.difficulty if t.difficulty is not None else 0)
+        [t for t in final_tasks if not t.is_open_answer],
+        key=lambda t: t.difficulty if t.difficulty is not None else 0
     )
     open_tasks = sorted(
-        [t for t in existing_tasks if t.is_open_answer],
-        key=lambda t: (t.difficulty if t.difficulty is not None else 0)
+        [t for t in final_tasks if t.is_open_answer],
+        key=lambda t: t.difficulty if t.difficulty is not None else 0
     )
     
     sorted_tasks = closed_tasks + open_tasks
     
-    # 8. Создаём тест
+    # Формируем название теста
+    topics_title = ", ".join([f['topic'] for f in topic_filters])
+    if len(topic_filters) > 1:
+        title = f"AI: {topics_title} и др. ({request.prompt[:20]})"
+    else:
+        title = f"AI: {topics_title} ({request.prompt[:30]})"
+    
+    # Создаём тест
     new_test = models.Test(
-        title=f"AI: {request.prompt[:50]}",
+        title=title,
         target_class=request.target_class,
-        target_topic=None,
+        target_topic=topics_title,  # Сохраняем все темы
         is_autocompile=False,
         creator_id=current_user.id,
         is_active=True
@@ -1089,14 +1227,31 @@ def generate_ai_test(
     db.add(new_test)
     db.flush()
     
-    # Привязываем отсортированные задания
+    # Привязываем задания
     new_test.tasks = sorted_tasks
     
     db.commit()
     db.refresh(new_test)
     
-    # 9. Возвращаем тест с отсортированными заданиями
-    return db.query(models.Test)\
-             .options(joinedload(models.Test.tasks))\
-             .filter(models.Test.id == new_test.id)\
-             .first()
+    # Возвращаем результат
+    return {
+        "test_id": new_test.id,
+        "title": new_test.title,
+        "detected_topics": topic_filters,
+        "topics_count": len(topic_filters),
+        "tasks_count": len(sorted_tasks),
+        "closed_count": len(closed_tasks),
+        "open_count": len(open_tasks),
+        "distribution": {
+            topic_key: {
+                "topic": config["filter"]["topic"],
+                "section": config["filter"]["section"],
+                "selected": len([t for t in final_tasks if t.topic == config["filter"]["topic"]])
+            }
+            for topic_key, config in tasks_per_topic.items()
+        },
+        "test": db.query(models.Test)
+                  .options(joinedload(models.Test.tasks))
+                  .filter(models.Test.id == new_test.id)
+                  .first()
+    }
