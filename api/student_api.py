@@ -9,6 +9,8 @@ import os
 from mistralai.client import Mistral
 from dotenv import load_dotenv
 from dto import AITestRequest
+# В начале файла нужно добавить импорт
+from sqlalchemy.orm import joinedload
 
 load_dotenv()
 MISTRAL_TOKEN = os.getenv("MISTRAL_TOKEN")
