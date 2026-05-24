@@ -8,6 +8,7 @@ from datetime import datetime
 import os
 from mistralai.client import Mistral
 from dotenv import load_dotenv
+from dto import AITestRequest
 
 load_dotenv()
 MISTRAL_TOKEN = os.getenv("MISTRAL_TOKEN")
@@ -176,6 +177,10 @@ def submit_test_results(
             points_earned=current_points
         )
         db.add(user_answer)
+
+    if test.is_ai_generated:
+        test.is_active = False
+        db.commit()
 
     new_result.total_points = total_points
     db.commit()
@@ -534,6 +539,7 @@ $$
             "topic_mastery_percent": topic_mastery
         }
     }
+
 @router.post("/tasks/{task_id}/ai-solve")
 def get_ai_solution(
     task_id: int,
@@ -919,3 +925,170 @@ $$
             "section": section_name
         }
     }
+
+@router.post("/generate-test")
+def generate_ai_test(
+    request: AITestRequest,
+    db: Session = Depends(get_db),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """
+    AI подбирает задания из базы по промпту студента.
+    Возвращает список task_id → формирует тест через учительский эндпоинт.
+    Задания сортируются: закрытые (по сложности) → открытые (по сложности).
+    """
+    
+    # 1. Собираем метаданные всех заданий (только topic, section, id, difficulty)
+    all_tasks_meta = db.query(
+        models.Task.id,
+        models.Task.topic,
+        models.Task.section,
+        models.Task.difficulty,
+        models.Task.task_class,
+        models.Task.topic_number,
+        models.Task.content,
+        models.Task.is_open_answer  # ← ДОБАВИЛ
+    ).all()
+    
+    if not all_tasks_meta:
+        raise HTTPException(status_code=404, detail="В базе нет заданий")
+    
+    # 2. Формируем контекст для AI (компактно)
+    topics_summary = {}
+    for task in all_tasks_meta:
+        key = f"{task.topic or 'Без темы'}"
+        if key not in topics_summary:
+            topics_summary[key] = {
+                "sections": set(),
+                "classes": set(),
+                "difficulties": [],
+                "count": 0
+            }
+        topics_summary[key]["sections"].add(task.section)
+        topics_summary[key]["classes"].add(str(task.task_class))
+        topics_summary[key]["difficulties"].append(task.difficulty)
+        topics_summary[key]["count"] += 1
+    
+    # Преобразуем sets в списки для JSON
+    meta_context = []
+    for topic, data in topics_summary.items():
+        meta_context.append(
+            f"Тема: {topic}\n"
+            f"  Разделы: {', '.join(sorted(data['sections']))}\n"
+            f"  Классы: {', '.join(sorted(data['classes']))}\n"
+            f"  Доступно заданий: {data['count']}\n"
+            f"  Сложности: {sorted(set(data['difficulties']))}"
+        )
+    
+    # 3. Промпт для AI
+    difficulty_map = {
+        "easy": "1-2",
+        "medium": "2-4",
+        "hard": "4-5"
+    }
+    
+    prompt = f"""Ты — система подбора заданий по математике. На основе запроса студента и доступных заданий верни список ID заданий в JSON формате.
+
+=== ЗАПРОС СТУДЕНТА ===
+Тема: {request.prompt}
+Класс: {request.target_class or 'Любой'}
+Сложность: {difficulty_map.get(request.difficulty, '1-5')}
+Количество задач: {request.task_count}
+
+=== ДОСТУПНЫЕ ЗАДАНИЯ ===
+{chr(10).join(meta_context[:30])}
+
+=== ЗАДАНИЯ (ID и краткое содержание) ===
+{chr(10).join([f"ID:{t.id} | Класс:{t.task_class} | Тема:{t.topic} | Раздел:{t.section} | Сложность:{t.difficulty} | Тип:{'открытый' if t.is_open_answer else 'закрытый'} | {t.content[:100]}" for t in all_tasks_meta[:200]])}
+
+=== ИНСТРУКЦИЯ ===
+1. Подбери задания, соответствующие запросу студента
+2. Верни ТОЛЬКО JSON в формате: {{"task_ids": [1, 2, 3, ...]}}
+3. Количество заданий: {request.task_count} (если подходящих меньше — верни сколько есть)
+4. Учитывай сложность: {difficulty_map.get(request.difficulty, '1-5')}
+5. НЕ пиши объяснений, ТОЛЬКО JSON
+"""
+
+    # 4. Отправляем AI
+    try:
+        response = mistral_client.chat.complete(
+            model="mistral-large-latest",
+            messages=[
+                {
+                    "role": "system",
+                    "content": "Ты — система подбора заданий. Отвечай ТОЛЬКО JSON: {\"task_ids\": [1,2,3]}"
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            temperature=0.3,
+            max_tokens=500
+        )
+        ai_response = response.choices[0].message.content
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка AI: {str(e)}")
+    
+    # 5. Парсим JSON из ответа
+    import json
+    import re
+    
+    # Извлекаем JSON из ответа (на случай если AI добавит текст)
+    json_match = re.search(r'\{.*\}', ai_response, re.DOTALL)
+    if not json_match:
+        raise HTTPException(status_code=500, detail="AI не вернул JSON с task_ids")
+    
+    try:
+        task_data = json.loads(json_match.group())
+        task_ids = task_data.get("task_ids", [])
+    except json.JSONDecodeError:
+        raise HTTPException(status_code=500, detail="Ошибка парсинга ответа AI")
+    
+    if not task_ids:
+        raise HTTPException(status_code=400, detail="AI не подобрал задания по вашему запросу")
+    
+    # 6. Проверяем, что все ID существуют в базе
+    existing_tasks = db.query(models.Task).filter(
+        models.Task.id.in_(task_ids)
+    ).all()
+    
+    if not existing_tasks:
+        raise HTTPException(status_code=400, detail="Подобранные задания не найдены в базе")
+    
+    # 7. СОРТИРОВКА: закрытые (по сложности) → открытые (по сложности)
+    closed_tasks = sorted(
+        [t for t in existing_tasks if not t.is_open_answer],
+        key=lambda t: (t.difficulty or 0)
+    )
+    open_tasks = sorted(
+        [t for t in existing_tasks if t.is_open_answer],
+        key=lambda t: (t.difficulty or 0)
+    )
+    
+    sorted_tasks = closed_tasks + open_tasks
+    
+    # 8. Создаём тест (как учительский, но is_autocompile=False, is_ai_generated=True)
+    new_test = models.Test(
+        title=f"AI: {request.prompt[:50]}",
+        target_class=request.target_class,
+        target_topic=None,
+        is_autocompile=False,
+        is_ai_generated=True,
+        creator_id=current_user.id,
+        is_active=True
+    )
+    db.add(new_test)
+    db.flush()
+    
+    # Привязываем отсортированные задания
+    new_test.tasks = sorted_tasks
+    
+    db.commit()
+    db.refresh(new_test)
+    
+    # 9. Возвращаем тест с отсортированными заданиями
+    return db.query(models.Test)\
+             .options(joinedload(models.Test.tasks))\
+             .filter(models.Test.id == new_test.id)\
+             .first()

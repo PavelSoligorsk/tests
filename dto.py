@@ -229,3 +229,9 @@ class TheoryResponse(TheoryBase):
     
     class Config:
         from_attributes = True
+
+class AITestRequest(BaseModel):
+    prompt: str
+    task_count: int = 10
+    difficulty: str = "medium"
+    target_class: Optional[str] = None
