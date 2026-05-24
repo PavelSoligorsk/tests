@@ -1233,25 +1233,13 @@ def generate_ai_test(
     db.commit()
     db.refresh(new_test)
     
-    # Возвращаем результат
+   # В конце эндпоинта возвращаем совместимый формат
     return {
-        "test_id": new_test.id,
-        "title": new_test.title,
-        "detected_topics": topic_filters,
-        "topics_count": len(topic_filters),
-        "tasks_count": len(sorted_tasks),
-        "closed_count": len(closed_tasks),
-        "open_count": len(open_tasks),
-        "distribution": {
-            topic_key: {
-                "topic": config["filter"]["topic"],
-                "section": config["filter"]["section"],
-                "selected": len([t for t in final_tasks if t.topic == config["filter"]["topic"]])
-            }
-            for topic_key, config in tasks_per_topic.items()
-        },
         "test": db.query(models.Test)
-                  .options(joinedload(models.Test.tasks))
-                  .filter(models.Test.id == new_test.id)
-                  .first()
+                .options(joinedload(models.Test.tasks))
+                .filter(models.Test.id == new_test.id)
+                .first(),
+        "meta": {  # дополнительная информация (опционально)
+            "detected_topics": topic_filters
+        }
     }
