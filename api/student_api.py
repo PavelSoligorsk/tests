@@ -936,7 +936,6 @@ from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import or_
 
 # Предполагаем, что импорты моделей и mistral_client уже есть
-
 @router.post("/generate-test")
 def generate_ai_test(
     request: AITestRequest,
@@ -945,12 +944,12 @@ def generate_ai_test(
 ):
     """
     AI подбирает задания из базы по промпту студента.
-    Шаг 1: AI определяет темы и разделы
+    Шаг 1: AI определяет темы и разделы (с привязкой разделов к темам)
     Шаг 2: Бэкенд фильтрует задания по этим темам (макс 300)
     Шаг 3: AI анализирует отфильтрованные задания и выбирает лучшие
     """
     
-    # ========== ШАГ 1: AI определяет темы и разделы ==========
+    # ========== ШАГ 1: AI определяет темы и разделы (с привязкой) ==========
     
     structure_data = db.query(models.Task.topic, models.Task.section).filter(models.Task.topic != None).distinct().all()
     
@@ -977,14 +976,19 @@ def generate_ai_test(
 {request.prompt}
 
 === ИНСТРУКЦИЯ ===
-Выбери наиболее подходящие темы и разделы из списка выше, которые удовлетворяют запросу. 
-Если точного совпадения нет, выбери максимально близкие по смыслу.
+Выбери наиболее подходящие темы и разделы из списка выше, которые удовлетворяют запросу.
+Для КАЖДОЙ темы укажи, какие разделы к ней относятся.
+
 Верни ТОЛЬКО JSON строго в формате:
-{{"topics": ["Название темы 1", "Название темы 2"], "sections": ["Название раздела 1"]}}
+{{
+  "topics": [
+    {{"name": "Название темы 1", "sections": ["Раздел 1", "Раздел 2"]}},
+    {{"name": "Название темы 2", "sections": []}}
+  ]
+}}
 """
 
-    detected_topics = []
-    detected_sections = []
+    detected_topics_with_sections = []
 
     try:
         topic_response = mistral_client.chat.complete(
@@ -994,48 +998,82 @@ def generate_ai_test(
                 {"role": "user", "content": topic_prompt}
             ],
             temperature=0.1,
-            max_tokens=300
+            max_tokens=500
         )
         ai_content = topic_response.choices[0].message.content
         
         json_match = re.search(r'\{.*\}', ai_content, re.DOTALL)
         if json_match:
             classification = json.loads(json_match.group())
-            detected_topics = [t for t in classification.get("topics", []) if t]
-            detected_sections = [s for s in classification.get("sections", []) if s]
+            detected_topics_with_sections = classification.get("topics", [])
             
     except Exception as e:
         print(f"[ERROR] AI classification failed: {e}")
 
-    # ========== ШАГ 2: Фильтрация заданий по определённым темам ==========
+    # Преобразуем в удобный формат
+    detected_topics = []
+    topic_section_map = {}  # тема -> список разделов
     
+    for item in detected_topics_with_sections:
+        topic_name = item.get("name")
+        sections = item.get("sections", [])
+        
+        if topic_name:
+            detected_topics.append(topic_name)
+            topic_section_map[topic_name] = sections
+    
+    print(f"[DEBUG] Topics with sections: {topic_section_map}")
+    
+    # ========== ШАГ 2: Фильтрация заданий ==========
+    
+    # Маппинг сложности (поддержка None)
     difficulty_map = {
         "easy": [1, 2],
         "medium": [2, 3, 4],
         "hard": [4, 5]
     }
-    target_difficulties = difficulty_map.get(request.difficulty, [1, 2, 3, 4, 5])
+    
+    # Если difficulty = None, берём все сложности
+    if request.difficulty:
+        target_difficulties = difficulty_map.get(request.difficulty, [1, 2, 3, 4, 5])
+        difficulty_text = request.difficulty
+    else:
+        target_difficulties = [1, 2, 3, 4, 5]
+        difficulty_text = "Любая (Рататуй 🍲)"
     
     filtered_tasks = []
     
     if detected_topics:
-        # Берём задания по определённым темам
-        query = db.query(models.Task).filter(
-            models.Task.topic.in_(detected_topics),
-            models.Task.difficulty.in_(target_difficulties)
-        )
+        from sqlalchemy import or_, and_
         
-        # Если есть разделы — добавляем фильтр
-        if detected_sections:
-            query = query.filter(models.Task.section.in_(detected_sections))
+        # Строим условия для каждой темы с её разделами
+        conditions = []
+        for topic, sections in topic_section_map.items():
+            if sections:
+                # Если для темы указаны разделы — ищем строго по ним
+                conditions.append(
+                    and_(
+                        models.Task.topic == topic,
+                        models.Task.section.in_(sections)
+                    )
+                )
+            else:
+                # Если разделы не указаны — берём все задания темы
+                conditions.append(
+                    models.Task.topic == topic
+                )
         
-        filtered_tasks = query.limit(300).all()  # Максимум 300 заданий для AI
+        if conditions:
+            query = db.query(models.Task).filter(
+                or_(*conditions),
+                models.Task.difficulty.in_(target_difficulties)
+            )
+            filtered_tasks = query.limit(300).all()
         
         print(f"[DEBUG] Найдено заданий по темам {detected_topics}: {len(filtered_tasks)}")
     
     # Fallback: если ничего не нашли по темам
     if not filtered_tasks:
-        # Ищем по ключевым словам
         keywords = [w for w in re.sub(r'[^\w\s]', '', request.prompt).split() if len(w) > 3]
         if keywords:
             like_conditions = [models.Task.topic.ilike(f"%{word}%") for word in keywords]
@@ -1055,7 +1093,6 @@ def generate_ai_test(
     
     # ========== ШАГ 3: AI анализирует отфильтрованные задания и выбирает лучшие ==========
     
-    # Формируем компактное описание заданий для AI
     tasks_for_ai = []
     for task in filtered_tasks:
         tasks_for_ai.append(
@@ -1071,10 +1108,10 @@ def generate_ai_test(
 
 === ПАРАМЕТРЫ ===
 Нужно выбрать заданий: {request.task_count}
-Сложность: {request.difficulty} (easy=1-2, medium=2-4, hard=4-5)
+Сложность: {difficulty_text}
 
 === ОТФИЛЬТРОВАННЫЕ ЗАДАНИЯ ===
-Всего доступно: {len(tasks_for_ai)} заданий (уже отфильтрованы по темам "{', '.join(detected_topics) if detected_topics else 'из запроса'}")
+Всего доступно: {len(tasks_for_ai)} заданий
 
 Список заданий:
 {chr(10).join(tasks_for_ai)}
@@ -1116,7 +1153,6 @@ def generate_ai_test(
             models.Task.id.in_(selected_ids)
         ).all()
         
-        # Если AI выбрал меньше, чем нужно — добираем рандомом
         if len(selected_tasks) < request.task_count:
             remaining_ids = [t.id for t in filtered_tasks if t.id not in selected_ids]
             if remaining_ids:
@@ -1125,7 +1161,6 @@ def generate_ai_test(
                 extra_tasks = db.query(models.Task).filter(models.Task.id.in_(extra_ids)).all()
                 selected_tasks.extend(extra_tasks)
     else:
-        # Fallback: случайная выборка
         print("[WARNING] AI не вернул ID, используем random.sample")
         selected_tasks = random.sample(filtered_tasks, min(request.task_count, len(filtered_tasks)))
     
