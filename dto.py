@@ -233,4 +233,4 @@ class TheoryResponse(TheoryBase):
 class AITestRequest(BaseModel):
     prompt: str
     task_count: int = 10
-    difficulty: str = "medium"
+    difficulty: Optional[str] = None  # ← теперь может быть None
