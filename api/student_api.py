@@ -1001,6 +1001,7 @@ def generate_ai_test(
             classification = json.loads(json_match.group())
             detected_topics = [t for t in classification.get("topics", []) if t]
             detected_sections = [s for s in classification.get("sections", []) if s]
+            print(detected_topics, detected_sections)
     except Exception as e:
         print(f"[ERROR] AI classification failed: {e}")
 
