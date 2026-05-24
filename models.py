@@ -63,6 +63,7 @@ class Test(Base):
     target_class = Column(String(50), nullable=True) 
     target_topic = Column(String(50), nullable=True)
     is_autocompile = Column(Boolean, default=True) # Флаг: собирать ли задачи по фильтру
+    is_ai_generated = Column(Boolean, default=False)  # ← ДОБАВИТЬ ЭТУ СТРОКУ
     
     creator = relationship("User", back_populates="created_tests")
     tasks = relationship("Task", secondary="test_task_association")
