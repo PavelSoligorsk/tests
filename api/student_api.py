@@ -1142,7 +1142,7 @@ def generate_ai_test(
         tasks_for_ai.append(
             f"ID:{task.id} | Тема:{task.topic or 'Н/Д'} | Раздел:{task.section or 'Н/Д'} | "
             f"Сложность:{task.difficulty or 'Н/Д'} | Тип:{'открытый' if task.is_open_answer else 'закрытый'} | "
-            f"Содержание:{(task.content or '')[:120]}..."
+            f"Содержание:{(task.content or '')[:500]}..."
         )
     
     selection_prompt = f"""Ты — эксперт по подбору учебных заданий по математике.
