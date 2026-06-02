@@ -899,12 +899,32 @@ color: f, #3366ff
 color: g, #ff3366`}}" />
 
 === ПРИМЕР GeoGebra (3D) ===
-<GeoGebra setup="{{`SetPerspective("5")
-view: -5,5,-5,5,-5,5
-A=(1,0,0)
-B=(0,1,0)
-C=(0,0,1)
-p=Plane(A,B,C)`}}" height="500" />
+<GeoGebra 
+  height="600"
+  setup={{`
+    // Инициализация 3D сцены
+    SetPerspective("5")
+    
+    // Конус
+    cone = Cone((0,0,0), (0,0,4), 2)
+    SetColor(cone, "#38bdf8")
+    SetFilling(cone, 0.3)
+    
+    // Секущая плоскость
+    plane = Plane((0,0,2), (1,0,2.5), (0,1,2.5))
+    SetColor(plane, "#fbbf24")
+    SetFilling(plane, 0.4)
+    
+    // Сечение
+    section = Intersect(cone, plane)
+    SetColor(section, "#ef4444")
+    SetLineThickness(section, 5)
+    
+    // Оси
+    ShowAxes(true)
+    ShowGrid(false)
+  `}}
+/>
 
 Подставим $m=1$, $n=2$:
 
