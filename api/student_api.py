@@ -898,7 +898,7 @@ g(x)=(x-2)^2
 color: f, #3366ff
 color: g, #ff3366`}}" />
 
-=== ПРИМЕР GeoGebra (3D) ===
+=== ПРИМЕР GeoGebra (БУДЬ ВНИМАТЕЛЕН С ФИГУРНЫМИ СКОБКАМИ) (3D) ===
 <GeoGebra 
   height="600"
   setup={{`
