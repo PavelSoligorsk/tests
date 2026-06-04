@@ -881,6 +881,7 @@ def ask_ai_about_theory(
 9. При необходимости визуализации используй GeoGebra: <GeoGebra setup= команды />
 10. Для 3D графики первой командой пиши SetPerspective("5")
 11. Не злоупотребляй GeoGebra, только когда это действительно нужно
+
 === ПРИМЕР ПРАВИЛЬНОГО ОФОРМЛЕНИЯ ===
 
 Решим задачу: найти значение выражения $a \\cdot a^2$.
@@ -891,127 +892,213 @@ $$
 a^m \\cdot a^n = 
 $$
 
-=== ПРИМЕР GeoGebra (2D) ===
-<GeoGebra setup="
-{{`
-view: -5,5,-3,8,grid,axes
-f(x)=x^2
-g(x)=(x-2)^2
-color: f, #3366ff
-color: g, #ff3366`
-}}
-" />
-
-=== ПРИМЕР GeoGebra (БУДЬ ВНИМАТЕЛЕН С ФИГУРНЫМИ СКОБКАМИ) (3D) ===
-<GeoGebra 
-  height="600"
-  setup={{`
-    // Инициализация 3D сцены
-    SetPerspective("5")
-    
-    // Конус
-    cone = Cone((0,0,0), (0,0,4), 2)
-    SetColor(cone, "#38bdf8")
-    SetFilling(cone, 0.3)
-    
-    // Секущая плоскость
-    plane = Plane((0,0,2), (1,0,2.5), (0,1,2.5))
-    SetColor(plane, "#fbbf24")
-    SetFilling(plane, 0.4)
-    
-    // Сечение
-    section = Intersect(cone, plane)
-    SetColor(section, "#ef4444")
-    SetLineThickness(section, 5)
-    
-    // Оси
-    ShowAxes(true)
-    ShowGrid(false)
-  `}}
-/>
-
 Подставим $m=1$, $n=2$:
 
 $$
 a^1 \\cdot a^2 = a^3 = a^3
 $$
 
-// ========== НАСТРОЙКИ СЦЕНЫ ==========
-SetPerspective("5")           // 3D режим ("5" = только 3D, "45" = алгебра + 3D)
-ShowAxes(true)                // показать оси
-ShowAxes(false)               // скрыть оси
-ShowGrid(true)                // показать сетку
-ShowGrid(false)               // скрыть сетку
+=== ПРИМЕР ИСПОЛЬЗОВАНИЯ ГЕОГЕБРЫ В ГРФИКАХ И ПЛАНИМЕТРИИ===
 
-// Настройка вида (2D)
-view: -5,5,-5,5,grid,axes     // xMin,xMax,yMin,yMax,сетка,оси
+<GeoGebra height="450" setup={{`
+  SetPerspective("2")
+  ShowGrid(true)
+  ShowAxes(true)
+  A=(1,2)
+  B=(3,4)
+  C=(-2,3)
+  D=(-4,-2)
+  s1=Segment(A,B)
+  s2=Segment(B,C)
+  r=Ray(A,C)
+  l1=Line(A,B)
+  l2=Line(C,D)
+  X=Intersect(l1,l2)
+  SetColor(A,"#ef4444")
+  SetColor(B,"#3b82f6")
+  SetColor(s1,"#ef4444")
+  SetColor(s2,"#3b82f6")
+  SetColor(r,"#22c55e")
+  SetColor(l1,"#8b5cf6")
+  SetColor(l2,"#f59e0b")
+  SetColor(X,"#ec4899")
+  SetPointSize(A,5)
+  SetPointSize(B,5)
+  SetPointSize(X,6)
+  SetLineThickness(s1,3)
+  SetLineThickness(s2,3)
+  SetCaption(A,"A")
+  SetCaption(B,"B")
+  SetCaption(X,"X")
+`}} />
 
-// Настройка вида (3D)
-view: -5,5,-5,5,-5,5          // xMin,xMax,yMin,yMax,zMin,zMax
+<GeoGebra height="500" setup={{`
+  SetPerspective("2")
+  ShowGrid(true)
+  ShowAxes(true)
+  a=Slider(-3,3,0.1)
+  b=Slider(-3,3,0.1)
+  n=Slider(1,6,1)
+  SetCaption(a,"a")
+  SetCaption(b,"b")
+  SetCaption(n,"n")
+  f(x)=a*x^2+b
+  g(x)=sin(n*x)
+  h(x)=sqrt(abs(x))*sgn(x)
+  p(x)=1/x
+  SetColor(f,"#ef4444")
+  SetColor(g,"#3b82f6")
+  SetColor(h,"#22c55e")
+  SetColor(p,"#f59e0b")
+  SetLineThickness(f,3)
+`}} />
 
+<GeoGebra height="500" setup={{`
+  SetPerspective("2")
+  ShowGrid(true)
+  ShowAxes(true)
+  A=(0,0)
+  c1=Circle(A,2)
+  SetColor(c1,"#3b82f6")
+  SetFilling(c1,0.05)
+  B=(2,0)
+  r=Segment(A,B)
+  SetColor(r,"#ef4444")
+  SetLineThickness(r,3)
+  C=(-2,0)
+  d=Segment(B,C)
+  SetColor(d,"#22c55e")
+  SetLineThickness(d,3)
+  D=(0.5,1.936)
+  E=(-1.5,1.323)
+  chord=Segment(D,E)
+  SetColor(chord,"#f59e0b")
+  SetLineThickness(chord,3)
+  F=(3,1.414)
+  tan=Tangent(F,c1)
+  SetColor(tan,"#8b5cf6")
+  SetLineThickness(tan,2)
+  G=(0,-2)
+  H=(-1.414,-1.414)
+  sector=CircularSector(A,H,G)
+  SetColor(sector,"#ec4899")
+  SetFilling(sector,0.3)
+  SetPointSize(A,5)
+  SetCaption(A,"O")
+  SetCaption(r,"r")
+  SetCaption(d,"d")
+  SetCaption(chord,"хорда")
+  SetCaption(tan,"касат")
+  SetCaption(sector,"сектор")
+`}} />
 
-// ========== ТОЧКИ ==========
-A = (1, 2)                    // 2D точка
-B = (1, 2, 3)                 // 3D точка
-P = Point(cone)               // точка на объекте
+<GeoGebra height="500" setup={{`
+  SetPerspective("2")
+  ShowGrid(true)
+  ShowAxes(true)
+  A=(-4.5,0)
+  B=(-0.5,3)
+  C=(0.5,3)
+  D=(4.5,0)
+  a=Polygon(A,B,C,D)
+  SetColor(a,"#6366f1")
+  SetFilling(a,0.3)
+  angleA=Angle(D,A,B)
+  angleB=Angle(A,B,C)
+  base1=Segment(A,B)
+  base2=Segment(C,D)
+  SetColor(base1,"#ef4444")
+  SetColor(base2,"#22c55e")
+  SetLineThickness(base1,3)
+  SetLineThickness(base2,3)
+  M1=Midpoint(A,D)
+  M2=Midpoint(B,C)
+  mid=Segment(M1,M2)
+  SetColor(mid,"#ec4899")
+  SetLineThickness(mid,3)
+  SetCaption(mid,"m")
+  bisA=AngleBisector(D,A,B)
+  bisB=AngleBisector(A,B,C)
+  I=Intersect(bisA,bisB)
+  SetColor(I,"#1e293b")
+  SetPointSize(I,5)
+  SetCaption(I,"I")
+  r_in=Distance(I,Line(A,B))
+  c_in=Circle(I,r_in)
+  SetColor(c_in,"#ef4444")
+  SetLineThickness(c_in,2)
+  c_out=Circle(A,B,C)
+  SetColor(c_out,"#22c55e")
+  SetLineThickness(c_out,2)
+  O=Center(c_out)
+  SetColor(O,"#1e293b")
+  SetPointSize(O,5)
+  SetCaption(O,"O")
+  h1=PerpendicularLine(B,Line(A,D))
+  H1=Intersect(h1,Line(A,D))
+  height1=Segment(B,H1)
+  SetColor(height1,"#f59e0b")
+  SetLineThickness(height1,3)
+  SetCaption(height1,"h₁")
+  h2=PerpendicularLine(D,Line(A,B))
+  H2=Intersect(h2,Line(A,B))
+  height2=Segment(D,H2)
+  SetColor(height2,"#06b6d4")
+  SetLineThickness(height2,3)
+  SetCaption(height2,"h₂")
+  SetVisibleInView(h1,1,false)
+  SetVisibleInView(h2,1,false)
+  SetVisibleInView(bisA,1,false)
+  SetVisibleInView(bisB,1,false)
+  SetCaption(A,"A")
+  SetCaption(B,"B")
+  SetCaption(C,"C")
+  SetCaption(D,"D")
+  SetPointSize(A,4)
+  SetPointSize(B,4)
+  SetPointSize(C,4)
+  SetPointSize(D,4)
+`}} />
 
+<GeoGebra height="500" setup={{`
+  SetPerspective("2")
+  ShowGrid(true)
+  ShowAxes(true)
+  n=Slider(3,12,1)
+  SetCaption(n,"n")
+  reg=Polygon((-2,-2),(2,-2),n)
+  SetColor(reg,"#6366f1")
+  SetFilling(reg,0.3)
+  V1=Vertex(reg,1)
+  V2=Vertex(reg,2)
+  V3=Vertex(reg,3)
+  Vn=Vertex(reg,n)
+  bis1=AngleBisector(V1,V2,V3)
+  bis2=AngleBisector(Vn,V1,V2)
+  O=Intersect(bis1,bis2)
+  SetColor(O,"#1e293b")
+  SetPointSize(O,5)
+  SetCaption(O,"O")
+  a=Segment(V1,V2)
+  SetColor(a,"#f59e0b")
+  SetLineThickness(a,3)
+  SetCaption(a,"a")
+  M=Midpoint(V1,V2)
+  r_out=Distance(O,V1)
+  c_out=Circle(O,r_out)
+  SetColor(c_out,"#ef4444")
+  SetLineThickness(c_out,2)
+  SetCaption(c_out,"опис")
+  r_in=Distance(O,M)
+  c_in=Circle(O,r_in)
+  SetColor(c_in,"#22c55e")
+  SetLineThickness(c_in,2)
+  SetCaption(c_in,"впис")
+  SetVisibleInView(bis1,1,false)
+  SetVisibleInView(bis2,1,false)
+`}} />
 
-// ========== ЛИНИИ И ОТРЕЗКИ ==========
-l = Line(A, B)                // прямая через две точки
-s = Segment(A, B)             // отрезок
-r = Ray(A, B)                 // луч
-v = Vector(A, B)              // вектор
-
-
-// ========== 2D ОБЪЕКТЫ ==========
-c = Circle(O, 2)              // окружность (центр, радиус)
-c = Circle(A, B, C)           // окружность через 3 точки
-f(x) = x^2                    // функция
-g(x) = sin(x)                 // тригонометрия
-poly = Polygon(A, B, C)       // многоугольник
-
-
-// ========== 3D ОБЪЕКТЫ ==========
-sphere = Sphere((0,0,0), 2)   // сфера (центр, радиус)
-cone = Cone((0,0,0), (0,0,4), 2)  // конус (вершина, центр основания, радиус)
-cylinder = Cylinder((0,0,0), (0,0,4), 2)  // цилиндр
-cube = Cube(A, B, D)          // куб (нижняя грань)
-tetra = Tetrahedron(A, B, C, D)  // тетраэдр
-p = Plane(A, B, C)            // плоскость через 3 точки
-p = Plane(A, v)               // плоскость через точку и нормаль
-
-
-// ========== ПЕРЕСЕЧЕНИЯ ==========
-X = Intersect(l, plane)       // пересечение прямой и плоскости
-curve = Intersect(cone, plane) // сечение
-X = Intersect(f, g)           // пересечение графиков
-
-
-// ========== СТИЛИ ==========
-SetColor(A, "#ff0000")        // цвет (#HEX)
-SetColor(A, "#3366ff")        // можно с прозрачностью: "#3366ff, 0.5"
-SetFilling(cone, 0.3)         // прозрачность заливки (0-1)
-SetLineThickness(c, 5)        // толщина линии (1-13)
-SetPointSize(A, 5)            // размер точки (1-9)
-SetCaption(A, "Текст")        // подпись объекта
-SetVisible(A, false)          // скрыть объект
-
-
-// ========== ПОЛЗУНКИ ==========
-k = Slider(-5, 5, 0.1)        // ползунок (мин, макс, шаг)
-SetCaption(k, "Параметр")     // подпись ползунка
-
-
-// ========== АНИМАЦИЯ ==========
-animate: A, true, 5           // анимировать объект A, вкл, скорость
-animate: A, false             // остановить анимацию
-
-
-// ========== ВСПОМОГАТЕЛЬНЫЕ ==========
-n = PerpendicularVector(p)    // нормаль к плоскости
-d = Distance(A, B)            // расстояние
-m = Midpoint(A, B)            // середина отрезка
-
+СТЕРЕОМЕТРИЮ ПОКА ЗАПРЕЩАЮ ГЕНЕРИРОВАТЬ
 
 """
 
