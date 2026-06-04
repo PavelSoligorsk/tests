@@ -898,7 +898,7 @@ $$
 a^1 \\cdot a^2 = a^3 = a^3
 $$
 
-=== ПРИМЕР ИСПОЛЬЗОВАНИЯ ГЕОГЕБРЫ В ГРФИКАХ И ПЛАНИМЕТРИИ (ИСПОЛЬЗУЙ ТОЛЬКО ТО, ЧТО ЕСТЬ ЗДЕСЬ)===
+=== ПРИМЕР ИСПОЛЬЗОВАНИЯ ГЕОГЕБРЫ В ГРФИКАХ И ПЛАНИМЕТРИИ (ИСПОЛЬЗУЙ ТОЛЬКО ТО, ЧТО ЗДЕСЬ ЕСТЬ ЗДЕСЬ)!!!===
 
 <GeoGebra height="450" setup={{`
   SetPerspective("2")
@@ -1127,6 +1127,18 @@ $$
   SetColor(heightB,"#f59e0b")
   SetLineThickness(heightB,3)
   SetCaption(heightB,"hB")
+  M1=Midpoint(A,B)
+  M2=Midpoint(B,C)
+  M3=Midpoint(A,C)
+  med1=Segment(C,M1)
+  med2=Segment(A,M2)
+  med3=Segment(B,M3)
+  SetColor(med1,"#ec4899")
+  SetColor(med2,"#ec4899")
+  SetColor(med3,"#ec4899")
+  SetLineThickness(med1,2)
+  SetLineThickness(med2,2)
+  SetLineThickness(med3,2)
   SetVisibleInView(hA,1,false)
   SetVisibleInView(hB,1,false)
   SetCaption(A,"A")
@@ -1137,6 +1149,9 @@ $$
   SetPointSize(C,4)
   SetPointSize(HA,4)
   SetPointSize(HB,4)
+  SetPointSize(M1,3)
+  SetPointSize(M2,3)
+  SetPointSize(M3,3)
 `}} />
 
 СТЕРЕОМЕТРИЮ ПОКА ЗАПРЕЩАЮ ГЕНЕРИРОВАТЬ
