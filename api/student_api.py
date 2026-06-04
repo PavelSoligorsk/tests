@@ -892,11 +892,15 @@ a^m \\cdot a^n =
 $$
 
 === ПРИМЕР GeoGebra (2D) ===
-<GeoGebra setup="{{`view: -5,5,-3,8,grid,axes
+<GeoGebra setup="
+{{`
+view: -5,5,-3,8,grid,axes
 f(x)=x^2
 g(x)=(x-2)^2
 color: f, #3366ff
-color: g, #ff3366`}}" />
+color: g, #ff3366`
+}}
+" />
 
 === ПРИМЕР GeoGebra (БУДЬ ВНИМАТЕЛЕН С ФИГУРНЫМИ СКОБКАМИ) (3D) ===
 <GeoGebra 
