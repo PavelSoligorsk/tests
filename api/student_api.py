@@ -1098,6 +1098,47 @@ $$
   SetVisibleInView(bis2,1,false)
 `}} />
 
+<GeoGebra height="500" setup={{`
+  SetPerspective("2")
+  ShowGrid(true)
+  ShowAxes(true)
+  A=(-4,0)
+  B=(4,0)
+  C=(-1,3)
+  tri=Polygon(A,B,C)
+  SetColor(tri,"#6366f1")
+  SetFilling(tri,0.3)
+  angleC=Angle(A,C,B)
+  SetColor(angleC,"#ef4444")
+  SetFilling(angleC,0.3)
+  extB=Ray(B,C)
+  extA=Ray(A,C)
+  SetColor(extB,"#94a3b8")
+  SetColor(extA,"#94a3b8")
+  hA=PerpendicularLine(A,extB)
+  HA=Intersect(hA,extB)
+  heightA=Segment(A,HA)
+  SetColor(heightA,"#22c55e")
+  SetLineThickness(heightA,3)
+  SetCaption(heightA,"hA")
+  hB=PerpendicularLine(B,extA)
+  HB=Intersect(hB,extA)
+  heightB=Segment(B,HB)
+  SetColor(heightB,"#f59e0b")
+  SetLineThickness(heightB,3)
+  SetCaption(heightB,"hB")
+  SetVisibleInView(hA,1,false)
+  SetVisibleInView(hB,1,false)
+  SetCaption(A,"A")
+  SetCaption(B,"B")
+  SetCaption(C,"C")
+  SetPointSize(A,4)
+  SetPointSize(B,4)
+  SetPointSize(C,4)
+  SetPointSize(HA,4)
+  SetPointSize(HB,4)
+`}} />
+
 СТЕРЕОМЕТРИЮ ПОКА ЗАПРЕЩАЮ ГЕНЕРИРОВАТЬ
 
 """
