@@ -1366,6 +1366,8 @@ $$
 <GeoGebra height="500" setup={{`
   SetPerspective("T")
   ShowGrid(true)
+  CenterView((0,0,0))
+  ZoomIn(1)
   ShowAxes(true)
   A=(0,0,0)
   B=(4,0,0)
@@ -1437,6 +1439,8 @@ $$
   SetPerspective("T")
   ShowGrid(true)
   ShowAxes(true)
+  CenterView((0,0,0))
+  ZoomIn(1)
   cone=Cone((0,0,0),(0,0,5),2)
   SetColor(cone,"#38bdf8")
   SetFilling(cone,0.2)
@@ -1512,6 +1516,8 @@ $$
 <GeoGebra height="500" setup={{`
   SetPerspective("T")
   ShowGrid(true)
+  CenterView((0,0,0))
+  ZoomIn(1)
   ShowAxes(true)
   R=3
   sphere=Sphere((0,0,0),R)
