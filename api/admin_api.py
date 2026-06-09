@@ -751,3 +751,55 @@ def delete_theory(
     db.commit()
     
     return {"message": f"Теория для темы '{theory.topic}' и раздела '{theory.section}' успешно удалена"}
+
+import httpx # Убедитесь, что импорт есть в начале файла
+
+@router.post("/tasks/{task_id}/send-to-tg")
+async def send_task_to_tg(
+    task_id: int,
+    chat_id: str,
+    db: Session = Depends(get_db),
+    current_admin: models.User = Depends(auth.check_admin)
+):
+    """
+    Отправляет задачу в указанный Telegram чат через рендер-бот.
+    """
+    # 1. Получаем задачу из БД
+    task = db.query(models.Task).filter(models.Task.id == task_id).first()
+    if not task:
+        raise HTTPException(status_code=404, detail="Задание не найдено")
+
+    # 2. Формируем текст для рендера
+    # Добавляем номер задания и саму формулировку
+    latex_payload = f"<strong>{task.task_class} (Тема {task.topic_number})</strong>\n\n{task.content}"
+    
+    # Если в контенте есть ссылка на картинку (в Markdown формате ![...](url)), 
+    # ваш рендер-бот её подхватит автоматически, так как process_embedded_images 
+    # ищет именно такой паттерн.
+
+    # 3. Отправляем запрос к вашему рендер-боту
+    # Предполагается, что рендер-бот запущен локально или доступен по URL
+    RENDER_API_URL = os.getenv("RENDER_API_URL", "http://localhost:8000/send_math")
+    
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(
+                RENDER_API_URL,
+                json={
+                    "chat_id": chat_id,
+                    "latex": latex_payload,
+                    "caption": f"Задача ID: {task.id}"
+                },
+                timeout=20.0
+            )
+            
+            if response.status_code != 200:
+                raise HTTPException(
+                    status_code=500, 
+                    detail=f"Ошибка рендер-бота: {response.text}"
+                )
+            
+            return {"message": "Задача успешно отправлена в Telegram"}
+            
+        except httpx.RequestError as e:
+            raise HTTPException(status_code=500, detail=f"Не удалось связаться с рендер-ботом: {str(e)}")
