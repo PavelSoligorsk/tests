@@ -10,6 +10,7 @@ from dto import AllowedEmailResponse
 import uuid  # ← добавь эту строку
 import boto3
 from botocore.config import Config
+import re
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
