@@ -763,18 +763,18 @@ async def send_task_to_tg(
 ):
     """
     Отправляет задачу в указанный Telegram чат через рендер-бот.
-    Если у задачи закрытый ответ (is_open_answer == False), генерирует викторину (Quiz).
+    Если у задачи закрытый ответ, генерирует викторину (Quiz) или опрос с множественным выбором.
     """
     # 1. Получаем задачу из БД
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Задание не найдено")
 
-    # 2. Логика вариантов ответов и викторины под твою модель
+    # 2. Логика вариантов ответов под новую структуру рендер-бота
     render_options = []
-    correct_option_id = None
+    correct_option_ids = []  # Теперь собираем список индексов правильных ответов
     
-    # Если ответ ЗАКРЫТЫЙ (is_open_answer == False) и есть варианты в поле options
+    # Задание является тестом (закрытый ответ), если флаг open_answer равен False
     is_quiz = not task.is_open_answer
     
     if is_quiz and task.options:
@@ -782,25 +782,30 @@ async def send_task_to_tg(
         if isinstance(task.options, list):
             render_options = [str(opt).strip() for opt in task.options]
         elif isinstance(task.options, dict):
-            # На случай, если JSON сохранен как словарь, берем только значения или ключи
             render_options = [str(val).strip() for val in task.options.values()]
 
-        # Находим индекс правильного ответа (сверяем с полем task.answer)
-        clean_correct_answer = str(task.answer).strip()
-        if clean_correct_answer in render_options:
-            correct_option_id = render_options.index(clean_correct_answer)
-        else:
-            # Если точного совпадения по тексту нет, ставим 0 (дефолт), чтобы не упасть
-            correct_option_id = 0
+        # Парсим правильные ответы из поля task.answer
+        # Дробим строку по запятым и точкам с запятой на случай множественного выбора
+        raw_answers = str(task.answer).strip()
+        clean_answers_list = [a.strip() for a in re.split(r'[,;]', raw_answers) if a.strip()]
+
+        # Находим индексы всех правильных ответов в массиве вариантов
+        for idx, opt in enumerate(render_options):
+            # Проверяем точное совпадение или вхождение (например, если в базе записано "А", а в вариантах "А")
+            if any(ans == opt or ans in opt for ans in clean_answers_list):
+                correct_option_ids.append(idx)
+
+        # Фолбэк-страховка: если это тест, но совпадений не нашли, закидываем 0 индекс
+        if not correct_option_ids:
+            correct_option_ids.append(0)
             
-    # Дополнительная страховка: Telegram не примет опрос, если вариантов меньше 2
+    # Telegram не пропустит опрос, если в нем меньше 2 вариантов ответа
     if is_quiz and len(render_options) < 2:
         is_quiz = False
 
-    # 3. Формируем красивый caption с учетом твоих новых полей (Раздел/Тема)
+    # 3. Формируем красивый caption с метаданными (Раздел/Тема/Сложность)
     difficulty_stars = "⭐" * min(max(1, task.difficulty), 5)
     
-    # Собираем заголовок темы (если поля topic/section заполнены)
     meta_info = f"📊 Класс: {task.task_class} | Тема №{task.topic_number}"
     if task.section:
         meta_info += f"\n📂 Раздел: {task.section}"
@@ -813,23 +818,29 @@ async def send_task_to_tg(
         f"🆔 ID задачи: {task.id}"
     )
 
-    # 4. Payload для рендер-бота
+    # 4. Формируем обновленный контракт данных (совпадает с моделью MathMessage)
     render_payload = {
         "chat_id": chat_id,
-        "latex": task.content.strip(), # Чистый текст задачи для генерации картинки
-        "caption": telegram_caption,   # Метаданные текстом в Telegram под картинку
+        "latex": task.content.strip(), # Только текст задания (без вариантов, они уйдут в options)
+        "caption": telegram_caption,   # Метаданные в текстовое описание под фото
         "is_quiz": is_quiz,
-        "options": render_options,
-        "correct_option_id": correct_option_id
+        "options": render_options,     # Массив вариантов, который бот нарисует на картинке
+        "correct_option_ids": correct_option_ids # Массив индексов для создания правильного пулла
     }
 
-    # 5. Отправка запроса к рендер-боту
-    RENDER_API_URL = os.getenv("RENDER_API_URL", "http://localhost:8000/send_math")
+    # 5. Безопасная отправка запроса к рендер-боту
+    BASE_URL = os.getenv("RENDER_API_URL", "http://localhost:8000")
+    
+    # Убираем дублирование /send_math, если оно уже зашито в конфиг на Railway
+    if BASE_URL.endswith("/send_math"):
+        RENDER_API_URL = BASE_URL
+    else:
+        RENDER_API_URL = f"{BASE_URL.rstrip('/')}/send_math"
     
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
-                RENDER_API_URL+"/send_math",
+                RENDER_API_URL,
                 json=render_payload,
                 timeout=30.0
             )
