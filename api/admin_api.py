@@ -832,8 +832,8 @@ async def send_task_to_tg(
         is_quiz = False
 
     # 3. Формируем красивый caption с метаданными (Раздел/Тема/Сложность)
-    task_difficulty = int(task.difficulty) if task.difficulty is not None else 1
-    difficulty_stars = "⭐" * min(max(1, task_difficulty), 5)
+    diff = int(task.difficulty) if task.difficulty is not None else 1
+    
     
     meta_info = f"{task.task_class} | {task.topic_number}"
     if task.section:
@@ -843,7 +843,7 @@ async def send_task_to_tg(
 
     telegram_caption = (
         f"{meta_info}\n"
-        f"🔥 Сложность: {difficulty_stars}\n"
+        f"🔥 Сложность: {diff*'🔥'}\n"
         f"🆔 ID задачи: {task.id}"
     )
 
