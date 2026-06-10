@@ -755,6 +755,46 @@ def delete_theory(
 
 import httpx # Убедитесь, что импорт есть в начале файла
 
+def parse_correct_option_ids(task_answer: str, render_options: list[str]) -> list[int]:
+    """
+    Универсальный парсер правильных ответов.
+    Возвращает список 0-indexed индексов для рендер-бота.
+    """
+    correct_option_ids = []
+    raw_answers = str(task_answer).strip()
+
+    # Сценарий 1: В базе лежит строка с цифрами-указателями вариантов (например, "2,4", " 2 ; 3 ", "1")
+    # Регулярка проверяет, что в строке нет ничего, кроме цифр, запятых, точек с запятой и пробелов
+    if re.match(r'^[\d\s,;]+$', raw_answers):
+        digit_answers = re.findall(r'\d+', raw_answers)
+        for num_str in digit_answers:
+            idx = int(num_str) - 1  # Переводим из человеческого отсчета (с 1) в кодерский (с 0)
+            if 0 <= idx < len(render_options):
+                if idx not in correct_option_ids:
+                    correct_option_ids.append(idx)
+        
+        if correct_option_ids:
+            return sorted(correct_option_ids)
+
+    # Сценарий 2: В базе лежит сам текст ответа или массив ответов в виде строки (например, "$arcsin\\sqrt{2}$")
+    # Дробим строку по популярным разделителям
+    clean_answers_list = [a.strip().# Очищаем от возможных случайных внешних кавычек
+                          strip('"').strip("'") 
+                          for a in re.split(r'[,;|\n]', raw_answers) if a.strip()]
+
+    for idx, opt in enumerate(render_options):
+        clean_opt = opt.strip().strip('"').strip("'")
+        # Строгое сравнение «один в один», чтобы цифры внутри LaTeX не давали ложных срабатываний
+        if any(ans == clean_opt for ans in clean_answers_list):
+            correct_option_ids.append(idx)
+
+    # Фолбэк-страховка: если в базе данных вообще пусто или формат совсем сломался,
+    # отдаем 0 индекс, чтобы Telegram не упал при отправке
+    if not correct_option_ids:
+        correct_option_ids.append(0)
+
+    return sorted(correct_option_ids)
+
 @router.post("/tasks/{task_id}/send-to-tg")
 async def send_task_to_tg(
     task_id: int,
@@ -785,20 +825,7 @@ async def send_task_to_tg(
         elif isinstance(task.options, dict):
             render_options = [str(val).strip() for val in task.options.values()]
 
-        # Парсим правильные ответы из поля task.answer
-        # Дробим строку по запятым и точкам с запятой на случай множественного выбора
-        raw_answers = str(task.answer).strip()
-        clean_answers_list = [a.strip() for a in re.split(r'[,;]', raw_answers) if a.strip()]
-
-        # Находим индексы всех правильных ответов в массиве вариантов
-        for idx, opt in enumerate(render_options):
-            # Проверяем точное совпадение или вхождение (например, если в базе записано "А", а в вариантах "А")
-            if any(ans == opt or ans in opt for ans in clean_answers_list):
-                correct_option_ids.append(idx)
-
-        # Фолбэк-страховка: если это тест, но совпадений не нашли, закидываем 0 индекс
-        if not correct_option_ids:
-            correct_option_ids.append(0)
+        correct_option_ids = parse_correct_option_ids(task.answer, render_options)
             
     # Telegram не пропустит опрос, если в нем меньше 2 вариантов ответа
     if is_quiz and len(render_options) < 2:
