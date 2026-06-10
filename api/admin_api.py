@@ -829,7 +829,7 @@ async def send_task_to_tg(
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
-                RENDER_API_URL,
+                RENDER_API_URL+"/send_math",
                 json=render_payload,
                 timeout=30.0
             )
