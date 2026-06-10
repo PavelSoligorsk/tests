@@ -763,34 +763,75 @@ async def send_task_to_tg(
 ):
     """
     Отправляет задачу в указанный Telegram чат через рендер-бот.
+    Если у задачи закрытый ответ (is_open_answer == False), генерирует викторину (Quiz).
     """
     # 1. Получаем задачу из БД
     task = db.query(models.Task).filter(models.Task.id == task_id).first()
     if not task:
         raise HTTPException(status_code=404, detail="Задание не найдено")
 
-    # 2. Формируем текст для рендера
-    # Добавляем номер задания и саму формулировку
-    latex_payload = f"<strong>{task.task_class} (Тема {task.topic_number})</strong>\n\n{task.content}"
+    # 2. Логика вариантов ответов и викторины под твою модель
+    render_options = []
+    correct_option_id = None
     
-    # Если в контенте есть ссылка на картинку (в Markdown формате ![...](url)), 
-    # ваш рендер-бот её подхватит автоматически, так как process_embedded_images 
-    # ищет именно такой паттерн.
+    # Если ответ ЗАКРЫТЫЙ (is_open_answer == False) и есть варианты в поле options
+    is_quiz = not task.is_open_answer
+    
+    if is_quiz and task.options:
+        # Приводим элементы к строкам и чистим пробелы
+        if isinstance(task.options, list):
+            render_options = [str(opt).strip() for opt in task.options]
+        elif isinstance(task.options, dict):
+            # На случай, если JSON сохранен как словарь, берем только значения или ключи
+            render_options = [str(val).strip() for val in task.options.values()]
 
-    # 3. Отправляем запрос к вашему рендер-боту
-    # Предполагается, что рендер-бот запущен локально или доступен по URL
+        # Находим индекс правильного ответа (сверяем с полем task.answer)
+        clean_correct_answer = str(task.answer).strip()
+        if clean_correct_answer in render_options:
+            correct_option_id = render_options.index(clean_correct_answer)
+        else:
+            # Если точного совпадения по тексту нет, ставим 0 (дефолт), чтобы не упасть
+            correct_option_id = 0
+            
+    # Дополнительная страховка: Telegram не примет опрос, если вариантов меньше 2
+    if is_quiz and len(render_options) < 2:
+        is_quiz = False
+
+    # 3. Формируем красивый caption с учетом твоих новых полей (Раздел/Тема)
+    difficulty_stars = "⭐" * min(max(1, task.difficulty), 5)
+    
+    # Собираем заголовок темы (если поля topic/section заполнены)
+    meta_info = f"📊 Класс: {task.task_class} | Тема №{task.topic_number}"
+    if task.section:
+        meta_info += f"\n📂 Раздел: {task.section}"
+    if task.topic:
+        meta_info += f"\n📖 Тема: {task.topic}"
+
+    telegram_caption = (
+        f"{meta_info}\n"
+        f"🔥 Сложность: {difficulty_stars}\n"
+        f"🆔 ID задачи: {task.id}"
+    )
+
+    # 4. Payload для рендер-бота
+    render_payload = {
+        "chat_id": chat_id,
+        "latex": task.content.strip(), # Чистый текст задачи для генерации картинки
+        "caption": telegram_caption,   # Метаданные текстом в Telegram под картинку
+        "is_quiz": is_quiz,
+        "options": render_options,
+        "correct_option_id": correct_option_id
+    }
+
+    # 5. Отправка запроса к рендер-боту
     RENDER_API_URL = os.getenv("RENDER_API_URL", "http://localhost:8000/send_math")
     
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(
                 RENDER_API_URL,
-                json={
-                    "chat_id": chat_id,
-                    "latex": latex_payload,
-                    "caption": f"Задача ID: {task.id}"
-                },
-                timeout=20.0
+                json=render_payload,
+                timeout=30.0
             )
             
             if response.status_code != 200:
@@ -802,4 +843,7 @@ async def send_task_to_tg(
             return {"message": "Задача успешно отправлена в Telegram"}
             
         except httpx.RequestError as e:
-            raise HTTPException(status_code=500, detail=f"Не удалось связаться с рендер-ботом: {str(e)}")
+            raise HTTPException(
+                status_code=500, 
+                detail=f"Не удалось связаться с рендер-ботом: {str(e)}"
+            )
