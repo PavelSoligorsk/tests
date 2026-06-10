@@ -853,7 +853,8 @@ async def send_task_to_tg(
         "caption": telegram_caption,   # Метаданные в текстовое описание под фото
         "is_quiz": is_quiz,
         "options": render_options,     # Массив вариантов, который бот нарисует на картинке
-        "correct_option_ids": correct_option_ids # Массив индексов для создания правильного пулла
+        "correct_option_ids": correct_option_ids, # Массив индексов для создания правильного пулла
+        "diff": task.difficulty
     }
 
     # 5. Безопасная отправка запроса к рендер-боту
