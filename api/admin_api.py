@@ -832,7 +832,8 @@ async def send_task_to_tg(
         is_quiz = False
 
     # 3. Формируем красивый caption с метаданными (Раздел/Тема/Сложность)
-    difficulty_stars = "⭐" * task.difficulty
+    task_difficulty = int(task.difficulty) if task.difficulty is not None else 1
+    difficulty_stars = "⭐" * min(max(1, task_difficulty), 5)
     
     meta_info = f"{task.task_class} | {task.topic_number}"
     if task.section:
