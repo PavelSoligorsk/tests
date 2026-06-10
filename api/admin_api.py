@@ -843,7 +843,7 @@ async def send_task_to_tg(
 
     telegram_caption = (
         f"{meta_info}\n"
-        f"🔥 Сложность: {diff*'🔥'}\n"
+        f"🔥 Сложность: {diff}\n"
         f"🆔 ID задачи: {task.id}"
     )
 
@@ -855,7 +855,7 @@ async def send_task_to_tg(
         "is_quiz": is_quiz,
         "options": render_options,     # Массив вариантов, который бот нарисует на картинке
         "correct_option_ids": correct_option_ids, # Массив индексов для создания правильного пулла
-        "diff": task.difficulty
+        "difficulty": task.difficulty
     }
 
     # 5. Безопасная отправка запроса к рендер-боту
