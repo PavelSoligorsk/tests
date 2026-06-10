@@ -855,7 +855,8 @@ async def send_task_to_tg(
         "is_quiz": is_quiz,
         "options": render_options,     # Массив вариантов, который бот нарисует на картинке
         "correct_option_ids": correct_option_ids, # Массив индексов для создания правильного пулла
-        "difficulty": task.difficulty
+        "difficulty": task.difficulty,
+        "answer": str(task.answer).strip() if task.answer else "" # ЖЕСТКО СЮДА!
     }
 
     # 5. Безопасная отправка запроса к рендер-боту
