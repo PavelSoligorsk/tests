@@ -1658,15 +1658,6 @@ def generate_ai_test(
 === ЗАПРОС СТУДЕНТА ===
 {request.prompt}
 
-Ты — классификатор учебных заданий по математике.
-Анализируй запрос студента и сопоставляй его с ТЕМАМИ и РАЗДЕЛАМИ из реальной структуры базы данных ниже.
-
-=== РЕАЛЬНАЯ СТРУКТУРА БАЗЫ ДАННЫХ ===
-{chr(10).join(hierarchy_context)}
-
-=== ЗАПРОС СТУДЕНТА ===
-{request.prompt}
-
 === ПОДРОБНАЯ ИНСТРУКЦИЯ ===
 
 1. **Анализ запроса:**
@@ -1678,15 +1669,16 @@ def generate_ai_test(
    - Если "дроби" → возьми тему "Числа и вычисления" с разделами про дроби
    - Если "геометрия" → возьми тему "Геометрия" со всеми её разделами
    - Если "стереометрия" → возьми тему "Геометрия" с разделами по стереометрии
+   - Если запрос общий и охватывает много тем → выбери ВСЕ подходящие темы (может быть 3, 5, 7 и более)
 
 3. **Правила выбора разделов:**
    - Если запрос точный ("квадратные уравнения") → укажи конкретный раздел
-   - Если запрос общий ("уравнения") → укажи ВСЕ разделы, где есть слово "уравнение" в названии (но не системы уравнений или т.п. ВСЁ ДОЛЖНО БЫТЬ ПО СМЫСЛУ)
+   - Если запрос общий ("уравнения") → укажи ВСЕ разделы, где есть слово "уравнение" в названии
    - Если запрос очень общий ("математика") → выбери 3-5 основных тем
 
 4. **Примеры:**
    - Запрос: "отработка уравнений" → 
-     {{"topics": [{{"name": "Уравнения и неравенства", "sections": ["Квадратные уравнения", "Логарифмические уравнения", "Показательные уравнения, ..."]}}]}}
+     {{"topics": [{{"name": "Уравнения и неравенства", "sections": ["Квадратные уравнения", "Логарифмические уравнения", "Показательные уравнения"]}}]}}
    
    - Запрос: "хочу квадратные уравнения и проценты" →
      {{"topics": [
@@ -1698,13 +1690,21 @@ def generate_ai_test(
      {{"topics": [{{"name": "Геометрия", "sections": []}}]}}
      (пустой массив sections = все разделы этой темы)
 
+   - Запрос: "математика, всё подряд" →
+     {{"topics": [
+        {{"name": "Алгебра", "sections": []}},
+        {{"name": "Геометрия", "sections": []}},
+        {{"name": "Числа и вычисления", "sections": []}}
+     ]}}
+
 5. **Если точного совпадения нет:**
    - Выбери максимально близкие по смыслу темы и разделы
-   - Если unsure, лучше выбрать больше, чем меньше
+   - Лучше выбрать БОЛЬШЕ тем, чем пропустить что-то важное
 
 === ВАЖНО ===
 - sections можно оставить пустым массивом [], если нужно взять ВСЕ разделы темы
 - Если тема не указана в структуре БД, НЕ придумывай её
+- Количество тем НЕ ограничено — выбери все, что подходят под запрос
 
 Верни ТОЛЬКО JSON строго в формате:
 {{
@@ -1751,16 +1751,99 @@ def generate_ai_test(
     
     print(f"[DEBUG] Topics with sections: {topic_section_map}")
     
+    # ========== ПРОВЕРКА: Если AI ничего не определил — СЛУЧАЙНЫЙ ТЕСТ ==========
+    
+    if not detected_topics_with_sections or not detected_topics:
+        print("[INFO] AI не определил темы. Генерируем случайный тест со случайным распределением.")
+        
+        total_tasks = request.task_count
+        open_count = random.randint(0, total_tasks)
+        closed_count = total_tasks - open_count
+        
+        print(f"[DEBUG] Случайное распределение: {open_count} открытых, {closed_count} закрытых")
+        
+        difficulty_map = {
+            "easy": [1, 2],
+            "medium": [2, 3, 4],
+            "hard": [4, 5]
+        }
+        
+        if request.difficulty:
+            target_difficulties = difficulty_map.get(request.difficulty, [1, 2, 3, 4, 5])
+            difficulty_text = request.difficulty
+        else:
+            target_difficulties = [1, 2, 3, 4, 5]
+            difficulty_text = "Любая"
+        
+        open_tasks = []
+        if open_count > 0:
+            open_tasks = db.query(models.Task).filter(
+                models.Task.is_open_answer == True,
+                models.Task.difficulty.in_(target_difficulties)
+            ).order_by(func.random()).limit(open_count).all()
+        
+        closed_tasks = []
+        if closed_count > 0:
+            closed_tasks = db.query(models.Task).filter(
+                models.Task.is_open_answer == False,
+                models.Task.difficulty.in_(target_difficulties)
+            ).order_by(func.random()).limit(closed_count).all()
+        
+        selected_tasks = closed_tasks + open_tasks
+        
+        if len(selected_tasks) < total_tasks:
+            remaining = total_tasks - len(selected_tasks)
+            existing_ids = [t.id for t in selected_tasks]
+            extra_tasks = db.query(models.Task).filter(
+                ~models.Task.id.in_(existing_ids) if existing_ids else True,
+                models.Task.difficulty.in_(target_difficulties)
+            ).order_by(func.random()).limit(remaining).all()
+            selected_tasks.extend(extra_tasks)
+        
+        if not selected_tasks:
+            raise HTTPException(status_code=404, detail="Нет доступных заданий")
+        
+        closed_sorted = sorted(
+            [t for t in selected_tasks if not t.is_open_answer],
+            key=lambda t: t.difficulty or 0
+        )
+        open_sorted = sorted(
+            [t for t in selected_tasks if t.is_open_answer],
+            key=lambda t: t.difficulty or 0
+        )
+        sorted_tasks = closed_sorted + open_sorted
+        
+        new_test = models.Test(
+            title=f"AI: Случайный тест ({difficulty_text})",
+            target_class=None,
+            target_topic=request.prompt[:255],
+            is_autocompile=False,
+            is_ai_generated=True,
+            creator_id=current_user.id,
+            is_active=True
+        )
+        db.add(new_test)
+        db.flush()
+        
+        new_test.tasks = sorted_tasks
+        db.commit()
+        db.refresh(new_test)
+        
+        result = db.query(models.Test)\
+                   .options(joinedload(models.Test.tasks))\
+                   .filter(models.Test.id == new_test.id)\
+                   .first()
+        
+        return result
+    
     # ========== ШАГ 2: Фильтрация заданий ==========
     
-    # Маппинг сложности (поддержка None)
     difficulty_map = {
         "easy": [1, 2],
         "medium": [2, 3, 4],
         "hard": [4, 5]
     }
     
-    # Если difficulty = None, берём все сложности
     if request.difficulty:
         target_difficulties = difficulty_map.get(request.difficulty, [1, 2, 3, 4, 5])
         difficulty_text = request.difficulty
@@ -1773,29 +1856,68 @@ def generate_ai_test(
     if detected_topics:
         from sqlalchemy import or_, and_
         
-        # Строим условия для каждой темы с её разделами
-        conditions = []
-        for topic, sections in topic_section_map.items():
-            if sections:
-                # Если для темы указаны разделы — ищем строго по ним
-                conditions.append(
-                    and_(
+        # Умное распределение для множественных тем (>= 3)
+        if len(detected_topics) >= 3:
+            print(f"[INFO] Обнаружено {len(detected_topics)} тем. Распределяем квоты.")
+            
+            MAX_PER_TOPIC = 100
+            BUFFER_MULTIPLIER = 3
+            
+            total_needed = request.task_count * BUFFER_MULTIPLIER
+            per_topic_quota = min(MAX_PER_TOPIC, max(10, total_needed // len(detected_topics)))
+            
+            print(f"[DEBUG] Квота на тему: {per_topic_quota} заданий")
+            
+            topic_tasks_map = {}
+            all_task_ids = set()
+            
+            for topic, sections in topic_section_map.items():
+                if sections:
+                    topic_query = db.query(models.Task).filter(
                         models.Task.topic == topic,
-                        models.Task.section.in_(sections)
+                        models.Task.section.in_(sections),
+                        models.Task.difficulty.in_(target_difficulties)
                     )
+                else:
+                    topic_query = db.query(models.Task).filter(
+                        models.Task.topic == topic,
+                        models.Task.difficulty.in_(target_difficulties)
+                    )
+                
+                topic_tasks = topic_query.order_by(func.random()).limit(per_topic_quota).all()
+                
+                for task in topic_tasks:
+                    if task.id not in all_task_ids:
+                        all_task_ids.add(task.id)
+                        filtered_tasks.append(task)
+                
+                print(f"[DEBUG] Тема '{topic}': взято {len(topic_tasks)} заданий")
+            
+            # Если получилось слишком много — сокращаем
+            if len(filtered_tasks) > 300:
+                filtered_tasks = random.sample(filtered_tasks, 300)
+                print(f"[DEBUG] Сокращено до 300 заданий")
+                
+        else:
+            # Для 1-2 тем — собираем все задания
+            conditions = []
+            for topic, sections in topic_section_map.items():
+                if sections:
+                    conditions.append(
+                        and_(
+                            models.Task.topic == topic,
+                            models.Task.section.in_(sections)
+                        )
+                    )
+                else:
+                    conditions.append(models.Task.topic == topic)
+            
+            if conditions:
+                query = db.query(models.Task).filter(
+                    or_(*conditions),
+                    models.Task.difficulty.in_(target_difficulties)
                 )
-            else:
-                # Если разделы не указаны — берём все задания темы
-                conditions.append(
-                    models.Task.topic == topic
-                )
-        
-        if conditions:
-            query = db.query(models.Task).filter(
-                or_(*conditions),
-                models.Task.difficulty.in_(target_difficulties)
-            )
-            filtered_tasks = query.limit(300).all()
+                filtered_tasks = query.limit(300).all()
         
         print(f"[DEBUG] Найдено заданий по темам {detected_topics}: {len(filtered_tasks)}")
     
@@ -1822,11 +1944,20 @@ def generate_ai_test(
     
     tasks_for_ai = []
     for task in filtered_tasks:
+        # Считаем количество заданий по темам для контекста
         tasks_for_ai.append(
             f"ID:{task.id} | Тема:{task.topic or 'Н/Д'} | Раздел:{task.section or 'Н/Д'} | "
             f"Сложность:{task.difficulty or 'Н/Д'} | Тип:{'открытый' if task.is_open_answer else 'закрытый'} | "
-            f"Содержание:{(task.content or '')[:500]}..."
+            f"Содержание:{(task.content or '')[:300]}..."
         )
+    
+    # Собираем статистику по темам для AI
+    topic_stats = {}
+    for task in filtered_tasks:
+        t = task.topic or "Н/Д"
+        topic_stats[t] = topic_stats.get(t, 0) + 1
+    
+    stats_context = "\n".join([f"- {t}: {c} заданий" for t, c in topic_stats.items()])
     
     selection_prompt = f"""Ты — эксперт по подбору учебных заданий по математике.
 
@@ -1836,6 +1967,10 @@ def generate_ai_test(
 === ПАРАМЕТРЫ ===
 Нужно выбрать заданий: {request.task_count}
 Сложность: {difficulty_text}
+Определено тем: {len(detected_topics)}
+
+=== СТАТИСТИКА ДОСТУПНЫХ ЗАДАНИЙ ПО ТЕМАМ ===
+{stats_context}
 
 === ОТФИЛЬТРОВАННЫЕ ЗАДАНИЯ ===
 Всего доступно: {len(tasks_for_ai)} заданий
@@ -1845,10 +1980,12 @@ def generate_ai_test(
 
 === ИНСТРУКЦИЯ ===
 1. Проанализируй запрос студента: "{request.prompt}"
-2. Из предложенных заданий выбери {request.task_count} НАИБОЛЕЕ ПОДХОДЯЩИХ
-3. Учитывай содержание задания, тему, сложность
-4. Верни ТОЛЬКО JSON: {{"task_ids": [45, 67, 123, ...]}}
-5. Если подходящих меньше {request.task_count} — верни сколько есть
+2. Из предложенных заданий выбери РОВНО {request.task_count} НАИБОЛЕЕ ПОДХОДЯЩИХ
+3. Если тем несколько — распредели задания МЕЖДУ ВСЕМИ темами пропорционально их важности для запроса
+4. Внутри каждой темы выбирай задания с РАЗНОЙ сложностью (если доступны)
+5. Учитывай содержание задания, тему, сложность
+6. Верни ТОЛЬКО JSON: {{"task_ids": [45, 67, 123, ...]}}
+7. Если подходящих меньше {request.task_count} — верни сколько есть
 """
 
     selected_ids = []
@@ -1880,13 +2017,37 @@ def generate_ai_test(
             models.Task.id.in_(selected_ids)
         ).all()
         
+        # Если AI выбрал недостаточно — добираем случайно, но с учётом тем
         if len(selected_tasks) < request.task_count:
             remaining_ids = [t.id for t in filtered_tasks if t.id not in selected_ids]
             if remaining_ids:
                 needed = request.task_count - len(selected_tasks)
-                extra_ids = random.sample(remaining_ids, min(needed, len(remaining_ids)))
-                extra_tasks = db.query(models.Task).filter(models.Task.id.in_(extra_ids)).all()
-                selected_tasks.extend(extra_tasks)
+                
+                # Пробуем добрать пропорционально по темам
+                topic_remaining = {}
+                for tid in remaining_ids:
+                    task = next((t for t in filtered_tasks if t.id == tid), None)
+                    if task:
+                        t = task.topic or "unknown"
+                        if t not in topic_remaining:
+                            topic_remaining[t] = []
+                        topic_remaining[t].append(tid)
+                
+                extra_ids = []
+                topics_list = list(topic_remaining.keys())
+                
+                while len(extra_ids) < needed and topics_list:
+                    for topic in topics_list:
+                        if len(extra_ids) >= needed:
+                            break
+                        if topic_remaining[topic]:
+                            extra_ids.append(topic_remaining[topic].pop())
+                        else:
+                            topics_list.remove(topic)
+                
+                if extra_ids:
+                    extra_tasks = db.query(models.Task).filter(models.Task.id.in_(extra_ids)).all()
+                    selected_tasks.extend(extra_tasks)
     else:
         print("[WARNING] AI не вернул ID, используем random.sample")
         selected_tasks = random.sample(filtered_tasks, min(request.task_count, len(filtered_tasks)))
@@ -1908,6 +2069,7 @@ def generate_ai_test(
     
     # ========== ШАГ 6: Создание теста ==========
     
+    # Собираем информацию о темах для заголовка
     topics_used = list(set([t.topic for t in selected_tasks if t.topic]))
     title_topics = ", ".join(topics_used[:3])
     if len(topics_used) > 3:
