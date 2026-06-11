@@ -2081,7 +2081,7 @@ def generate_ai_test(
     new_test = models.Test(
         title=f"AI: {title_topics}",
         target_class=None,
-        target_topic=request.prompt[:255],
+        target_topic=request.prompt[:47],
         is_autocompile=False,
         is_ai_generated=True,
         creator_id=current_user.id,
