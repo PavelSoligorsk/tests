@@ -15,14 +15,61 @@ import re
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
 # --- УПРАВЛЕНИЕ ПОЛЬЗОВАТЕЛЯМИ ---
-
-@router.get("/users", response_model=list[dto.UserResponse])
-def get_all_users(
-    db: Session = Depends(get_db), 
+@router.get("/users", response_model=List[dto.UserResponse])
+def get_users(
+    db: Session = Depends(get_db),
     current_admin: models.User = Depends(auth.check_admin)
 ):
-    """Получить список всех пользователей"""
-    return db.query(models.User).all()
+    """Получить список всех пользователей с информацией о преподавателях"""
+    users = db.query(models.User).all()
+    
+    # Собираем все student_id
+    student_ids = [u.id for u in users if u.role == "student"]
+    
+    # Одним запросом получаем все связи
+    teacher_links = {}
+    if student_ids:
+        links = db.query(models.TeacherStudent).filter(
+            models.TeacherStudent.student_id.in_(student_ids)
+        ).all()
+        
+        teacher_ids = [link.teacher_id for link in links]
+        teachers = {}
+        if teacher_ids:
+            teacher_users = db.query(models.User).filter(
+                models.User.id.in_(teacher_ids)
+            ).all()
+            teachers = {t.id: t for t in teacher_users}
+        
+        for link in links:
+            teacher = teachers.get(link.teacher_id)
+            if teacher:
+                teacher_links[link.student_id] = {
+                    "id": teacher.id,
+                    "first_name": teacher.first_name,
+                    "last_name": teacher.last_name,
+                    "username": teacher.username,
+                    "tg_username": teacher.tg_username,
+                    "phone": teacher.phone,
+                    "assigned_at": link.assigned_at
+                }
+    
+    # Формируем ответ
+    result = []
+    for user in users:
+        user_data = {
+            "id": user.id,
+            "first_name": user.first_name,
+            "last_name": user.last_name,
+            "username": user.username,
+            "tg_username": user.tg_username,
+            "phone": user.phone,
+            "role": user.role,
+            "teacher": teacher_links.get(user.id) if user.role == "student" else None
+        }
+        result.append(user_data)
+    
+    return result
 
 @router.patch("/users/{user_id}/role")
 def change_user_role(
