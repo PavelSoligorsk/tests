@@ -917,49 +917,57 @@ async def send_task_to_tg(
                 detail=f"Не удалось связаться с рендер-ботом: {str(e)}"
             )
         
+from pydantic import BaseModel
+
+class AssignStudentRequest(BaseModel):
+    teacher_id: int
+    student_id: int
+
 @router.post("/assign-student-to-teacher")
 def assign_student_to_teacher(
-    teacher_id: int,
-    student_id: int,
+    data: AssignStudentRequest,
     db: Session = Depends(get_db),
-    current_admin: models.User = Depends(auth.check_admin)  # функция проверки на админа
+    current_admin: models.User = Depends(auth.check_admin)
 ):
     """Назначить ученика учителю (только для администратора)"""
-    # Проверяем, что оба пользователя существуют
-    teacher = db.query(models.User).filter(models.User.id == teacher_id, models.User.role.in_(["teacher", "admin"])).first()
+    teacher = db.query(models.User).filter(
+        models.User.id == data.teacher_id, 
+        models.User.role.in_(["teacher", "admin"])
+    ).first()
     if not teacher:
         raise HTTPException(status_code=404, detail="Учитель не найден")
     
-    student = db.query(models.User).filter(models.User.id == student_id, models.User.role == "student").first()
+    student = db.query(models.User).filter(
+        models.User.id == data.student_id, 
+        models.User.role == "student"
+    ).first()
     if not student:
         raise HTTPException(status_code=404, detail="Ученик не найден")
     
-    # Проверяем, не назначен ли уже
-    existing = db.query(models.TeacherStudent).filter(
-        models.TeacherStudent.teacher_id == teacher_id,
-        models.TeacherStudent.student_id == student_id
-    ).first()
-    if existing:
-        raise HTTPException(status_code=400, detail="Этот ученик уже назначен этому учителю")
+    # Удаляем старую связь
+    db.query(models.TeacherStudent).filter(
+        models.TeacherStudent.student_id == data.student_id
+    ).delete()
     
-    new_link = models.TeacherStudent(teacher_id=teacher_id, student_id=student_id)
+    # Создаём новую
+    new_link = models.TeacherStudent(
+        teacher_id=data.teacher_id, 
+        student_id=data.student_id
+    )
     db.add(new_link)
     db.commit()
-    db.refresh(new_link)
     
     return {"message": f"Ученик {student.username} назначен учителю {teacher.username}"}
 
 
-@router.delete("/remove-student-from-teacher")
+@router.delete("/remove-student-from-teacher/{student_id}")
 def remove_student_from_teacher(
-    teacher_id: int,
     student_id: int,
     db: Session = Depends(get_db),
     current_admin: models.User = Depends(auth.check_admin)
 ):
     """Удалить связь учитель-ученик"""
     link = db.query(models.TeacherStudent).filter(
-        models.TeacherStudent.teacher_id == teacher_id,
         models.TeacherStudent.student_id == student_id
     ).first()
     if not link:
