@@ -567,62 +567,52 @@ def get_test_assignments(
     current_teacher: models.User = Depends(check_teacher)
 ):
     """
-    Получить список студентов, которым назначен тест, 
-    с информацией о прохождении и результатах
+    Получить список студентов, которым назначен тест.
+    Для каждого назначения вычисляется реальный статус выполнения
+    (наличие завершённого TestResult).
     """
+    # 1. Проверяем, что тест существует
     test = db.query(models.Test).filter(models.Test.id == test_id).first()
     if not test:
         raise HTTPException(status_code=404, detail="Тест не найден")
     
-    # Проверяем, что тест принадлежит текущему учителю (или админу)
+    # 2. Проверяем, что тест принадлежит текущему учителю (или админу)
     if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
         raise HTTPException(status_code=403, detail="Вы не можете просматривать назначения этого теста")
     
+    # 3. Получаем все назначения для этого теста
     assignments = db.query(models.TestAssignment).filter(
         models.TestAssignment.test_id == test_id
-    ).all()
+    ).order_by(models.TestAssignment.assigned_at.desc()).all()
     
+    # 4. За один запрос получаем все завершённые результаты для этого теста
+    #    (группируем по user_id и берём последний по дате)
+    from sqlalchemy import func
+    subq = db.query(
+        models.TestResult.user_id,
+        func.max(models.TestResult.completed_at).label('max_completed_at')
+    ).filter(models.TestResult.test_id == test_id)\
+     .group_by(models.TestResult.user_id).subquery()
+
+    latest_results = db.query(models.TestResult).join(
+        subq,
+        (models.TestResult.user_id == subq.c.user_id) &
+        (models.TestResult.completed_at == subq.c.max_completed_at)
+    ).all()
+
+    # Собираем словарь {user_id: TestResult}
+    results_map = {r.user_id: r for r in latest_results}
+    
+    # 5. Формируем ответ
     result = []
     for assignment in assignments:
         student = db.query(models.User).filter(models.User.id == assignment.user_id).first()
         
-        # Получаем результаты теста для этого студента
-        test_results = []
-        best_score = None
-        attempts_count = 0
-        last_attempt_date = None
-        
-        if assignment.is_completed:
-            # Ищем все попытки прохождения теста этим студентом
-            attempts = db.query(models.TestResult).filter(
-                models.TestResult.test_id == test_id,
-                models.TestResult.user_id == assignment.user_id
-            ).order_by(models.TestResult.completed_at.desc()).all()
-            
-            attempts_count = len(attempts)
-            
-            if attempts:
-                # Последняя попытка
-                last_attempt = attempts[0]
-                last_attempt_date = last_attempt.completed_at
-                
-                # Лучший результат
-                scores = [a.total_points for a in attempts if a.total_points is not None]
-                if scores:
-                    best_score = max(scores)
-                
-                # Собираем информацию о всех попытках
-                test_results = [
-                    {
-                        "id": attempt.id,
-                        "score": attempt.total_points,
-                        "max_score": attempt.max_points,
-                        "percentage": round((attempt.total_points / attempt.max_points * 100), 2) if attempt.max_points else 0,
-                        "completed_at": attempt.completed_at,
-                        "time_spent": attempt.time_spent
-                    }
-                    for attempt in attempts
-                ]
+        latest_result = results_map.get(assignment.user_id)
+        is_completed = latest_result is not None
+        completed_at = latest_result.completed_at if latest_result else None
+        total_points = latest_result.total_points if latest_result else None
+        result_id = latest_result.id if latest_result else None
         
         result.append({
             "id": assignment.id,
@@ -633,20 +623,17 @@ def get_test_assignments(
             "student_username": student.username if student else None,
             "assigned_at": assignment.assigned_at,
             "due_date": assignment.due_date,
-            "is_completed": assignment.is_completed,
-            "completed_at": assignment.completed_at,
-            # Новые поля с информацией о прохождении
-            "attempts_count": attempts_count,
-            "best_score": best_score,
-            "last_attempt_date": last_attempt_date,
-            "attempts": test_results  # Детальная информация по каждой попытке
+            "is_completed": is_completed,          # реальный статус из TestResult
+            "completed_at": completed_at,          # дата завершения из TestResult
+            "total_tasks": len(test.tasks) if test.tasks else 0,
+            "total_points": total_points,          # набранные баллы
+            "result_id": result_id                 # ID результата для перехода
         })
     
     # Сортируем: сначала невыполненные, потом по имени
     result.sort(key=lambda x: (x['is_completed'], x['student_name']))
     
     return result
-
 
 @router.get("/student/{student_id}/assignments", response_model=List[dto.TestAssignmentResponse])
 def get_student_assignments(
