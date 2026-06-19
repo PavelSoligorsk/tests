@@ -566,18 +566,17 @@ def get_test_assignments(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
-    
-    
     """
-    Получить список студентов, которым назначен тест
+    Получить список студентов, которым назначен тест, 
+    с информацией о прохождении и результатах
     """
     test = db.query(models.Test).filter(models.Test.id == test_id).first()
     if not test:
         raise HTTPException(status_code=404, detail="Тест не найден")
     
-        # Проверяем, что тест принадлежит текущему учителю (или админу)
+    # Проверяем, что тест принадлежит текущему учителю (или админу)
     if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
-        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
+        raise HTTPException(status_code=403, detail="Вы не можете просматривать назначения этого теста")
     
     assignments = db.query(models.TestAssignment).filter(
         models.TestAssignment.test_id == test_id
@@ -586,17 +585,65 @@ def get_test_assignments(
     result = []
     for assignment in assignments:
         student = db.query(models.User).filter(models.User.id == assignment.user_id).first()
+        
+        # Получаем результаты теста для этого студента
+        test_results = []
+        best_score = None
+        attempts_count = 0
+        last_attempt_date = None
+        
+        if assignment.is_completed:
+            # Ищем все попытки прохождения теста этим студентом
+            attempts = db.query(models.TestResult).filter(
+                models.TestResult.test_id == test_id,
+                models.TestResult.user_id == assignment.user_id
+            ).order_by(models.TestResult.completed_at.desc()).all()
+            
+            attempts_count = len(attempts)
+            
+            if attempts:
+                # Последняя попытка
+                last_attempt = attempts[0]
+                last_attempt_date = last_attempt.completed_at
+                
+                # Лучший результат
+                scores = [a.total_points for a in attempts if a.total_points is not None]
+                if scores:
+                    best_score = max(scores)
+                
+                # Собираем информацию о всех попытках
+                test_results = [
+                    {
+                        "id": attempt.id,
+                        "score": attempt.total_points,
+                        "max_score": attempt.max_points,
+                        "percentage": round((attempt.total_points / attempt.max_points * 100), 2) if attempt.max_points else 0,
+                        "completed_at": attempt.completed_at,
+                        "time_spent": attempt.time_spent
+                    }
+                    for attempt in attempts
+                ]
+        
         result.append({
             "id": assignment.id,
             "test_id": assignment.test_id,
             "test_title": test.title,
             "user_id": assignment.user_id,
             "student_name": f"{student.first_name} {student.last_name}" if student else "Неизвестный",
+            "student_username": student.username if student else None,
             "assigned_at": assignment.assigned_at,
             "due_date": assignment.due_date,
             "is_completed": assignment.is_completed,
-            "completed_at": assignment.completed_at
+            "completed_at": assignment.completed_at,
+            # Новые поля с информацией о прохождении
+            "attempts_count": attempts_count,
+            "best_score": best_score,
+            "last_attempt_date": last_attempt_date,
+            "attempts": test_results  # Детальная информация по каждой попытке
         })
+    
+    # Сортируем: сначала невыполненные, потом по имени
+    result.sort(key=lambda x: (x['is_completed'], x['student_name']))
     
     return result
 
