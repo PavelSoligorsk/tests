@@ -567,15 +567,17 @@ def get_test_assignments(
     current_teacher: models.User = Depends(check_teacher)
 ):
     
-        # Проверяем, что тест принадлежит текущему учителю (или админу)
-    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
-        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
+    
     """
     Получить список студентов, которым назначен тест
     """
     test = db.query(models.Test).filter(models.Test.id == test_id).first()
     if not test:
         raise HTTPException(status_code=404, detail="Тест не найден")
+    
+        # Проверяем, что тест принадлежит текущему учителю (или админу)
+    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
+        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
     
     assignments = db.query(models.TestAssignment).filter(
         models.TestAssignment.test_id == test_id
@@ -605,30 +607,33 @@ def get_student_assignments(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
-    
-        # Проверяем, что тест принадлежит текущему учителю (или админу)
-    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
-        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
     """
-    Получить все назначенные тесты для конкретного студента
+    Получить все назначенные тесты для конкретного студента.
+    Учитель может видеть только своих учеников (или админ — всех).
     """
+    # Проверяем, что студент существует
     student = db.query(models.User).filter(
         models.User.id == student_id,
         models.User.role == "student"
     ).first()
-    
     if not student:
         raise HTTPException(status_code=404, detail="Студент не найден")
-    
+
+    # Если текущий пользователь — учитель (не админ), проверяем принадлежность студента
+    if current_teacher.role == "teacher":
+        _check_student_belongs_to_teacher(db, student_id, current_teacher.id)
+
+    # Получаем все назначения для этого студента
     assignments = db.query(models.TestAssignment).filter(
         models.TestAssignment.user_id == student_id
     ).order_by(models.TestAssignment.assigned_at.desc()).all()
-    
+
+    # Формируем ответ
     result = []
     for assignment in assignments:
         test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
         tasks_count = len(test.tasks) if test else 0
-        
+
         result.append({
             "id": assignment.id,
             "test_id": assignment.test_id,
@@ -641,9 +646,8 @@ def get_student_assignments(
             "completed_at": assignment.completed_at,
             "total_tasks": tasks_count
         })
-    
-    return result
 
+    return result
 
 @router.delete("/assignments/{assignment_id}")
 def delete_assignment(
@@ -651,63 +655,28 @@ def delete_assignment(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
-        # Проверяем, что тест принадлежит текущему учителю (или админу)
-    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
-        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
-    """Отменить назначение теста"""
+    """Отменить назначение теста. Учитель может удалять только назначения для своих тестов."""
+    # Находим назначение
     assignment = db.query(models.TestAssignment).filter(
         models.TestAssignment.id == assignment_id
     ).first()
-    
     if not assignment:
         raise HTTPException(status_code=404, detail="Назначение не найдено")
-    
+
+    # Получаем тест
+    test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
+    if not test:
+        # Если тест удалён, всё равно можно удалить назначение (или запретить)
+        # Здесь лучше запретить, чтобы не было мусора
+        raise HTTPException(status_code=404, detail="Связанный тест не найден")
+
+    # Проверяем, что текущий учитель — владелец теста (или админ)
+    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
+        raise HTTPException(status_code=403, detail="Вы не можете удалить это назначение (тест не ваш)")
+
+    # Удаляем назначение
     db.delete(assignment)
     db.commit()
-    
+
     return {"message": "Назначение удалено"}
 
-
-@router.get("/pending-tests")
-def get_pending_tests_summary(
-    db: Session = Depends(get_db),
-    current_teacher: models.User = Depends(check_teacher)
-):
-        # Проверяем, что тест принадлежит текущему учителю (или админу)
-    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
-        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
-
-    """
-    Получить сводку по назначенным тестам:
-    - сколько студентов выполнили
-    - кто ещё не выполнил
-    """
-    assignments = db.query(models.TestAssignment).filter(
-        models.TestAssignment.is_completed == False
-    ).all()
-    
-    # Группируем по тестам
-    tests_summary = {}
-    for assignment in assignments:
-        test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
-        student = db.query(models.User).filter(models.User.id == assignment.user_id).first()
-        
-        if assignment.test_id not in tests_summary:
-            tests_summary[assignment.test_id] = {
-                "test_id": assignment.test_id,
-                "test_title": test.title if test else "Тест удалён",
-                "total_assigned": 0,
-                "completed": 0,
-                "pending_students": []
-            }
-        
-        tests_summary[assignment.test_id]["total_assigned"] += 1
-        if assignment.is_completed:
-            tests_summary[assignment.test_id]["completed"] += 1
-        else:
-            tests_summary[assignment.test_id]["pending_students"].append({
-                "user_id": student.id if student else assignment.user_id,
-                "name": f"{student.first_name} {student.last_name}" if student else "Неизвестный"
-            })
-    
-    return list(tests_summary.values())
