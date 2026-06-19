@@ -123,12 +123,13 @@ def get_teacher_tests(
     current_teacher: models.User = Depends(check_teacher)
 ):
     """
-    Получить все тесты (в том числе созданные учителем).
+    Получить тесты. Если пользователь - учитель, возвращаются только его тесты.
+    Если администратор - все тесты.
     """
-    return db.query(models.Test)\
-             .options(joinedload(models.Test.tasks))\
-             .order_by(models.Test.id.desc())\
-             .all()
+    query = db.query(models.Test).options(joinedload(models.Test.tasks))
+    if current_teacher.role == "teacher":
+        query = query.filter(models.Test.creator_id == current_teacher.id)
+    return query.order_by(models.Test.id.desc()).all()
 
 
 @router.post("/tests", response_model=dto.TestResponse)
@@ -174,6 +175,14 @@ def create_test(
              .filter(models.Test.id == new_test.id)\
              .first()
 
+def _check_test_owner(test_id: int, teacher_id: int, db: Session):
+    """Проверяет, что тест существует и принадлежит текущему учителю"""
+    test = db.query(models.Test).filter(models.Test.id == test_id).first()
+    if not test:
+        raise HTTPException(status_code=404, detail="Тест не найден")
+    if test.creator_id != teacher_id:
+        raise HTTPException(status_code=403, detail="У вас нет доступа к этому тесту")
+    return test
 
 @router.put("/tests/{test_id}", response_model=dto.TestResponse)
 def update_test(
@@ -182,8 +191,8 @@ def update_test(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
-    """Редактировать существующий тест"""
-    test = db.query(models.Test).filter(models.Test.id == test_id).first()
+    test = _check_test_owner(test_id, current_teacher.id, db)
+
     if not test:
         raise HTTPException(status_code=404, detail="Тест не найден")
     
@@ -214,7 +223,7 @@ def delete_test(
     current_teacher: models.User = Depends(check_teacher)
 ):
     """Удалить тест"""
-    test = db.query(models.Test).filter(models.Test.id == test_id).first()
+    test = _check_test_owner(test_id, current_teacher.id, db)
     if not test:
         raise HTTPException(status_code=404, detail="Тест не найден")
     
@@ -237,15 +246,20 @@ def get_test_detail(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
-    """Получить тест с полной информацией о заданиях"""
+    """Получить тест с полной информацией о заданиях (только свои для учителя)"""
     test = db.query(models.Test)\
              .options(joinedload(models.Test.tasks))\
              .filter(models.Test.id == test_id)\
              .first()
+    
     if not test:
         raise HTTPException(status_code=404, detail="Тест не найден")
+    
+    # Если текущий пользователь – учитель (не админ), проверяем владельца
+    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
+        raise HTTPException(status_code=403, detail="У вас нет доступа к этому тесту")
+    
     return test
-
 
 # ==================== РЕЗУЛЬТАТЫ УЧЕНИКОВ ====================
 
@@ -461,8 +475,10 @@ def assign_test_to_students(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
-    _check_student_belongs_to_teacher(db, user_id, current_teacher.id)
-
+    
+        # Проверяем, что тест принадлежит текущему учителю (или админу)
+    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
+        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
 
     """
     Назначить тест одному или нескольким студентам.
@@ -548,6 +564,10 @@ def get_test_assignments(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
+    
+        # Проверяем, что тест принадлежит текущему учителю (или админу)
+    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
+        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
     """
     Получить список студентов, которым назначен тест
     """
@@ -583,6 +603,10 @@ def get_student_assignments(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
+    
+        # Проверяем, что тест принадлежит текущему учителю (или админу)
+    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
+        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
     """
     Получить все назначенные тесты для конкретного студента
     """
@@ -625,6 +649,9 @@ def delete_assignment(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
+        # Проверяем, что тест принадлежит текущему учителю (или админу)
+    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
+        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
     """Отменить назначение теста"""
     assignment = db.query(models.TestAssignment).filter(
         models.TestAssignment.id == assignment_id
@@ -644,6 +671,10 @@ def get_pending_tests_summary(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
+        # Проверяем, что тест принадлежит текущему учителю (или админу)
+    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
+        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
+
     """
     Получить сводку по назначенным тестам:
     - сколько студентов выполнили
