@@ -189,16 +189,16 @@ class TestAssignmentCreate(BaseModel):
 class TestAssignmentResponse(BaseModel):
     id: int
     test_id: int
-    test_title: Optional[str] = None
+    test_title: str
     user_id: int
-    student_name: Optional[str] = None
-    assigned_at: datetime
-    due_date: Optional[datetime] = None
-    is_completed: bool
-    completed_at: Optional[datetime] = None
-    
-    class Config:
-        from_attributes = True
+    student_name: str
+    assigned_at: datetime.datetime
+    due_date: Optional[datetime.datetime] = None
+    is_completed: bool = False
+    completed_at: Optional[datetime.datetime] = None
+    total_tasks: int = 0
+    total_points: Optional[int] = None      # <-- новое
+    result_id: Optional[int] = None         # <-- новое
 
 class StudentAssignmentResponse(BaseModel):
     """Для студента - список назначенных тестов"""

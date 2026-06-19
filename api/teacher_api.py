@@ -609,9 +609,10 @@ def get_student_assignments(
 ):
     """
     Получить все назначенные тесты для конкретного студента.
-    Учитель может видеть только своих учеников (или админ — всех).
+    Для каждого назначения вычисляется реальный статус выполнения
+    (наличие завершённого TestResult).
     """
-    # Проверяем, что студент существует
+    # 1. Проверяем, что студент существует
     student = db.query(models.User).filter(
         models.User.id == student_id,
         models.User.role == "student"
@@ -619,35 +620,63 @@ def get_student_assignments(
     if not student:
         raise HTTPException(status_code=404, detail="Студент не найден")
 
-    # Если текущий пользователь — учитель (не админ), проверяем принадлежность студента
+    # 2. Если учитель (не админ) – проверяем принадлежность
     if current_teacher.role == "teacher":
         _check_student_belongs_to_teacher(db, student_id, current_teacher.id)
 
-    # Получаем все назначения для этого студента
+    # 3. Получаем все назначения для этого студента
     assignments = db.query(models.TestAssignment).filter(
         models.TestAssignment.user_id == student_id
     ).order_by(models.TestAssignment.assigned_at.desc()).all()
 
-    # Формируем ответ
-    result = []
+    # 4. За один запрос получаем все завершённые результаты этого студента
+    #    (группируем по test_id и берём последний по дате)
+    from sqlalchemy import func
+    subq = db.query(
+        models.TestResult.test_id,
+        func.max(models.TestResult.completed_at).label('max_completed_at')
+    ).filter(models.TestResult.user_id == student_id)\
+     .group_by(models.TestResult.test_id).subquery()
+
+    latest_results = db.query(models.TestResult).join(
+        subq,
+        (models.TestResult.test_id == subq.c.test_id) &
+        (models.TestResult.completed_at == subq.c.max_completed_at)
+    ).all()
+
+    # Собираем словарь {test_id: TestResult}
+    results_map = {r.test_id: r for r in latest_results}
+
+    # 5. Формируем ответ
+    response = []
     for assignment in assignments:
         test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
-        tasks_count = len(test.tasks) if test else 0
+        if not test:
+            # Если тест удалён, можно либо пропустить, либо вернуть с пометкой
+            continue
 
-        result.append({
+        latest_result = results_map.get(assignment.test_id)
+        is_completed = latest_result is not None
+        completed_at = latest_result.completed_at if latest_result else None
+        total_points = latest_result.total_points if latest_result else None
+        result_id = latest_result.id if latest_result else None
+
+        response.append({
             "id": assignment.id,
             "test_id": assignment.test_id,
-            "test_title": test.title if test else "Тест удалён",
+            "test_title": test.title,
             "user_id": assignment.user_id,
             "student_name": f"{student.first_name} {student.last_name}",
             "assigned_at": assignment.assigned_at,
             "due_date": assignment.due_date,
-            "is_completed": assignment.is_completed,
-            "completed_at": assignment.completed_at,
-            "total_tasks": tasks_count
+            "is_completed": is_completed,          # теперь реальный статус
+            "completed_at": completed_at,          # дата завершения
+            "total_tasks": len(test.tasks) if test.tasks else 0,
+            "total_points": total_points,          # набранные баллы
+            "result_id": result_id                 # ID результата для перехода
         })
 
-    return result
+    return response
 
 @router.delete("/assignments/{assignment_id}")
 def delete_assignment(
