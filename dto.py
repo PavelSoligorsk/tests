@@ -192,10 +192,10 @@ class TestAssignmentResponse(BaseModel):
     test_title: str
     user_id: int
     student_name: str
-    assigned_at: datetime.datetime
-    due_date: Optional[datetime.datetime] = None
+    assigned_at: datetime
+    due_date: Optional[datetime] = None
     is_completed: bool = False
-    completed_at: Optional[datetime.datetime] = None
+    completed_at: Optional[datetime] = None
     total_tasks: int = 0
     total_points: Optional[int] = None      # <-- новое
     result_id: Optional[int] = None         # <-- новое
