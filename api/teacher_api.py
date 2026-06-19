@@ -476,9 +476,7 @@ def assign_test_to_students(
     current_teacher: models.User = Depends(check_teacher)
 ):
     
-        # Проверяем, что тест принадлежит текущему учителю (или админу)
-    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
-        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
+
 
     """
     Назначить тест одному или нескольким студентам.
@@ -494,6 +492,10 @@ def assign_test_to_students(
     test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
     if not test:
         raise HTTPException(status_code=404, detail="Тест не найден")
+    
+            # Проверяем, что тест принадлежит текущему учителю (или админу)
+    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
+        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
     
     # Проверяем, что все указанные пользователи - студенты
     students = db.query(models.User).filter(
