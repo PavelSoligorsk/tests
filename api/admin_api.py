@@ -323,7 +323,6 @@ from sqlalchemy import func
 from models import TestResult, Test
 
 from sqlalchemy import func, select, case
-
 @router.get("/users/{user_id}/profile", response_model=dto.UserResponseWithStats)
 def get_user_profile(
     user_id: int, 
@@ -335,7 +334,6 @@ def get_user_profile(
         raise HTTPException(status_code=404, detail="Пользователь не найден")
 
     # 1. Подзапрос для расчета макс. баллов каждого теста (через ассоциацию с задачами)
-    # Используем твою логику: 2 за открытый, 1 за выбор
     task_points_expr = case(
         (models.Task.is_open_answer == True, 2),
         else_=1
@@ -356,7 +354,6 @@ def get_user_profile(
     total_attempts = results_query.count()
     
     # 3. Расчет среднего процента успеха
-    # Соединяем результаты с нашим подзапросом макс. баллов
     avg_success_rate = db.query(
         func.avg(
             (models.TestResult.total_points * 100.0) / test_max_points_sub.c.max_total
@@ -369,12 +366,42 @@ def get_user_profile(
         test_max_points_sub.c.max_total > 0
     ).scalar() or 0
 
+    # 4. Получаем преподавателя, если пользователь - студент
+    teacher_info = None
+    if user.role == "student":
+        # Ищем связь студент-преподаватель
+        teacher_relation = db.query(models.TeacherStudent).filter(
+            models.TeacherStudent.student_id == user_id
+        ).first()
+        
+        if teacher_relation:
+            teacher = db.query(models.User).filter(
+                models.User.id == teacher_relation.teacher_id
+            ).first()
+            
+            if teacher:
+                teacher_info = {
+                    "id": teacher.id,
+                    "first_name": teacher.first_name,
+                    "last_name": teacher.last_name,
+                    "username": teacher.username,
+                    "tg_username": teacher.tg_username,
+                    "phone": teacher.phone,
+                    "assigned_at": teacher_relation.assigned_at  # дата назначения
+                }
+
+    # 5. Последние 5 активностей (результаты тестов)
+    last_activity = results_query.order_by(
+        models.TestResult.completed_at.desc()
+    ).limit(5).all()
+
     return {
         "user": user,
+        "teacher": teacher_info,  # ← данные о преподавателе
         "stats": {
             "total_attempts": total_attempts,
-            "avg_score": round(float(avg_success_rate), 1), # Теперь это средний %
-            "last_activity": results_query.order_by(models.TestResult.id.desc()).limit(5).all()
+            "avg_score": round(float(avg_success_rate), 1),
+            "last_activity": last_activity
         }
     }
 
