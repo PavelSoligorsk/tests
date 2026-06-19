@@ -254,10 +254,29 @@ def get_my_students(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
-    return db.query(models.User).filter(models.User.role == "student").all()
+    """Получить список учеников, привязанных к этому учителю"""
+    # Находим все связи teacher_students, где teacher_id = current_teacher.id
+    student_ids = db.query(models.TeacherStudent.student_id).filter(
+        models.TeacherStudent.teacher_id == current_teacher.id
+    ).subquery()
+    
+    students = db.query(models.User).filter(
+        models.User.role == "student",
+        models.User.id.in_(student_ids)
+    ).all()
+    
+    return students
 # api/student_api.py — исправь эндпоинт /history
 
 # api/teacher_api.py
+
+def _check_student_belongs_to_teacher(db: Session, student_id: int, teacher_id: int):
+    link = db.query(models.TeacherStudent).filter(
+        models.TeacherStudent.teacher_id == teacher_id,
+        models.TeacherStudent.student_id == student_id
+    ).first()
+    if not link:
+        raise HTTPException(status_code=403, detail="У вас нет доступа к этому ученику")
 
 @router.get("/students-profile/{user_id}")
 def get_student_profile(
@@ -265,6 +284,9 @@ def get_student_profile(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
+    
+    _check_student_belongs_to_teacher(db, user_id, current_teacher.id)
+
     """Профиль ученика"""
     user = db.query(models.User).filter(
         models.User.id == user_id,
@@ -301,6 +323,8 @@ def get_student_history(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
+    _check_student_belongs_to_teacher(db, user_id, current_teacher.id)
+
     """История тестов ученика"""
     user = db.query(models.User).filter(
         models.User.id == user_id,
@@ -334,6 +358,7 @@ def get_teacher_detailed_result(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
+
     """
     Детальный просмотр результата теста ученика.
     Учитель видит все ответы, правильные ответы и решения.
@@ -342,6 +367,9 @@ def get_teacher_detailed_result(
         joinedload(models.TestResult.test),
         joinedload(models.TestResult.user)
     ).filter(models.TestResult.id == result_id).first()
+
+    _check_student_belongs_to_teacher(db, result.user.id, current_teacher.id)
+
 
     if not result:
         raise HTTPException(status_code=404, detail="Результат не найден")
@@ -433,6 +461,9 @@ def assign_test_to_students(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
+    _check_student_belongs_to_teacher(db, user_id, current_teacher.id)
+
+
     """
     Назначить тест одному или нескольким студентам.
     
@@ -457,6 +488,17 @@ def assign_test_to_students(
     if len(students) != len(assignment.user_ids):
         raise HTTPException(status_code=400, detail="Некоторые пользователи не найдены или не являются студентами")
     
+        # После проверки студентов, добавьте фильтр по teacher_students
+    assigned_students = db.query(models.TeacherStudent).filter(
+        models.TeacherStudent.teacher_id == current_teacher.id,
+        models.TeacherStudent.student_id.in_(assignment.user_ids)
+    ).all()
+    if len(assigned_students) != len(assignment.user_ids):
+        # Найдём, каких студентов нет в списке
+        assigned_ids = {s.student_id for s in assigned_students}
+        missing = [uid for uid in assignment.user_ids if uid not in assigned_ids]
+        raise HTTPException(status_code=403, detail=f"Вы не можете назначать тесты студентам: {missing}")
+
     # Создаём назначения
     created_assignments = []
     for user_id in assignment.user_ids:

@@ -28,6 +28,10 @@ class User(Base):
     # 2. Оставляем связь для учителей
     created_tests = relationship("Test", back_populates="creator")
 
+    # Добавьте:
+    my_students = relationship("TeacherStudent", foreign_keys="TeacherStudent.teacher_id", back_populates="teacher")
+    my_teachers = relationship("TeacherStudent", foreign_keys="TeacherStudent.student_id", back_populates="student")
+
 class Task(Base):
     __tablename__ = "tasks"
 
@@ -145,3 +149,15 @@ class Theory(Base):
     __table_args__ = (
         UniqueConstraint('topic', 'section', name='unique_topic_section'),
     )
+
+class TeacherStudent(Base):
+    """Связь учитель-ученик (многие ко многим)"""
+    __tablename__ = "teacher_students"
+
+    teacher_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    student_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    # Отношения для удобства
+    teacher = relationship("User", foreign_keys=[teacher_id], back_populates="my_students")
+    student = relationship("User", foreign_keys=[student_id], back_populates="my_teachers")
