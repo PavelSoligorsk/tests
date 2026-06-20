@@ -45,13 +45,8 @@ def get_users(
             teacher = teachers.get(link.teacher_id)
             if teacher:
                 teacher_links[link.student_id] = {
-                    "id": teacher.id,
                     "first_name": teacher.first_name,
                     "last_name": teacher.last_name,
-                    "username": teacher.username,
-                    "tg_username": teacher.tg_username,
-                    "phone": teacher.phone,
-                    "assigned_at": link.assigned_at
                 }
     
     # Формируем ответ
@@ -366,10 +361,8 @@ def delete_task(
         )
         
     
-from sqlalchemy import func
-from models import TestResult, Test
-
 from sqlalchemy import func, select, case
+
 @router.get("/users/{user_id}/profile", response_model=dto.UserResponseWithStats)
 def get_user_profile(
     user_id: int, 
@@ -413,38 +406,13 @@ def get_user_profile(
         test_max_points_sub.c.max_total > 0
     ).scalar() or 0
 
-    # 4. Получаем преподавателя, если пользователь - студент
-    teacher_info = None
-    if user.role == "student":
-        # Ищем связь студент-преподаватель
-        teacher_relation = db.query(models.TeacherStudent).filter(
-            models.TeacherStudent.student_id == user_id
-        ).first()
-        
-        if teacher_relation:
-            teacher = db.query(models.User).filter(
-                models.User.id == teacher_relation.teacher_id
-            ).first()
-            
-            if teacher:
-                teacher_info = {
-                    "id": teacher.id,
-                    "first_name": teacher.first_name,
-                    "last_name": teacher.last_name,
-                    "username": teacher.username,
-                    "tg_username": teacher.tg_username,
-                    "phone": teacher.phone,
-                    "assigned_at": teacher_relation.assigned_at  # дата назначения
-                }
-
-    # 5. Последние 5 активностей (результаты тестов)
+    # 4. Последние 5 активностей (результаты тестов)
     last_activity = results_query.order_by(
         models.TestResult.completed_at.desc()
     ).limit(5).all()
 
     return {
         "user": user,
-        "teacher": teacher_info,  # ← данные о преподавателе
         "stats": {
             "total_attempts": total_attempts,
             "avg_score": round(float(avg_success_rate), 1),

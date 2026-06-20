@@ -123,6 +123,10 @@ class UserRegister(BaseModel):
     phone: Optional[str] = None
     tg_username: Optional[str] = None
 
+class TeacherInfo(BaseModel):
+    first_name: str
+    last_name: str
+
 class UserResponse(BaseModel):
     id: int
     username: str
@@ -131,6 +135,7 @@ class UserResponse(BaseModel):
     last_name: Optional[str]
     phone: Optional[str]
     tg_username: Optional[str]
+    teacher: Optional[TeacherInfo] = None  # ← Только имя и фамилия
 
     class Config:
         from_attributes = True
