@@ -222,23 +222,40 @@ def delete_test(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
-    """Удалить тест"""
-    test = _check_test_owner(test_id, current_teacher.id, db)
+    """Удалить тест со всеми связанными данными"""
+    test = db.query(models.Test).filter(models.Test.id == test_id).first()
     if not test:
         raise HTTPException(status_code=404, detail="Тест не найден")
     
-    # Удаляем связи с задачами
-    db.execute(
-        models.TestTaskAssociation.__table__.delete().where(
+    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
+        raise HTTPException(status_code=403, detail="Вы не можете удалить этот тест")
+    
+    try:
+        # 1. Удаляем результаты прохождения теста
+        db.query(models.TestResult).filter(
+            models.TestResult.test_id == test_id
+        ).delete()
+        
+        # 2. Удаляем все назначения
+        db.query(models.TestAssignment).filter(
+            models.TestAssignment.test_id == test_id
+        ).delete()
+        
+        # 3. Удаляем связи с задачами
+        db.query(models.TestTaskAssociation).filter(
             models.TestTaskAssociation.test_id == test_id
-        )
-    )
-    
-    db.delete(test)
-    db.commit()
-    
-    return {"message": "Тест удалён"}
-
+        ).delete()
+        
+        # 4. Удаляем сам тест
+        db.delete(test)
+        
+        db.commit()
+        
+        return {"message": f"Тест #{test_id} и все связанные данные удалены"}
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Ошибка при удалении: {str(e)}")
 
 @router.get("/tests/{test_id}", response_model=dto.TestResponse)
 def get_test_detail(
