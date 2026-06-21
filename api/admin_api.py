@@ -3,7 +3,7 @@ from sqlalchemy.orm import Session, joinedload
 import models, dto, auth
 from database import get_db
 from typing import List
-from models import Task, Test, TestTaskAssociation, User, UserAnswer, TestAssignment
+from models import Task, Test, TestTaskAssociation, User, UserAnswer, TestAssignment, TestResult
 import requests
 from dto import ImageUploadResponse
 from dto import AllowedEmailResponse
