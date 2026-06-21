@@ -153,24 +153,28 @@ def get_task(task_id: int, db: Session = Depends(get_db),
 @router.post("/rebuild-all-static-tests")
 def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User = Depends(auth.check_admin)):
     try:
-        # 1. Собираем актуальные категории из задач (учитываем topic и section)
+        # 1. Собираем актуальные категории из задач
         active_categories = db.query(
-    Task.task_class, 
-    Task.topic_number
-).distinct().all()               
+            Task.task_class, 
+            Task.topic_number
+        ).distinct().all()               
         updated_test_ids = []
 
         for t_class, t_num in active_categories:
+            # Преобразуем к строке для консистентности
+            t_class_str = str(t_class)
+            t_num_str = str(t_num)
+            
             test = db.query(Test).filter(
-                Test.target_class == str(t_class),
-                Test.target_topic == str(t_num)
+                Test.target_class == t_class_str,
+                Test.target_topic == t_num_str
             ).first()
 
             if not test:
                 test = Test(
-                    title=f"Тест: {t_class} класс, Тема {t_num}",
-                    target_class=str(t_class),
-                    target_topic=str(t_num),
+                    title=f"Тест: {t_class_str} класс, Тема {t_num_str}",
+                    target_class=t_class_str,
+                    target_topic=t_num_str,
                     is_autocompile=True,
                     creator_id=current_admin.id
                 )
@@ -187,106 +191,91 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User 
 
         db.flush()
 
-        # 2. ЖЕСТКАЯ ЗАЧИСТКА (Снизу вверх по иерархии FK)
-        bad_tests_query = db.query(Test.id).filter(
-            (Test.id.not_in(updated_test_ids)) | (~Test.tasks.any())
-        )
-        bad_test_ids = [t[0] for t in bad_tests_query.all()]
-
-        if bad_test_ids:
-            # 1. Удаляем UserAnswer (через TestResult)
-            bad_result_ids = [r[0] for r in db.query(TestResult.id).filter(TestResult.test_id.in_(bad_test_ids)).all()]
-
-            if bad_result_ids:
-                db.query(UserAnswer).filter(UserAnswer.result_id.in_(bad_result_ids)).delete(synchronize_session=False)
-                db.query(TestResult).filter(TestResult.id.in_(bad_result_ids)).delete(synchronize_session=False)
-
-            # 2. Удаляем связи test_task_association
-            db.execute(
-                TestTaskAssociation.__table__.delete().where(TestTaskAssociation.test_id.in_(bad_test_ids))
+        # 2. ЖЕСТКАЯ ЗАЧИСТКА (только один раз!)
+        if updated_test_ids:
+            # Находим тесты, которые нужно удалить
+            bad_tests_query = db.query(Test.id).filter(
+                Test.id.not_in(updated_test_ids)
             )
+            
+            # Добавляем тесты без задач (но только если они не в updated_test_ids)
+            empty_tests = db.query(Test.id).filter(
+                ~Test.tasks.any(),
+                Test.id.not_in(updated_test_ids)
+            ).all()
+            
+            bad_test_ids = [t[0] for t in bad_tests_query.all()]
+            bad_test_ids.extend([t[0] for t in empty_tests])
+            
+            # Удаляем дубликаты
+            bad_test_ids = list(set(bad_test_ids))
 
-            # 3. Удаляем назначения тестов (TestAssignment)
-            db.query(TestAssignment).filter(TestAssignment.test_id.in_(bad_test_ids)).delete(synchronize_session=False)
+            if bad_test_ids:
+                # 1. Удаляем UserAnswer (через TestResult)
+                bad_result_ids = [r[0] for r in db.query(TestResult.id).filter(TestResult.test_id.in_(bad_test_ids)).all()]
 
-            # 4. Теперь можно удалять tests
-            deleted_count = db.query(Test).filter(Test.id.in_(bad_test_ids)).delete(synchronize_session=False)
-        else:
-            deleted_count = 0
-        
-        bad_test_ids = [t[0] for t in bad_tests_query.all()]
+                if bad_result_ids:
+                    db.query(UserAnswer).filter(UserAnswer.result_id.in_(bad_result_ids)).delete(synchronize_session=False)
+                    db.query(TestResult).filter(TestResult.id.in_(bad_result_ids)).delete(synchronize_session=False)
 
-        if bad_test_ids:
-            bad_result_ids = [r[0] for r in db.query(TestResult.id).filter(TestResult.test_id.in_(bad_test_ids)).all()]
+                # 2. Удаляем связи test_task_association (используем правильный синтаксис)
+                db.query(TestTaskAssociation).filter(TestTaskAssociation.test_id.in_(bad_test_ids)).delete(synchronize_session=False)
 
-            if bad_result_ids:
-                db.query(UserAnswer).filter(UserAnswer.result_id.in_(bad_result_ids)).delete(synchronize_session=False)
-                db.query(TestResult).filter(TestResult.id.in_(bad_result_ids)).delete(synchronize_session=False)
+                # 3. Удаляем назначения тестов (TestAssignment)
+                db.query(TestAssignment).filter(TestAssignment.test_id.in_(bad_test_ids)).delete(synchronize_session=False)
 
-            db.execute(
-                TestTaskAssociation.__table__.delete().where(TestTaskAssociation.test_id.in_(bad_test_ids))
-            )
-
-            deleted_count = db.query(Test).filter(Test.id.in_(bad_test_ids)).delete(synchronize_session=False)
+                # 4. Теперь можно удалять tests
+                deleted_count = db.query(Test).filter(Test.id.in_(bad_test_ids)).delete(synchronize_session=False)
+            else:
+                deleted_count = 0
         else:
             deleted_count = 0
 
-        # 3. НОВАЯ ЛОГИКА: Перепроверка ответов пользователей для оставшихся (измененных) тестов
+        # 3. Перепроверка ответов пользователей
         rechecked_answers_count = 0
         rechecked_results_count = 0
         
         for test_id in updated_test_ids:
-            # Получаем все результаты по этому тесту
             results = db.query(TestResult).filter(TestResult.test_id == test_id).all()
             
             for result in results:
                 total_points = 0
                 answers_changed = False
                 
-                # Получаем все ответы пользователя для этого результата
                 user_answers = db.query(UserAnswer).filter(UserAnswer.result_id == result.id).all()
                 
                 for ua in user_answers:
-                    # Получаем актуальную задачу
                     task = db.query(Task).filter(Task.id == ua.task_id).first()
                     if not task:
                         continue
                     
-                    # Проверяем правильность ответа по новой логике
                     was_correct = ua.is_correct
                     is_correct_now = False
                     
                     if task.is_open_answer:
-                        # Для открытых ответов: сравниваем строки (без учета регистра и пробелов)
-                        is_correct_now = ua.user_text_answer.strip().lower() == task.answer.strip().lower()
+                        # Для открытых ответов
+                        if ua.user_text_answer and task.answer:
+                            is_correct_now = ua.user_text_answer.strip().lower() == task.answer.strip().lower()
                     else:
-                        # Для закрытых тестов: проверяем совпадение с правильным ответом
-                        if task.options and ua.user_text_answer in task.options:
-                            # Если ответ пользователя совпадает с правильным вариантом
-                            if task.answer in task.options and ua.user_text_answer == task.answer:
+                        # Для закрытых тестов
+                        if task.options and ua.user_text_answer:
+                            # Проверяем по индексу
+                            if task.answer.isdigit() and int(task.answer) < len(task.options):
+                                is_correct_now = task.options[int(task.answer)] == ua.user_text_answer
+                            # Проверяем по значению
+                            elif ua.user_text_answer == task.answer:
                                 is_correct_now = True
-                            # Альтернативная логика: правильный ответ может быть индексом
-                            elif task.answer.isdigit() and int(task.answer) < len(task.options):
-                                if task.options[int(task.answer)] == ua.user_text_answer:
-                                    is_correct_now = True
-                        # Прямое сравнение с ответом задачи
-                        elif ua.user_text_answer == task.answer:
-                            is_correct_now = True
+                            # Проверяем в списке опций
+                            elif ua.user_text_answer in task.options:
+                                is_correct_now = ua.user_text_answer == task.answer
                     
-                    # Обновляем флажок правильности, если он изменился
                     if was_correct != is_correct_now:
                         ua.is_correct = is_correct_now
                         answers_changed = True
                     
-                    # ОБНОВЛЕННАЯ ЛОГИКА БАЛЛОВ:
-                    # 2 балла за открытый правильный ответ
-                    # 1 балл за закрытый правильный ответ
-                    # 0 баллов за неправильный ответ
+                    # Обновленная логика баллов
                     if is_correct_now:
-                        if task.is_open_answer:
-                            new_points = 2  # Открытый вопрос - 2 балла
-                        else:
-                            new_points = 1  # Закрытый вопрос (тест) - 1 балл
+                        new_points = 2 if task.is_open_answer else 1
                     else:
                         new_points = 0
                     
@@ -297,14 +286,13 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User 
                     if is_correct_now:
                         total_points += new_points
                 
-                # Пересчитываем общий балл за тест
                 if answers_changed or result.total_points != total_points:
                     old_total = result.total_points
                     result.total_points = total_points
                     rechecked_results_count += 1
                     rechecked_answers_count += len(user_answers)
                     
-                    # Логируем изменение (опционально)
+                    # Логируем изменение
                     print(f"TestResult {result.id}: points changed from {old_total} to {total_points}")
 
         db.commit()
@@ -316,8 +304,13 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User 
 
     except Exception as e:
         db.rollback()
-        raise HTTPException(status_code=500, detail=f"Postgres Error: {str(e)}")
-  
+        # Добавляем детальную информацию об ошибке
+        import traceback
+        error_details = traceback.format_exc()
+        print(f"Error: {str(e)}")
+        print(f"Traceback: {error_details}")
+        raise HTTPException(status_code=500, detail=f"Database Error: {str(e)}")
+
     
 @router.delete("/tasks/{task_id}")
 def delete_task(
