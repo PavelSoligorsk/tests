@@ -1553,6 +1553,12 @@ $$
   angle=Angle(H,O,A)
   SetColor(angle,"#f59e0b")
   SetFilling(angle,0.2)
+
+ShowGrid(true)
+  ShowAxes(true) 
+
+  НЕ ПОКАЗЫВАЙ СЕТКУ ИЛИ ОСИБ ОБЯЗАТЕЛЬНО ПОДПИСЫВАЙ КАЖДУЮ ВЕРШИНУ И ТД
+
 `}} />
 
 
