@@ -480,28 +480,6 @@ $$
 a^m \cdot a^n = a^{m+n}
 $$
 
-Теперь примени это правило к выражению $a \cdot a^2$:
-
-$$
-a^1 \cdot a^2 = a^{1+2} = a^3
-$$
-
-Получили $a^3$, значит этот вариант подходит.
-
-Теперь проверь $a^4 : a$:
-
-$$
-a^4 : a = a^{4-1} = a^3
-$$
-
-Тоже подходит.
-
-А теперь $(a^2)^2$:
-
-$$
-(a^2)^2 = a^{2 \cdot 2} = a^4
-$$
-
 Здесь получилось $a^4$, а не $a^3$, значит этот вариант не подходит.
 
 Так же проверь остальные варианты, применяя свойства степеней и оформляя каждое преобразование в отдельную формулу с центрированием.
@@ -513,7 +491,7 @@ $$
     # 4. Отправка в Mistral
     try:
         response = mistral_client.chat.complete(
-            model="mistral-large-latest",
+            model="ministral-8b-2512",
             messages=[
                 {
                     "role": "system",
@@ -641,7 +619,7 @@ $$
     # 4. Отправка в Mistral для решения
     try:
         response = mistral_client.chat.complete(
-            model="mistral-large-latest",
+            model="ministral-8b-2512",
             messages=[
                 {
                     "role": "system",
@@ -1583,7 +1561,7 @@ $$
 
     try:
         response = mistral_client.chat.complete(
-            model="mistral-large-latest",
+            model="ministral-8b-2512",
             messages=[
                 {
                     "role": "system",
@@ -1719,7 +1697,7 @@ def generate_ai_test(
 
     try:
         topic_response = mistral_client.chat.complete(
-            model="mistral-large-latest",
+            model="ministral-8b-2512",
             messages=[
                 {"role": "system", "content": "Ты — строгий классификатор. Отвечаешь только валидным JSON без разметки markdown."},
                 {"role": "user", "content": topic_prompt}
@@ -1992,7 +1970,7 @@ def generate_ai_test(
     
     try:
         response = mistral_client.chat.complete(
-            model="mistral-large-latest",
+            model="ministral-8b-2512",
             messages=[
                 {"role": "system", "content": "Ты — эксперт. Отвечай ТОЛЬКО JSON: {\"task_ids\": [1,2,3]}"},
                 {"role": "user", "content": selection_prompt}
