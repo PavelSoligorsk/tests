@@ -218,7 +218,7 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User 
                     db.query(UserAnswer).filter(UserAnswer.result_id.in_(bad_result_ids)).delete(synchronize_session=False)
                     db.query(TestResult).filter(TestResult.id.in_(bad_result_ids)).delete(synchronize_session=False)
 
-                # 2. Удаляем связи test_task_association (используем правильный синтаксис)
+                # 2. Удаляем связи test_task_association
                 db.query(TestTaskAssociation).filter(TestTaskAssociation.test_id.in_(bad_test_ids)).delete(synchronize_session=False)
 
                 # 3. Удаляем назначения тестов (TestAssignment)
@@ -231,7 +231,7 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User 
         else:
             deleted_count = 0
 
-        # 3. Перепроверка ответов пользователей
+        # 3. ✅ ИСПРАВЛЕННАЯ перепроверка ответов пользователей
         rechecked_answers_count = 0
         rechecked_results_count = 0
         
@@ -252,28 +252,22 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User 
                     was_correct = ua.is_correct
                     is_correct_now = False
                     
+                    # ✅ ИСПРАВЛЕНО: Используем ту же логику, что и при отправке теста
                     if task.is_open_answer:
-                        # Для открытых ответов
+                        # Для открытых ответов - простое сравнение строк
                         if ua.user_text_answer and task.answer:
                             is_correct_now = ua.user_text_answer.strip().lower() == task.answer.strip().lower()
                     else:
-                        # Для закрытых тестов
-                        if task.options and ua.user_text_answer:
-                            # Проверяем по индексу
-                            if task.answer.isdigit() and int(task.answer) < len(task.options):
-                                is_correct_now = task.options[int(task.answer)] == ua.user_text_answer
-                            # Проверяем по значению
-                            elif ua.user_text_answer == task.answer:
-                                is_correct_now = True
-                            # Проверяем в списке опций
-                            elif ua.user_text_answer in task.options:
-                                is_correct_now = ua.user_text_answer == task.answer
+                        # Для закрытых тестов (с вариантами или без)
+                        if ua.user_text_answer:
+                            # Просто сравниваем строки, как в /submit
+                            is_correct_now = str(ua.user_text_answer).strip().lower() == str(task.answer).strip().lower()
                     
                     if was_correct != is_correct_now:
                         ua.is_correct = is_correct_now
                         answers_changed = True
                     
-                    # Обновленная логика баллов
+                    # Обновленная логика баллов (такая же как в /submit)
                     if is_correct_now:
                         new_points = 2 if task.is_open_answer else 1
                     else:
@@ -299,19 +293,17 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User 
         
         return {
             "status": "success", 
-            "message": f"Deleted {deleted_count} empty tests. Rechecked {rechecked_answers_count} answers in {rechecked_results_count} test results."
+            "message": f"Deleted {deleted_count} tests. Rechecked {rechecked_answers_count} answers in {rechecked_results_count} test results."
         }
 
     except Exception as e:
         db.rollback()
-        # Добавляем детальную информацию об ошибке
         import traceback
         error_details = traceback.format_exc()
         print(f"Error: {str(e)}")
         print(f"Traceback: {error_details}")
         raise HTTPException(status_code=500, detail=f"Database Error: {str(e)}")
 
-    
 @router.delete("/tasks/{task_id}")
 def delete_task(
     task_id: int, 
