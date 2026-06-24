@@ -800,7 +800,7 @@ def assign_test_to_group(
             user_id=student_id,
             group_id=assignment.group_id,
             due_date=assignment.due_date,
-            assigned_at=datetime.utcnow()
+            assigned_at=datetime.datetime.now(datetime.timezone.utc) 
         ))
         created += 1
     
