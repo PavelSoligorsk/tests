@@ -725,7 +725,7 @@ def get_student_assignments(
         max_points = 0
         if test.tasks:
             for task in test.tasks:
-                max_points += 2 if task.is_open_answer else 1
+                max_points += 2 if task.options is None else 1
         
         percentage = round((total_points / max_points) * 100, 1) if (total_points and max_points > 0) else None
 
