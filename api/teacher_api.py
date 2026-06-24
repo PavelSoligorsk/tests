@@ -597,13 +597,18 @@ def get_test_assignments(
     if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
         raise HTTPException(status_code=403, detail="Вы не можете просматривать назначения этого теста")
     
-    # 3. Получаем все назначения для этого теста
+    # 3. Считаем максимальные баллы для этого теста
+    max_points = 0
+    if test.tasks:
+        for task in test.tasks:
+            max_points += 2 if task.is_open_answer else 1
+    
+    # 4. Получаем все назначения для этого теста
     assignments = db.query(models.TestAssignment).filter(
         models.TestAssignment.test_id == test_id
     ).order_by(models.TestAssignment.assigned_at.desc()).all()
     
-    # 4. За один запрос получаем все завершённые результаты для этого теста
-    #    (группируем по user_id и берём последний по дате)
+    # 5. За один запрос получаем все завершённые результаты для этого теста
     from sqlalchemy import func
     subq = db.query(
         models.TestResult.user_id,
@@ -620,7 +625,7 @@ def get_test_assignments(
     # Собираем словарь {user_id: TestResult}
     results_map = {r.user_id: r for r in latest_results}
     
-    # 5. Формируем ответ
+    # 6. Формируем ответ
     result = []
     for assignment in assignments:
         student = db.query(models.User).filter(models.User.id == assignment.user_id).first()
@@ -631,6 +636,9 @@ def get_test_assignments(
         total_points = latest_result.total_points if latest_result else None
         result_id = latest_result.id if latest_result else None
         
+        # 🔥 Считаем процент
+        percentage = round((total_points / max_points) * 100, 1) if (total_points and max_points > 0) else None
+        
         result.append({
             "id": assignment.id,
             "test_id": assignment.test_id,
@@ -640,17 +648,20 @@ def get_test_assignments(
             "student_username": student.username if student else None,
             "assigned_at": assignment.assigned_at,
             "due_date": assignment.due_date,
-            "is_completed": is_completed,          # реальный статус из TestResult
-            "completed_at": completed_at,          # дата завершения из TestResult
+            "is_completed": is_completed,
+            "completed_at": completed_at,
             "total_tasks": len(test.tasks) if test.tasks else 0,
-            "total_points": total_points,          # набранные баллы
-            "result_id": result_id                 # ID результата для перехода
+            "total_points": total_points,
+            "max_points": max_points,    # 🔥
+            "percentage": percentage,     # 🔥
+            "result_id": result_id
         })
     
     # Сортируем: сначала невыполненные, потом по имени
     result.sort(key=lambda x: (x['is_completed'], x['student_name']))
     
     return result
+
 
 @router.get("/student/{student_id}/assignments", response_model=List[dto.TestAssignmentResponse])
 def get_student_assignments(
@@ -681,7 +692,6 @@ def get_student_assignments(
     ).order_by(models.TestAssignment.assigned_at.desc()).all()
 
     # 4. За один запрос получаем все завершённые результаты этого студента
-    #    (группируем по test_id и берём последний по дате)
     from sqlalchemy import func
     subq = db.query(
         models.TestResult.test_id,
@@ -703,7 +713,6 @@ def get_student_assignments(
     for assignment in assignments:
         test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
         if not test:
-            # Если тест удалён, можно либо пропустить, либо вернуть с пометкой
             continue
 
         latest_result = results_map.get(assignment.test_id)
@@ -711,6 +720,14 @@ def get_student_assignments(
         completed_at = latest_result.completed_at if latest_result else None
         total_points = latest_result.total_points if latest_result else None
         result_id = latest_result.id if latest_result else None
+        
+        # 🔥 Считаем максимальные баллы и процент для этого теста
+        max_points = 0
+        if test.tasks:
+            for task in test.tasks:
+                max_points += 2 if task.is_open_answer else 1
+        
+        percentage = round((total_points / max_points) * 100, 1) if (total_points and max_points > 0) else None
 
         response.append({
             "id": assignment.id,
@@ -720,11 +737,59 @@ def get_student_assignments(
             "student_name": f"{student.first_name} {student.last_name}",
             "assigned_at": assignment.assigned_at,
             "due_date": assignment.due_date,
-            "is_completed": is_completed,          # теперь реальный статус
-            "completed_at": completed_at,          # дата завершения
+            "is_completed": is_completed,
+            "completed_at": completed_at,
             "total_tasks": len(test.tasks) if test.tasks else 0,
-            "total_points": total_points,          # набранные баллы
-            "result_id": result_id                 # ID результата для перехода
+            "total_points": total_points,
+            "max_points": max_points,    # 🔥
+            "percentage": percentage,     # 🔥
+            "result_id": result_id
+        })
+
+    return response
+
+@router.get("/student/{student_id}/assignments", response_model=List[dto.TestAssignmentResponse])
+def get_student_assignments(
+    student_id: int,
+    db: Session = Depends(get_db),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    # ... существующий код ...
+    
+    for assignment in assignments:
+        test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
+        if not test:
+            continue
+
+        latest_result = results_map.get(assignment.test_id)
+        is_completed = latest_result is not None
+        completed_at = latest_result.completed_at if latest_result else None
+        total_points = latest_result.total_points if latest_result else None
+        result_id = latest_result.id if latest_result else None
+        
+        # 🔥 Считаем максимальные баллы и процент
+        max_points = 0
+        if test.tasks:
+            for task in test.tasks:
+                max_points += 2 if task.is_open_answer else 1
+        
+        percentage = round((total_points / max_points) * 100, 1) if (total_points and max_points > 0) else None
+
+        response.append({
+            "id": assignment.id,
+            "test_id": assignment.test_id,
+            "test_title": test.title,
+            "user_id": assignment.user_id,
+            "student_name": f"{student.first_name} {student.last_name}",
+            "assigned_at": assignment.assigned_at,
+            "due_date": assignment.due_date,
+            "is_completed": is_completed,
+            "completed_at": completed_at,
+            "total_tasks": len(test.tasks) if test.tasks else 0,
+            "total_points": total_points,
+            "max_points": max_points,  # 🔥 ДОБАВИТЬ
+            "percentage": percentage,   # 🔥 ДОБАВИТЬ
+            "result_id": result_id
         })
 
     return response
