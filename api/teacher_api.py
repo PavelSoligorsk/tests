@@ -231,22 +231,33 @@ def delete_test(
         raise HTTPException(status_code=403, detail="Вы не можете удалить этот тест")
     
     try:
-        # 1. Удаляем результаты прохождения теста
+        # 🔥 1. Сначала удаляем ответы пользователей (они ссылаются на TestResult)
+        result_ids = db.query(models.TestResult.id).filter(
+            models.TestResult.test_id == test_id
+        ).all()
+        result_ids = [r[0] for r in result_ids]
+        
+        if result_ids:
+            db.query(models.UserAnswer).filter(
+                models.UserAnswer.result_id.in_(result_ids)
+            ).delete(synchronize_session=False)
+        
+        # 2. Удаляем результаты прохождения теста
         db.query(models.TestResult).filter(
             models.TestResult.test_id == test_id
         ).delete()
         
-        # 2. Удаляем все назначения
+        # 3. Удаляем все назначения
         db.query(models.TestAssignment).filter(
             models.TestAssignment.test_id == test_id
         ).delete()
         
-        # 3. Удаляем связи с задачами
+        # 4. Удаляем связи с задачами
         db.query(models.TestTaskAssociation).filter(
             models.TestTaskAssociation.test_id == test_id
         ).delete()
         
-        # 4. Удаляем сам тест
+        # 5. Удаляем сам тест
         db.delete(test)
         
         db.commit()
