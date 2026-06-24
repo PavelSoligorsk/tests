@@ -185,64 +185,63 @@ def _get_period_stats(user_id: int, period: str, db: Session, current_user: mode
     results = results_query.order_by(models.TestResult.completed_at.desc()).all()
     
     if not results:
-        return {
-            "period": period,
-            "user_id": user_id,
-            "user_name": f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
-            "start_date": start_date.isoformat() if start_date else None,
-            "end_date": end_date.isoformat(),
-            "total_tests": 0,
-            "total_tasks": 0,
-            "correct_tasks": 0,
-            "avg_score": 0.0,
-            "best_score": 0.0,
-            "worst_score": 0.0,
-            "streak_days": 0,
-            "daily_stats": []
-        }
+        return {...}  # пустой ответ
     
     result_ids = [r.id for r in results]
+    test_ids = list(set(r.test_id for r in results))
     
-    # 🔥 НОВОЕ: Считаем ВСЕ задачи во всех пройденных тестах
-    # Для каждого результата получаем количество задач в тесте
-    total_tasks = 0
-    for r in results:
-        test_tasks_count = db.query(models.TestTaskAssociation).filter(
-            models.TestTaskAssociation.test_id == r.test_id
-        ).count()
-        total_tasks += test_tasks_count
+    # 🔥 ОДИН запрос: количество УНИКАЛЬНЫХ задач во всех тестах
+    unique_tasks_count = db.query(
+        func.count(func.distinct(models.TestTaskAssociation.task_id))
+    ).filter(
+        models.TestTaskAssociation.test_id.in_(test_ids)
+    ).scalar() or 0
     
     # Все ответы за период
     user_answers = db.query(models.UserAnswer).filter(
         models.UserAnswer.result_id.in_(result_ids)
     ).all()
     
-    # Правильными считаем только непустые и верные ответы
+    # 🔥 Группируем ответы по task_id — берём лучший результат для каждого задания
+    best_answers = {}
+    for a in user_answers:
+        task_id = a.task_id
+        if task_id not in best_answers:
+            best_answers[task_id] = a
+        else:
+            # Берём ответ с максимальными баллами
+            if (a.points_earned or 0) > (best_answers[task_id].points_earned or 0):
+                best_answers[task_id] = a
+            # При равных баллах — берём более поздний
+            elif (a.points_earned or 0) == (best_answers[task_id].points_earned or 0):
+                if a.result.completed_at and best_answers[task_id].result.completed_at:
+                    if a.result.completed_at > best_answers[task_id].result.completed_at:
+                        best_answers[task_id] = a
+    
+    # Правильными считаем только непустые и верные ответы (из лучших)
     correct_tasks = sum(
-        1 for a in user_answers 
+        1 for a in best_answers.values()
         if a.is_correct and a.user_text_answer and str(a.user_text_answer).strip() not in ['', '[]', 'None', 'null']
     )
     
     # Подсчёт максимальных баллов для тестов
     task_points_expr = case((models.Task.is_open_answer == True, 2), else_=1)
-    test_max_points_sub = (
-        select(
+    test_max_points = dict(
+        db.query(
             models.TestTaskAssociation.test_id,
             func.sum(task_points_expr).label("max_total")
         )
         .join(models.Task, models.TestTaskAssociation.task_id == models.Task.id)
+        .filter(models.TestTaskAssociation.test_id.in_(test_ids))
         .group_by(models.TestTaskAssociation.test_id)
-        .subquery()
+        .all()
     )
     
     # Проценты по тестам
     percentages = []
     for r in results:
-        max_points = db.query(test_max_points_sub.c.max_total).filter(
-            test_max_points_sub.c.test_id == r.test_id
-        ).scalar()
-        
-        if max_points and max_points > 0:
+        max_points = test_max_points.get(r.test_id, 0)
+        if max_points > 0:
             percentage = (r.total_points or 0) * 100.0 / max_points
             percentages.append(percentage)
     
@@ -260,31 +259,31 @@ def _get_period_stats(user_id: int, period: str, db: Session, current_user: mode
                 "tests_count": 0,
                 "total_tasks": 0,
                 "correct_tasks": 0,
-                "scores": []
+                "scores": [],
+                "seen_tasks": set()  # 🔥 Отслеживаем уникальные задания в дне
             }
         
         daily_map[day_key]["tests_count"] += 1
         
-        # 🔥 НОВОЕ: Считаем все задачи теста для этого дня
-        test_tasks_count = db.query(models.TestTaskAssociation).filter(
+        # 🔥 Считаем уникальные задания теста для этого дня
+        test_tasks = db.query(models.TestTaskAssociation.task_id).filter(
             models.TestTaskAssociation.test_id == r.test_id
-        ).count()
-        daily_map[day_key]["total_tasks"] += test_tasks_count
+        ).all()
         
-        max_points = db.query(test_max_points_sub.c.max_total).filter(
-            test_max_points_sub.c.test_id == r.test_id
-        ).scalar()
+        for (task_id,) in test_tasks:
+            if task_id not in daily_map[day_key]["seen_tasks"]:
+                daily_map[day_key]["seen_tasks"].add(task_id)
+                daily_map[day_key]["total_tasks"] += 1
+                
+                # Проверяем, решено ли задание правильно (из лучших)
+                best = best_answers.get(task_id)
+                if best and best.is_correct and best.user_text_answer and str(best.user_text_answer).strip() not in ['', '[]', 'None', 'null']:
+                    daily_map[day_key]["correct_tasks"] += 1
         
-        if max_points and max_points > 0:
+        max_points = test_max_points.get(r.test_id, 0)
+        if max_points > 0:
             percentage = (r.total_points or 0) * 100.0 / max_points
             daily_map[day_key]["scores"].append(percentage)
-        
-        # Считаем правильные ответы за этот день (только непустые)
-        day_answers = [a for a in user_answers if a.result_id == r.id]
-        daily_map[day_key]["correct_tasks"] += sum(
-            1 for a in day_answers 
-            if a.is_correct and a.user_text_answer and str(a.user_text_answer).strip() not in ['', '[]', 'None', 'null']
-        )
     
     daily_stats = []
     for day_key in sorted(daily_map.keys()):
@@ -293,6 +292,7 @@ def _get_period_stats(user_id: int, period: str, db: Session, current_user: mode
             sum(day_data["scores"]) / len(day_data["scores"]), 1
         ) if day_data["scores"] else 0.0
         del day_data["scores"]
+        del day_data["seen_tasks"]
         daily_stats.append(day_data)
     
     streak = _calculate_streak([d["date"] for d in daily_stats], end_date)
@@ -304,8 +304,8 @@ def _get_period_stats(user_id: int, period: str, db: Session, current_user: mode
         "start_date": start_date.isoformat() if start_date else None,
         "end_date": end_date.isoformat(),
         "total_tests": len(results),
-        "total_tasks": total_tasks,  # 🔥 Все задачи во всех тестах
-        "correct_tasks": correct_tasks,  # Только непустые правильные
+        "total_tasks": unique_tasks_count,  # 🔥 Уникальные задания
+        "correct_tasks": correct_tasks,      # Лучшие правильные ответы
         "avg_score": avg_score,
         "best_score": best_score,
         "worst_score": worst_score,
@@ -318,8 +318,7 @@ def _get_topics_stats(user_id: int, period: str, db: Session, current_user: mode
     user = _check_access(user_id, db, current_user)
     start_date, end_date = _get_period_dates(period)
     
-    # 🔥 НОВОЕ: Получаем все задачи из пройденных тестов (total_tasks = все задачи тестов)
-    # Шаг 1: Получаем результаты
+    # Получаем результаты
     results_query = db.query(models.TestResult).filter(models.TestResult.user_id == user_id)
     if start_date:
         results_query = results_query.filter(models.TestResult.completed_at >= start_date)
@@ -328,11 +327,11 @@ def _get_topics_stats(user_id: int, period: str, db: Session, current_user: mode
     result_ids = [r.id for r in results]
     test_ids = list(set(r.test_id for r in results))
     
-    # Шаг 2: Считаем все задачи в тестах по темам/разделам (total)
+    # 🔥 Шаг 1: Все УНИКАЛЬНЫЕ задачи в тестах по темам/разделам
     total_tasks_query = db.query(
         models.Task.topic,
         models.Task.section,
-        func.count(models.Task.id).label("total_in_tests")
+        func.count(func.distinct(models.Task.id)).label("total_unique")
     ).join(
         models.TestTaskAssociation, models.Task.id == models.TestTaskAssociation.task_id
     ).filter(
@@ -342,37 +341,35 @@ def _get_topics_stats(user_id: int, period: str, db: Session, current_user: mode
         models.Task.section
     ).all()
     
-    # Словарь: (topic, section) → общее количество задач в тестах
     total_tasks_map = {}
     for topic, section, total in total_tasks_query:
         key = (topic, section or "Общее")
         total_tasks_map[key] = total
     
-    # Шаг 3: Считаем правильные ответы (correct)
-    correct_query = db.query(
-        models.Task.topic,
-        models.Task.section,
-        func.count(models.UserAnswer.id).label("correct_count")
-    ).join(
-        models.Task, models.UserAnswer.task_id == models.Task.id
-    ).filter(
-        models.UserAnswer.result_id.in_(result_ids),
-        models.UserAnswer.is_correct == True,
-        models.UserAnswer.user_text_answer != None,
-        models.UserAnswer.user_text_answer != '',
-        models.UserAnswer.user_text_answer != '[]'
-    ).group_by(
-        models.Task.topic,
-        models.Task.section
+    # 🔥 Шаг 2: Получаем лучшие ответы по каждому заданию
+    user_answers = db.query(models.UserAnswer).filter(
+        models.UserAnswer.result_id.in_(result_ids)
     ).all()
     
-    # Словарь: (topic, section) → правильные ответы
-    correct_map = {}
-    for topic, section, correct in correct_query:
-        key = (topic, section or "Общее")
-        correct_map[key] = correct
+    # Группируем по task_id — берём лучший результат
+    best_answers = {}
+    for a in user_answers:
+        task_id = a.task_id
+        if task_id not in best_answers:
+            best_answers[task_id] = a
+        elif (a.points_earned or 0) > (best_answers[task_id].points_earned or 0):
+            best_answers[task_id] = a
     
-    # Шаг 4: Группируем по темам
+    # 🔥 Шаг 3: Считаем правильные ответы по темам (только лучшие, уникальные)
+    correct_map = {}
+    for task_id, answer in best_answers.items():
+        if answer.is_correct and answer.user_text_answer and str(answer.user_text_answer).strip() not in ['', '[]', 'None', 'null']:
+            task = db.query(models.Task).filter(models.Task.id == task_id).first()
+            if task and task.topic:
+                key = (task.topic, task.section or "Общее")
+                correct_map[key] = correct_map.get(key, 0) + 1
+    
+    # Группируем по темам
     topics_map = {}
     
     for (topic, section), total in total_tasks_map.items():
@@ -387,18 +384,18 @@ def _get_topics_stats(user_id: int, period: str, db: Session, current_user: mode
                 "topic": topic,
                 "total_tasks": 0,
                 "correct_tasks": 0,
-                "sections": []
+                "sections": {}
             }
         
         topics_map[topic]["total_tasks"] += total
         topics_map[topic]["correct_tasks"] += correct
         
-        topics_map[topic]["sections"].append({
+        topics_map[topic]["sections"][section] = {
             "section": section,
             "total_tasks": total,
             "correct_tasks": correct,
             "mastery_percent": mastery
-        })
+        }
     
     # Формируем результат
     topics = []
@@ -412,14 +409,15 @@ def _get_topics_stats(user_id: int, period: str, db: Session, current_user: mode
         correct = topic_data["correct_tasks"]
         topic_mastery = round((correct / total) * 100, 1) if total > 0 else 0.0
         
-        topic_data["sections"].sort(key=lambda x: x["mastery_percent"])
+        sections_list = list(topic_data["sections"].values())
+        sections_list.sort(key=lambda x: x["mastery_percent"])
         
         topic_item = {
             "topic": topic_data["topic"],
             "total_tasks": total,
             "correct_tasks": correct,
             "mastery_percent": topic_mastery,
-            "sections": topic_data["sections"]
+            "sections": sections_list
         }
         topics.append(topic_item)
         
@@ -457,7 +455,6 @@ def _get_difficulty_stats(user_id: int, period: str, db: Session, current_user: 
     user = _check_access(user_id, db, current_user)
     start_date, end_date = _get_period_dates(period)
     
-    # Получаем результаты
     results_query = db.query(models.TestResult).filter(models.TestResult.user_id == user_id)
     if start_date:
         results_query = results_query.filter(models.TestResult.completed_at >= start_date)
@@ -466,10 +463,10 @@ def _get_difficulty_stats(user_id: int, period: str, db: Session, current_user: 
     result_ids = [r.id for r in results]
     test_ids = list(set(r.test_id for r in results))
     
-    # 🔥 Шаг 1: Все задачи в тестах по сложности
+    # 🔥 Шаг 1: Все УНИКАЛЬНЫЕ задачи в тестах по сложности
     total_tasks_query = db.query(
         models.Task.difficulty,
-        func.count(models.Task.id).label("total_in_tests")
+        func.count(func.distinct(models.Task.id)).label("total_unique")
     ).join(
         models.TestTaskAssociation, models.Task.id == models.TestTaskAssociation.task_id
     ).filter(
@@ -480,25 +477,27 @@ def _get_difficulty_stats(user_id: int, period: str, db: Session, current_user: 
     
     total_map = {diff: total for diff, total in total_tasks_query if diff}
     
-    # 🔥 Шаг 2: Правильные ответы по сложности
-    correct_query = db.query(
-        models.Task.difficulty,
-        func.count(models.UserAnswer.id).label("correct_count")
-    ).join(
-        models.Task, models.UserAnswer.task_id == models.Task.id
-    ).filter(
-        models.UserAnswer.result_id.in_(result_ids),
-        models.UserAnswer.is_correct == True,
-        models.UserAnswer.user_text_answer != None,
-        models.UserAnswer.user_text_answer != '',
-        models.UserAnswer.user_text_answer != '[]'
-    ).group_by(
-        models.Task.difficulty
+    # 🔥 Шаг 2: Получаем лучшие ответы
+    user_answers = db.query(models.UserAnswer).filter(
+        models.UserAnswer.result_id.in_(result_ids)
     ).all()
     
-    correct_map = {diff: correct for diff, correct in correct_query if diff}
+    best_answers = {}
+    for a in user_answers:
+        task_id = a.task_id
+        if task_id not in best_answers:
+            best_answers[task_id] = a
+        elif (a.points_earned or 0) > (best_answers[task_id].points_earned or 0):
+            best_answers[task_id] = a
     
-    # Формируем результат
+    # 🔥 Шаг 3: Считаем правильные по сложности (только уникальные)
+    correct_map = {}
+    for task_id, answer in best_answers.items():
+        if answer.is_correct and answer.user_text_answer and str(answer.user_text_answer).strip() not in ['', '[]', 'None', 'null']:
+            task = db.query(models.Task).filter(models.Task.id == task_id).first()
+            if task and task.difficulty:
+                correct_map[task.difficulty] = correct_map.get(task.difficulty, 0) + 1
+    
     difficulties = []
     for diff in sorted(set(list(total_map.keys()) + list(correct_map.keys()))):
         total = total_map.get(diff, 0)
@@ -507,8 +506,8 @@ def _get_difficulty_stats(user_id: int, period: str, db: Session, current_user: 
         
         difficulties.append({
             "difficulty": diff,
-            "total_tasks": total,  # 🔥 Все задачи этой сложности в тестах
-            "correct_tasks": correct,  # Только непустые правильные
+            "total_tasks": total,       # Уникальные задания
+            "correct_tasks": correct,   # Лучшие правильные
             "mastery_percent": mastery
         })
     
