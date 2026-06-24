@@ -32,6 +32,39 @@ class User(Base):
     my_students = relationship("TeacherStudent", foreign_keys="TeacherStudent.teacher_id", back_populates="teacher")
     my_teachers = relationship("TeacherStudent", foreign_keys="TeacherStudent.student_id", back_populates="student")
 
+    # 🔥 НОВЫЕ СВЯЗИ
+    groups = relationship("Group", secondary="group_students", back_populates="students")  # Для студентов
+    owned_groups = relationship("Group", back_populates="teacher", foreign_keys="Group.teacher_id")  # Для учителей
+    
+    # Назначения тестов (существующее)
+    test_assignments = relationship("TestAssignment", back_populates="user")
+
+class Group(Base):
+    """Группа студентов у учителя"""
+    __tablename__ = "groups"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)  # Название группы
+    description = Column(Text, nullable=True)    # Описание
+    teacher_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    
+    # Связи
+    teacher = relationship("User", back_populates="groups")
+    students = relationship("User", secondary="group_students", back_populates="groups")
+    
+    # Назначения тестов для группы
+    assignments = relationship("TestAssignment", back_populates="group")
+
+
+class GroupStudent(Base):
+    """Связь группы и студента (многие ко многим)"""
+    __tablename__ = "group_students"
+    
+    group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True)
+    student_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    added_at = Column(DateTime, default=datetime.datetime.utcnow)
+
 class Task(Base):
     __tablename__ = "tasks"
 
@@ -132,6 +165,8 @@ class TestAssignment(Base):
     
     test = relationship("Test")
     user = relationship("User", backref="test_assignments")
+
+    group = relationship("Group", back_populates="assignments")  # 🔥 НОВОЕ
     
     __table_args__ = (
         UniqueConstraint('test_id', 'user_id', name='unique_test_user_assignment'),

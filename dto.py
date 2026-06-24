@@ -239,3 +239,8 @@ class AITestRequest(BaseModel):
     prompt: str
     task_count: int = 10
     difficulty: Optional[str] = None  # ← теперь может быть None
+
+class TestGroupAssignment(BaseModel):
+    test_id: int
+    group_id: int
+    due_date: Optional[datetime] = None

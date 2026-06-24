@@ -760,3 +760,53 @@ def delete_assignment(
 
     return {"message": "Назначение удалено"}
 
+@router.post("/assign-test-to-group")
+def assign_test_to_group(
+    assignment: dto.TestGroupAssignment,
+    db: Session = Depends(get_db),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Назначить тест всей группе"""
+    test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
+    if not test:
+        raise HTTPException(status_code=404, detail="Тест не найден")
+    
+    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
+        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
+    
+    group = db.query(models.Group).filter(
+        models.Group.id == assignment.group_id,
+        models.Group.teacher_id == current_teacher.id
+    ).first()
+    
+    if not group:
+        raise HTTPException(status_code=404, detail="Группа не найдена")
+    
+    # Получаем всех студентов группы
+    student_ids = [s.id for s in group.students]
+    
+    created = 0
+    for student_id in student_ids:
+        existing = db.query(models.TestAssignment).filter(
+            models.TestAssignment.test_id == assignment.test_id,
+            models.TestAssignment.user_id == student_id
+        ).first()
+        
+        if existing:
+            continue
+        
+        db.add(models.TestAssignment(
+            test_id=assignment.test_id,
+            user_id=student_id,
+            group_id=assignment.group_id,
+            due_date=assignment.due_date,
+            assigned_at=datetime.utcnow()
+        ))
+        created += 1
+    
+    db.commit()
+    
+    return {
+        "message": f"Тест назначен {created} студентам группы '{group.name}'",
+        "assigned_count": created
+    }
