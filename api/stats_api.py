@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import func, case, select
+from sqlalchemy import func, case, select, and_
 import models, dto, auth
 from database import get_db
 from typing import List, Optional
@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 router = APIRouter(prefix="/stats", tags=["Statistics"])
 
-# ==================== ПРОВЕРКИ ДОСТУПА ====================
+# ==================== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ====================
 
 def _get_period_dates(period: str) -> tuple:
     """Возвращает (start_date, end_date) для указанного периода."""
@@ -35,26 +35,21 @@ def _check_access(user_id: int, db: Session, current_user: models.User):
     - Учитель: только свои ученики
     - Админ: любой пользователь
     """
-    # Студент может смотреть только себя
     if current_user.role == "student" and current_user.id != user_id:
         raise HTTPException(status_code=403, detail="Вы можете смотреть только свою статистику")
     
-    # Учитель может смотреть только своих учеников
     if current_user.role == "teacher":
         if current_user.id == user_id:
-            return  # Учитель может смотреть свою статистику
-        
-        # Проверяем связь учитель-ученик
-        link = db.query(models.TeacherStudent).filter(
-            models.TeacherStudent.teacher_id == current_user.id,
-            models.TeacherStudent.student_id == user_id
-        ).first()
-        
-        if not link:
-            raise HTTPException(status_code=403, detail="У вас нет доступа к этому ученику")
+            pass
+        else:
+            link = db.query(models.TeacherStudent).filter(
+                models.TeacherStudent.teacher_id == current_user.id,
+                models.TeacherStudent.student_id == user_id
+            ).first()
+            
+            if not link:
+                raise HTTPException(status_code=403, detail="У вас нет доступа к этому ученику")
     
-    # Админ может смотреть любого
-    # Проверяем что пользователь существует
     user = db.query(models.User).filter(models.User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
@@ -105,7 +100,7 @@ def get_my_topic_stats(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    """Моя статистика по темам."""
+    """Моя статистика по темам с разделами."""
     return _get_topics_stats(current_user.id, period, db, current_user)
 
 
@@ -149,7 +144,7 @@ def get_user_topic_stats(
     db: Session = Depends(get_db),
     current_user: models.User = Depends(auth.get_current_user)
 ):
-    """Статистика пользователя по темам (для учителя/админа)."""
+    """Статистика пользователя по темам с разделами (для учителя/админа)."""
     return _get_topics_stats(user_id, period, db, current_user)
 
 
@@ -213,8 +208,14 @@ def _get_period_stats(user_id: int, period: str, db: Session, current_user: mode
         models.UserAnswer.result_id.in_(result_ids)
     ).all()
     
+    # Считаем ВСЕ задачи (включая пустые ответы)
     total_tasks = len(user_answers)
-    correct_tasks = sum(1 for a in user_answers if a.is_correct)
+    
+    # Правильными считаем только непустые и верные ответы
+    correct_tasks = sum(
+        1 for a in user_answers 
+        if a.is_correct and a.user_text_answer and str(a.user_text_answer).strip() not in ['', '[]', 'None', 'null']
+    )
     
     # Подсчёт максимальных баллов для тестов
     task_points_expr = case((models.Task.is_open_answer == True, 2), else_=1)
@@ -266,9 +267,13 @@ def _get_period_stats(user_id: int, period: str, db: Session, current_user: mode
             percentage = (r.total_points or 0) * 100.0 / max_points
             daily_map[day_key]["scores"].append(percentage)
         
+        # Считаем задания за этот день с учётом пустых ответов
         day_answers = [a for a in user_answers if a.result_id == r.id]
         daily_map[day_key]["total_tasks"] += len(day_answers)
-        daily_map[day_key]["correct_tasks"] += sum(1 for a in day_answers if a.is_correct)
+        daily_map[day_key]["correct_tasks"] += sum(
+            1 for a in day_answers 
+            if a.is_correct and a.user_text_answer and str(a.user_text_answer).strip() not in ['', '[]', 'None', 'null']
+        )
     
     daily_stats = []
     for day_key in sorted(daily_map.keys()):
@@ -299,14 +304,27 @@ def _get_period_stats(user_id: int, period: str, db: Session, current_user: mode
 
 
 def _get_topics_stats(user_id: int, period: str, db: Session, current_user: models.User) -> dict:
-    """Логика получения статистики по темам."""
+    """Логика получения статистики по темам с их разделами."""
     user = _check_access(user_id, db, current_user)
     start_date, end_date = _get_period_dates(period)
     
+    # Запрос: группируем по topic + section
     answers_query = db.query(
         models.Task.topic,
+        models.Task.section,
         func.count(models.UserAnswer.id).label("total"),
-        func.sum(case((models.UserAnswer.is_correct == True, 1), else_=0)).label("correct")
+        func.sum(
+            case(
+                (
+                    (models.UserAnswer.is_correct == True) & 
+                    (models.UserAnswer.user_text_answer != None) & 
+                    (models.UserAnswer.user_text_answer != '') & 
+                    (models.UserAnswer.user_text_answer != '[]'),
+                    1
+                ), 
+                else_=0
+            )
+        ).label("correct")
     ).join(
         models.Task, models.UserAnswer.task_id == models.Task.id
     ).join(
@@ -318,37 +336,89 @@ def _get_topics_stats(user_id: int, period: str, db: Session, current_user: mode
     if start_date:
         answers_query = answers_query.filter(models.TestResult.completed_at >= start_date)
     
-    answers_query = answers_query.group_by(models.Task.topic).all()
+    answers_query = answers_query.group_by(
+        models.Task.topic, 
+        models.Task.section
+    ).order_by(
+        models.Task.topic,
+        models.Task.section
+    ).all()
     
+    # Группируем: тема → {общая статистика + разделы}
+    topics_map = {}
+    
+    for topic, section, total, correct in answers_query:
+        if not topic:
+            continue
+        
+        section_name = section or "Общее"
+        mastery = round((correct / total) * 100, 1) if total > 0 else 0.0
+        
+        if topic not in topics_map:
+            topics_map[topic] = {
+                "topic": topic,
+                "total_tasks": 0,
+                "correct_tasks": 0,
+                "sections": []
+            }
+        
+        # Суммируем общую статистику темы
+        topics_map[topic]["total_tasks"] += total
+        topics_map[topic]["correct_tasks"] += correct
+        
+        # Добавляем раздел
+        topics_map[topic]["sections"].append({
+            "section": section_name,
+            "total_tasks": total,
+            "correct_tasks": correct,
+            "mastery_percent": mastery
+        })
+    
+    # Считаем общий процент для каждой темы и формируем результат
     topics = []
     strongest = None
     weakest = None
     max_mastery = -1
     min_mastery = 101
     
-    for topic, total, correct in answers_query:
-        if not topic:
-            continue
+    for topic_data in topics_map.values():
+        total = topic_data["total_tasks"]
+        correct = topic_data["correct_tasks"]
+        topic_mastery = round((correct / total) * 100, 1) if total > 0 else 0.0
         
-        mastery = round((correct / total) * 100, 1) if total > 0 else 0.0
+        # Сортируем разделы от худшего к лучшему
+        topic_data["sections"].sort(key=lambda x: x["mastery_percent"])
         
         topic_item = {
-            "topic": topic,
+            "topic": topic_data["topic"],
             "total_tasks": total,
             "correct_tasks": correct,
-            "mastery_percent": mastery
+            "mastery_percent": topic_mastery,
+            "sections": topic_data["sections"]
         }
         topics.append(topic_item)
         
-        if mastery > max_mastery:
-            max_mastery = mastery
-            strongest = topic_item
+        # Определяем сильные/слабые темы
+        if topic_mastery > max_mastery:
+            max_mastery = topic_mastery
+            strongest = {
+                "topic": topic_data["topic"],
+                "total_tasks": total,
+                "correct_tasks": correct,
+                "mastery_percent": topic_mastery
+            }
         
-        if mastery < min_mastery and total >= 3:
-            min_mastery = mastery
-            weakest = topic_item
+        if topic_mastery < min_mastery and total >= 3:
+            min_mastery = topic_mastery
+            weakest = {
+                "topic": topic_data["topic"],
+                "total_tasks": total,
+                "correct_tasks": correct,
+                "mastery_percent": topic_mastery
+            }
     
-    topics.sort(key=lambda x: x["mastery_percent"], reverse=True)
+    # Сортируем темы по проценту усвоения (худшие сверху)
+    topics.sort(key=lambda x: x["mastery_percent"])
     
     return {
         "period": period,
@@ -368,7 +438,18 @@ def _get_difficulty_stats(user_id: int, period: str, db: Session, current_user: 
     answers_query = db.query(
         models.Task.difficulty,
         func.count(models.UserAnswer.id).label("total"),
-        func.sum(case((models.UserAnswer.is_correct == True, 1), else_=0)).label("correct")
+        func.sum(
+            case(
+                (
+                    (models.UserAnswer.is_correct == True) & 
+                    (models.UserAnswer.user_text_answer != None) & 
+                    (models.UserAnswer.user_text_answer != '') & 
+                    (models.UserAnswer.user_text_answer != '[]'),
+                    1
+                ), 
+                else_=0
+            )
+        ).label("correct")
     ).join(
         models.Task, models.UserAnswer.task_id == models.Task.id
     ).join(
