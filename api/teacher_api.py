@@ -754,8 +754,47 @@ def get_student_assignments(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
-    # ... существующий код ...
-    
+    """
+    Получить все назначенные тесты для конкретного студента.
+    Для каждого назначения вычисляется реальный статус выполнения
+    (наличие завершённого TestResult).
+    """
+    # 1. Проверяем, что студент существует
+    student = db.query(models.User).filter(
+        models.User.id == student_id,
+        models.User.role == "student"
+    ).first()
+    if not student:
+        raise HTTPException(status_code=404, detail="Студент не найден")
+
+    # 2. Если учитель (не админ) – проверяем принадлежность
+    if current_teacher.role == "teacher":
+        _check_student_belongs_to_teacher(db, student_id, current_teacher.id)
+
+    # 3. Получаем все назначения для этого студента
+    assignments = db.query(models.TestAssignment).filter(
+        models.TestAssignment.user_id == student_id
+    ).order_by(models.TestAssignment.assigned_at.desc()).all()
+
+    # 4. За один запрос получаем все завершённые результаты этого студента
+    from sqlalchemy import func
+    subq = db.query(
+        models.TestResult.test_id,
+        func.max(models.TestResult.completed_at).label('max_completed_at')
+    ).filter(models.TestResult.user_id == student_id)\
+     .group_by(models.TestResult.test_id).subquery()
+
+    latest_results = db.query(models.TestResult).join(
+        subq,
+        (models.TestResult.test_id == subq.c.test_id) &
+        (models.TestResult.completed_at == subq.c.max_completed_at)
+    ).all()
+
+    # Собираем словарь {test_id: TestResult}
+    results_map = {r.test_id: r for r in latest_results}
+
+    # 5. Формируем ответ
+    response = []
     for assignment in assignments:
         test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
         if not test:
@@ -767,13 +806,24 @@ def get_student_assignments(
         total_points = latest_result.total_points if latest_result else None
         result_id = latest_result.id if latest_result else None
         
-        # 🔥 Считаем максимальные баллы и процент
+        # 🔥 Считаем максимальные баллы для этого теста
         max_points = 0
         if test.tasks:
             for task in test.tasks:
-                max_points += 2 if task.is_open_answer else 1
+                # 🔥 Правильная проверка options
+                if task.is_open_answer:
+                    # Открытый ответ - 2 балла
+                    max_points += 2
+                else:
+                    # Тестовое задание - проверяем наличие вариантов
+                    if task.options is not None and len(task.options) >= 2:
+                        max_points += 1  # Тестовое с вариантами
+                    else:
+                        # Если нет вариантов - считаем как открытое
+                        max_points += 2
         
-        percentage = round((total_points / max_points) * 100, 1) if (total_points and max_points > 0) else None
+        # 🔥 Считаем процент
+        percentage = round((total_points / max_points) * 100, 1) if (total_points is not None and max_points > 0) else None
 
         response.append({
             "id": assignment.id,
@@ -781,19 +831,19 @@ def get_student_assignments(
             "test_title": test.title,
             "user_id": assignment.user_id,
             "student_name": f"{student.first_name} {student.last_name}",
+            "student_username": student.username,
             "assigned_at": assignment.assigned_at,
             "due_date": assignment.due_date,
             "is_completed": is_completed,
             "completed_at": completed_at,
             "total_tasks": len(test.tasks) if test.tasks else 0,
             "total_points": total_points,
-            "max_points": max_points,  # 🔥 ДОБАВИТЬ
-            "percentage": percentage,   # 🔥 ДОБАВИТЬ
-            "result_id": result_id
+            "max_points": max_points,    # 🔥 Максимальные баллы
+            "percentage": percentage,     # 🔥 Процент выполнения
+            "result_id": result_id       # 🔥 ID результата
         })
 
     return response
-
 @router.delete("/assignments/{assignment_id}")
 def delete_assignment(
     assignment_id: int,
