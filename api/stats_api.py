@@ -203,13 +203,19 @@ def _get_period_stats(user_id: int, period: str, db: Session, current_user: mode
     
     result_ids = [r.id for r in results]
     
+    # 🔥 НОВОЕ: Считаем ВСЕ задачи во всех пройденных тестах
+    # Для каждого результата получаем количество задач в тесте
+    total_tasks = 0
+    for r in results:
+        test_tasks_count = db.query(models.TestTaskAssociation).filter(
+            models.TestTaskAssociation.test_id == r.test_id
+        ).count()
+        total_tasks += test_tasks_count
+    
     # Все ответы за период
     user_answers = db.query(models.UserAnswer).filter(
         models.UserAnswer.result_id.in_(result_ids)
     ).all()
-    
-    # Считаем ВСЕ задачи (включая пустые ответы)
-    total_tasks = len(user_answers)
     
     # Правильными считаем только непустые и верные ответы
     correct_tasks = sum(
@@ -259,6 +265,12 @@ def _get_period_stats(user_id: int, period: str, db: Session, current_user: mode
         
         daily_map[day_key]["tests_count"] += 1
         
+        # 🔥 НОВОЕ: Считаем все задачи теста для этого дня
+        test_tasks_count = db.query(models.TestTaskAssociation).filter(
+            models.TestTaskAssociation.test_id == r.test_id
+        ).count()
+        daily_map[day_key]["total_tasks"] += test_tasks_count
+        
         max_points = db.query(test_max_points_sub.c.max_total).filter(
             test_max_points_sub.c.test_id == r.test_id
         ).scalar()
@@ -267,9 +279,8 @@ def _get_period_stats(user_id: int, period: str, db: Session, current_user: mode
             percentage = (r.total_points or 0) * 100.0 / max_points
             daily_map[day_key]["scores"].append(percentage)
         
-        # Считаем задания за этот день с учётом пустых ответов
+        # Считаем правильные ответы за этот день (только непустые)
         day_answers = [a for a in user_answers if a.result_id == r.id]
-        daily_map[day_key]["total_tasks"] += len(day_answers)
         daily_map[day_key]["correct_tasks"] += sum(
             1 for a in day_answers 
             if a.is_correct and a.user_text_answer and str(a.user_text_answer).strip() not in ['', '[]', 'None', 'null']
@@ -293,8 +304,8 @@ def _get_period_stats(user_id: int, period: str, db: Session, current_user: mode
         "start_date": start_date.isoformat() if start_date else None,
         "end_date": end_date.isoformat(),
         "total_tests": len(results),
-        "total_tasks": total_tasks,
-        "correct_tasks": correct_tasks,
+        "total_tasks": total_tasks,  # 🔥 Все задачи во всех тестах
+        "correct_tasks": correct_tasks,  # Только непустые правильные
         "avg_score": avg_score,
         "best_score": best_score,
         "worst_score": worst_score,
@@ -302,56 +313,73 @@ def _get_period_stats(user_id: int, period: str, db: Session, current_user: mode
         "daily_stats": daily_stats
     }
 
-
 def _get_topics_stats(user_id: int, period: str, db: Session, current_user: models.User) -> dict:
     """Логика получения статистики по темам с их разделами."""
     user = _check_access(user_id, db, current_user)
     start_date, end_date = _get_period_dates(period)
     
-    # Запрос: группируем по topic + section
-    answers_query = db.query(
+    # 🔥 НОВОЕ: Получаем все задачи из пройденных тестов (total_tasks = все задачи тестов)
+    # Шаг 1: Получаем результаты
+    results_query = db.query(models.TestResult).filter(models.TestResult.user_id == user_id)
+    if start_date:
+        results_query = results_query.filter(models.TestResult.completed_at >= start_date)
+    
+    results = results_query.all()
+    result_ids = [r.id for r in results]
+    test_ids = list(set(r.test_id for r in results))
+    
+    # Шаг 2: Считаем все задачи в тестах по темам/разделам (total)
+    total_tasks_query = db.query(
         models.Task.topic,
         models.Task.section,
-        func.count(models.UserAnswer.id).label("total"),
-        func.sum(
-            case(
-                (
-                    (models.UserAnswer.is_correct == True) & 
-                    (models.UserAnswer.user_text_answer != None) & 
-                    (models.UserAnswer.user_text_answer != '') & 
-                    (models.UserAnswer.user_text_answer != '[]'),
-                    1
-                ), 
-                else_=0
-            )
-        ).label("correct")
+        func.count(models.Task.id).label("total_in_tests")
     ).join(
-        models.Task, models.UserAnswer.task_id == models.Task.id
-    ).join(
-        models.TestResult, models.UserAnswer.result_id == models.TestResult.id
+        models.TestTaskAssociation, models.Task.id == models.TestTaskAssociation.task_id
     ).filter(
-        models.TestResult.user_id == user_id
-    )
-    
-    if start_date:
-        answers_query = answers_query.filter(models.TestResult.completed_at >= start_date)
-    
-    answers_query = answers_query.group_by(
-        models.Task.topic, 
-        models.Task.section
-    ).order_by(
+        models.TestTaskAssociation.test_id.in_(test_ids)
+    ).group_by(
         models.Task.topic,
         models.Task.section
     ).all()
     
-    # Группируем: тема → {общая статистика + разделы}
+    # Словарь: (topic, section) → общее количество задач в тестах
+    total_tasks_map = {}
+    for topic, section, total in total_tasks_query:
+        key = (topic, section or "Общее")
+        total_tasks_map[key] = total
+    
+    # Шаг 3: Считаем правильные ответы (correct)
+    correct_query = db.query(
+        models.Task.topic,
+        models.Task.section,
+        func.count(models.UserAnswer.id).label("correct_count")
+    ).join(
+        models.Task, models.UserAnswer.task_id == models.Task.id
+    ).filter(
+        models.UserAnswer.result_id.in_(result_ids),
+        models.UserAnswer.is_correct == True,
+        models.UserAnswer.user_text_answer != None,
+        models.UserAnswer.user_text_answer != '',
+        models.UserAnswer.user_text_answer != '[]'
+    ).group_by(
+        models.Task.topic,
+        models.Task.section
+    ).all()
+    
+    # Словарь: (topic, section) → правильные ответы
+    correct_map = {}
+    for topic, section, correct in correct_query:
+        key = (topic, section or "Общее")
+        correct_map[key] = correct
+    
+    # Шаг 4: Группируем по темам
     topics_map = {}
     
-    for topic, section, total, correct in answers_query:
+    for (topic, section), total in total_tasks_map.items():
         if not topic:
             continue
         
-        section_name = section or "Общее"
+        correct = correct_map.get((topic, section), 0)
         mastery = round((correct / total) * 100, 1) if total > 0 else 0.0
         
         if topic not in topics_map:
@@ -362,19 +390,17 @@ def _get_topics_stats(user_id: int, period: str, db: Session, current_user: mode
                 "sections": []
             }
         
-        # Суммируем общую статистику темы
         topics_map[topic]["total_tasks"] += total
         topics_map[topic]["correct_tasks"] += correct
         
-        # Добавляем раздел
         topics_map[topic]["sections"].append({
-            "section": section_name,
+            "section": section,
             "total_tasks": total,
             "correct_tasks": correct,
             "mastery_percent": mastery
         })
     
-    # Считаем общий процент для каждой темы и формируем результат
+    # Формируем результат
     topics = []
     strongest = None
     weakest = None
@@ -386,7 +412,6 @@ def _get_topics_stats(user_id: int, period: str, db: Session, current_user: mode
         correct = topic_data["correct_tasks"]
         topic_mastery = round((correct / total) * 100, 1) if total > 0 else 0.0
         
-        # Сортируем разделы от худшего к лучшему
         topic_data["sections"].sort(key=lambda x: x["mastery_percent"])
         
         topic_item = {
@@ -398,7 +423,6 @@ def _get_topics_stats(user_id: int, period: str, db: Session, current_user: mode
         }
         topics.append(topic_item)
         
-        # Определяем сильные/слабые темы
         if topic_mastery > max_mastery:
             max_mastery = topic_mastery
             strongest = {
@@ -417,7 +441,6 @@ def _get_topics_stats(user_id: int, period: str, db: Session, current_user: mode
                 "mastery_percent": topic_mastery
             }
     
-    # Сортируем темы по проценту усвоения (худшие сверху)
     topics.sort(key=lambda x: x["mastery_percent"])
     
     return {
@@ -429,51 +452,63 @@ def _get_topics_stats(user_id: int, period: str, db: Session, current_user: mode
         "weakest_topic": weakest
     }
 
-
 def _get_difficulty_stats(user_id: int, period: str, db: Session, current_user: models.User) -> dict:
     """Логика получения статистики по сложности."""
     user = _check_access(user_id, db, current_user)
     start_date, end_date = _get_period_dates(period)
     
-    answers_query = db.query(
+    # Получаем результаты
+    results_query = db.query(models.TestResult).filter(models.TestResult.user_id == user_id)
+    if start_date:
+        results_query = results_query.filter(models.TestResult.completed_at >= start_date)
+    
+    results = results_query.all()
+    result_ids = [r.id for r in results]
+    test_ids = list(set(r.test_id for r in results))
+    
+    # 🔥 Шаг 1: Все задачи в тестах по сложности
+    total_tasks_query = db.query(
         models.Task.difficulty,
-        func.count(models.UserAnswer.id).label("total"),
-        func.sum(
-            case(
-                (
-                    (models.UserAnswer.is_correct == True) & 
-                    (models.UserAnswer.user_text_answer != None) & 
-                    (models.UserAnswer.user_text_answer != '') & 
-                    (models.UserAnswer.user_text_answer != '[]'),
-                    1
-                ), 
-                else_=0
-            )
-        ).label("correct")
+        func.count(models.Task.id).label("total_in_tests")
+    ).join(
+        models.TestTaskAssociation, models.Task.id == models.TestTaskAssociation.task_id
+    ).filter(
+        models.TestTaskAssociation.test_id.in_(test_ids)
+    ).group_by(
+        models.Task.difficulty
+    ).all()
+    
+    total_map = {diff: total for diff, total in total_tasks_query if diff}
+    
+    # 🔥 Шаг 2: Правильные ответы по сложности
+    correct_query = db.query(
+        models.Task.difficulty,
+        func.count(models.UserAnswer.id).label("correct_count")
     ).join(
         models.Task, models.UserAnswer.task_id == models.Task.id
-    ).join(
-        models.TestResult, models.UserAnswer.result_id == models.TestResult.id
     ).filter(
-        models.TestResult.user_id == user_id
-    )
+        models.UserAnswer.result_id.in_(result_ids),
+        models.UserAnswer.is_correct == True,
+        models.UserAnswer.user_text_answer != None,
+        models.UserAnswer.user_text_answer != '',
+        models.UserAnswer.user_text_answer != '[]'
+    ).group_by(
+        models.Task.difficulty
+    ).all()
     
-    if start_date:
-        answers_query = answers_query.filter(models.TestResult.completed_at >= start_date)
+    correct_map = {diff: correct for diff, correct in correct_query if diff}
     
-    answers_query = answers_query.group_by(models.Task.difficulty).all()
-    
+    # Формируем результат
     difficulties = []
-    for diff, total, correct in answers_query:
-        if not diff:
-            continue
-        
+    for diff in sorted(set(list(total_map.keys()) + list(correct_map.keys()))):
+        total = total_map.get(diff, 0)
+        correct = correct_map.get(diff, 0)
         mastery = round((correct / total) * 100, 1) if total > 0 else 0.0
         
         difficulties.append({
             "difficulty": diff,
-            "total_tasks": total,
-            "correct_tasks": correct,
+            "total_tasks": total,  # 🔥 Все задачи этой сложности в тестах
+            "correct_tasks": correct,  # Только непустые правильные
             "mastery_percent": mastery
         })
     
@@ -485,7 +520,6 @@ def _get_difficulty_stats(user_id: int, period: str, db: Session, current_user: 
         "user_name": f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
         "difficulties": difficulties
     }
-
 
 def _get_full_stats(user_id: int, period: str, db: Session, current_user: models.User) -> dict:
     """Логика получения полной статистики."""
