@@ -54,8 +54,7 @@ class Group(Base):
     students = relationship("User", secondary="group_students", back_populates="groups")
     
     # Назначения тестов для группы
-    assignments = relationship("TestAssignment", back_populates="group")
-
+    assignments = relationship("TestAssignment", foreign_keys="TestAssignment.group_id")
 
 class GroupStudent(Base):
     """Связь группы и студента (многие ко многим)"""
