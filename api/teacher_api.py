@@ -820,7 +820,7 @@ def assign_test_to_group(
             user_id=student_id,
             group_id=group.id,  # Просто помечаем что назначено через группу
             due_date=assignment.due_date,
-            assigned_at=datetime.now(datetime.timezone.utc)
+            assigned_at=datetime.datetime.utcnow()
         ))
         created += 1
     
