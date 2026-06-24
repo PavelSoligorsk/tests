@@ -577,7 +577,7 @@ def assign_test_to_students(
     return result
 
 
-@router.get("/test/{test_id}/assignments", response_model=List[dto.TestAssignmentResponse])
+@router.get("/test/{test_id}/assignments")  # Убрал response_model
 def get_test_assignments(
     test_id: int,
     db: Session = Depends(get_db),
@@ -597,11 +597,17 @@ def get_test_assignments(
     if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
         raise HTTPException(status_code=403, detail="Вы не можете просматривать назначения этого теста")
     
-    # 3. Считаем максимальные баллы для этого теста
+    # 3. Считаем максимальные баллы для этого теста (с правильной проверкой options)
     max_points = 0
     if test.tasks:
         for task in test.tasks:
-            max_points += 2 if task.options is None else 1
+            if task.is_open_answer:
+                max_points += 2  # Открытый ответ
+            else:
+                if task.options is not None and len(task.options) >= 2:
+                    max_points += 1  # Тестовое с вариантами
+                else:
+                    max_points += 2  # Если нет вариантов - как открытое
     
     # 4. Получаем все назначения для этого теста
     assignments = db.query(models.TestAssignment).filter(
@@ -637,7 +643,7 @@ def get_test_assignments(
         result_id = latest_result.id if latest_result else None
         
         # 🔥 Считаем процент
-        percentage = round((total_points / max_points) * 100, 1) if (total_points and max_points > 0) else None
+        percentage = round((total_points / max_points) * 100, 1) if (total_points is not None and max_points > 0) else None
         
         result.append({
             "id": assignment.id,
@@ -652,9 +658,9 @@ def get_test_assignments(
             "completed_at": completed_at,
             "total_tasks": len(test.tasks) if test.tasks else 0,
             "total_points": total_points,
-            "max_points": max_points,    # 🔥
-            "percentage": percentage,     # 🔥
-            "result_id": result_id
+            "max_points": max_points,      # 🔥 ДОБАВЛЕНО
+            "percentage": percentage,       # 🔥 ДОБАВЛЕНО
+            "result_id": result_id         # 🔥 ДОБАВЛЕНО
         })
     
     # Сортируем: сначала невыполненные, потом по имени
@@ -756,6 +762,7 @@ def get_student_assignments(
         })
 
     return response  # Теперь возвращает словарь со всеми полями
+
 @router.delete("/assignments/{assignment_id}")
 def delete_assignment(
     assignment_id: int,
