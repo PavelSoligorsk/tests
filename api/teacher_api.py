@@ -766,14 +766,9 @@ def assign_test_to_group(
     db: Session = Depends(get_db),
     current_teacher: models.User = Depends(check_teacher)
 ):
-    """Назначить тест всей группе"""
-    test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
-    if not test:
-        raise HTTPException(status_code=404, detail="Тест не найден")
+    """Назначить тест всей группе (прокси для быстрого заполнения test_assignments)"""
     
-    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
-        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
-    
+    # Находим группу
     group = db.query(models.Group).filter(
         models.Group.id == assignment.group_id,
         models.Group.teacher_id == current_teacher.id
@@ -782,11 +777,35 @@ def assign_test_to_group(
     if not group:
         raise HTTPException(status_code=404, detail="Группа не найдена")
     
-    # Получаем всех студентов группы
+    # Получаем ID студентов группы
     student_ids = [s.id for s in group.students]
+    
+    if not student_ids:
+        raise HTTPException(status_code=400, detail="В группе нет студентов")
+    
+    # 🔥 Используем ТУ ЖЕ логику, что и в assign_test_to_students
+    # Проверяем тест
+    test = db.query(models.Test).filter(models.Test.id == assignment.test_id).first()
+    if not test:
+        raise HTTPException(status_code=404, detail="Тест не найден")
+    
+    if current_teacher.role == "teacher" and test.creator_id != current_teacher.id:
+        raise HTTPException(status_code=403, detail="Вы не можете назначать этот тест")
+    
+    # Проверяем что все студенты принадлежат учителю
+    assigned_students = db.query(models.TeacherStudent).filter(
+        models.TeacherStudent.teacher_id == current_teacher.id,
+        models.TeacherStudent.student_id.in_(student_ids)
+    ).all()
+    
+    assigned_ids = {s.student_id for s in assigned_students}
     
     created = 0
     for student_id in student_ids:
+        if student_id not in assigned_ids:
+            continue  # Пропускаем чужих студентов
+        
+        # Проверяем, не назначен ли уже тест
         existing = db.query(models.TestAssignment).filter(
             models.TestAssignment.test_id == assignment.test_id,
             models.TestAssignment.user_id == student_id
@@ -795,12 +814,13 @@ def assign_test_to_group(
         if existing:
             continue
         
+        # 🔥 Создаём ТОЧНО такую же запись, как в assign_test_to_students
         db.add(models.TestAssignment(
             test_id=assignment.test_id,
             user_id=student_id,
-            group_id=assignment.group_id,
+            group_id=group.id,  # Просто помечаем что назначено через группу
             due_date=assignment.due_date,
-            assigned_at=datetime.datetime.now(datetime.timezone.utc) 
+            assigned_at=datetime.now(datetime.timezone.utc)
         ))
         created += 1
     
@@ -808,5 +828,7 @@ def assign_test_to_group(
     
     return {
         "message": f"Тест назначен {created} студентам группы '{group.name}'",
-        "assigned_count": created
+        "assigned_count": created,
+        "group_id": group.id,
+        "test_id": assignment.test_id
     }
