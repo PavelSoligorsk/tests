@@ -106,7 +106,7 @@ async def forgot_password(
     db.add(reset_token)
     db.commit()
     
-    reset_link = f"http://localhost:3000/reset-password?token={token}"
+    reset_link = f"https://test-front-lac.vercel.app/reset-password?token={token}"
     
     try:
         response = httpx.post(
