@@ -244,3 +244,11 @@ class TestGroupAssignment(BaseModel):
     test_id: int
     group_id: int
     due_date: Optional[datetime] = None
+
+class ForgotPasswordRequest(BaseModel):
+    email: EmailStr
+
+class ResetPasswordRequest(BaseModel):
+    token: str
+    new_password: str
+    confirm_password: str

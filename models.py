@@ -170,3 +170,13 @@ class TeacherStudent(Base):
 
     teacher = relationship("User", foreign_keys=[teacher_id], back_populates="my_students")
     student = relationship("User", foreign_keys=[student_id], back_populates="my_teachers")
+
+class PasswordResetToken(Base):
+    """Токен для сброса пароля"""
+    __tablename__ = "password_reset_tokens"
+    id = Column(Integer, primary_key=True, index=True)
+    email = Column(String(255), nullable=False, index=True)
+    token = Column(String(255), unique=True, nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False)
+    is_used = Column(Boolean, default=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
