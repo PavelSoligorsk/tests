@@ -69,25 +69,28 @@ def login(form_data: OAuth2PasswordRequestForm = Depends(), db: Session = Depend
         "username": user.username
     }
 
+import os
+import secrets
+import smtplib
+from email.mime.text import MIMEText
+from email.mime.multipart import MIMEMultipart
+from datetime import datetime, timedelta
+
 @router.post("/forgot-password")
 async def forgot_password(
     request: dto.ForgotPasswordRequest,
-    background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
-    # Проверяем существование пользователя
     user = db.query(models.User).filter(models.User.username == request.email).first()
     
     if not user:
         return {"message": "Если такой email зарегистрирован, инструкция отправлена"}
     
-    # Удаляем старые неиспользованные токены
     db.query(models.PasswordResetToken).filter(
         models.PasswordResetToken.email == request.email,
         models.PasswordResetToken.is_used == False
     ).delete()
     
-    # Создаем новый токен
     token = secrets.token_urlsafe(32)
     reset_token = models.PasswordResetToken(
         email=request.email,
@@ -98,40 +101,44 @@ async def forgot_password(
     db.add(reset_token)
     db.commit()
     
-    # Отправляем email
-    def send_email():
-        frontend_url = os.getenv("FRONTEND_URL", "http://localhost:3000")
-        reset_link = f"{frontend_url}/reset-password?token={token}"
-        
+    # Отправляем синхронно и возвращаем результат
+    email_result = None
+    error_msg = None
+    
+    try:
         msg = MIMEMultipart()
-        msg['From'] = os.getenv("MAIL_USERNAME")
+        msg['From'] = 'pavelkobrin58@gmail.com'
         msg['To'] = request.email
-        msg['Subject'] = "Сброс пароля"
+        msg['Subject'] = 'Сброс пароля'
+        
+        reset_link = f"http://localhost:3000/reset-password?token={token}"
         
         body = f"""
-        <html>
-        <body>
-            <h2>Сброс пароля</h2>
-            <p>Для сброса пароля перейдите по ссылке:</p>
-            <a href="{reset_link}">{reset_link}</a>
-            <p>Ссылка действительна 1 час.</p>
-        </body>
-        </html>
+        <h2>Сброс пароля</h2>
+        <p>Для сброса пароля перейдите по ссылке:</p>
+        <a href="{reset_link}">{reset_link}</a>
+        <p>Ссылка действительна 1 час.</p>
         """
+        
         msg.attach(MIMEText(body, 'html'))
         
-        try:
-            with smtplib.SMTP("smtp.gmail.com", 465) as server:
-                server.starttls()
-                server.login(os.getenv("MAIL_USERNAME"), os.getenv("MAIL_PASSWORD"))
-                server.send_message(msg)
-        except Exception as e:
-            print(f"Email error: {e}")
+        server = smtplib.SMTP('smtp.gmail.com', 587, timeout=10)
+        server.starttls()
+        server.login('pavelkobrin58@gmail.com', 'keycgetygbvxldjs')
+        server.send_message(msg)
+        server.quit()
+        
+        email_result = f"Sent to {request.email}"
+        print(email_result)
+        
+    except Exception as e:
+        error_msg = str(e)
+        print(f"ERROR: {error_msg}")
     
-    background_tasks.add_task(send_email)
-    
-    return {"message": "Если такой email зарегистрирован, инструкция отправлена"}
-
+    return {
+        "message": "Если такой email зарегистрирован, инструкция отправлена",
+        "debug": email_result or error_msg
+    }
 
 @router.post("/reset-password")
 async def reset_password(
