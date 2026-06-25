@@ -97,10 +97,94 @@ def delete_user(
     if not user:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
     
-    db.delete(user)
-    db.commit()
-    return {"message": "Пользователь удален"}
-
+    # Нельзя удалить админом самого себя
+    if user.id == current_admin.id:
+        raise HTTPException(status_code=400, detail="Нельзя удалить самого себя")
+    
+    try:
+        # 1. Удаляем связи учитель-ученик
+        db.query(models.TeacherStudent).filter(
+            (models.TeacherStudent.teacher_id == user_id) |
+            (models.TeacherStudent.student_id == user_id)
+        ).delete(synchronize_session=False)
+        
+        # 2. Удаляем из групп
+        db.query(models.GroupStudent).filter(
+            models.GroupStudent.student_id == user_id
+        ).delete(synchronize_session=False)
+        
+        # 3. Если учитель - удаляем его группы
+        group_ids = db.query(models.Group.id).filter(
+            models.Group.teacher_id == user_id
+        ).all()
+        group_ids = [g[0] for g in group_ids]
+        
+        if group_ids:
+            db.query(models.GroupStudent).filter(
+                models.GroupStudent.group_id.in_(group_ids)
+            ).delete(synchronize_session=False)
+            
+            db.query(models.TestAssignment).filter(
+                models.TestAssignment.group_id.in_(group_ids)
+            ).update({"group_id": None}, synchronize_session=False)
+            
+            db.query(models.Group).filter(
+                models.Group.teacher_id == user_id
+            ).delete(synchronize_session=False)
+        
+        # 4. Удаляем ответы пользователя
+        result_ids = db.query(models.TestResult.id).filter(
+            models.TestResult.user_id == user_id
+        ).all()
+        result_ids = [r[0] for r in result_ids]
+        
+        if result_ids:
+            db.query(models.UserAnswer).filter(
+                models.UserAnswer.result_id.in_(result_ids)
+            ).delete(synchronize_session=False)
+        
+        # 5. Удаляем результаты тестов
+        db.query(models.TestResult).filter(
+            models.TestResult.user_id == user_id
+        ).delete(synchronize_session=False)
+        
+        # 6. Удаляем назначения
+        db.query(models.TestAssignment).filter(
+            models.TestAssignment.user_id == user_id
+        ).delete(synchronize_session=False)
+        
+        # 7. Если учитель - удаляем его тесты
+        test_ids = db.query(models.Test.id).filter(
+            models.Test.creator_id == user_id
+        ).all()
+        test_ids = [t[0] for t in test_ids]
+        
+        if test_ids:
+            db.query(models.TestTaskAssociation).filter(
+                models.TestTaskAssociation.test_id.in_(test_ids)
+            ).delete(synchronize_session=False)
+            
+            db.query(models.TestAssignment).filter(
+                models.TestAssignment.test_id.in_(test_ids)
+            ).delete(synchronize_session=False)
+            
+            db.query(models.TestResult).filter(
+                models.TestResult.test_id.in_(test_ids)
+            ).delete(synchronize_session=False)
+            
+            db.query(models.Test).filter(
+                models.Test.creator_id == user_id
+            ).delete(synchronize_session=False)
+        
+        # 8. Удаляем пользователя
+        db.delete(user)
+        db.commit()
+        
+        return {"message": "Пользователь и все связанные данные удалены"}
+        
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Ошибка при удалении: {str(e)}")
 # --- УПРАВЛЕНИЕ ЗАДАНИЯМИ (Tasks) ---
 
 @router.post("/tasks", response_model=dto.TaskResponse)
