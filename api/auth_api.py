@@ -76,6 +76,11 @@ from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
 
+import os
+import secrets
+import httpx
+from datetime import datetime, timedelta
+
 @router.post("/forgot-password")
 async def forgot_password(
     request: dto.ForgotPasswordRequest,
@@ -101,44 +106,35 @@ async def forgot_password(
     db.add(reset_token)
     db.commit()
     
-    # Отправляем синхронно и возвращаем результат
-    email_result = None
-    error_msg = None
+    reset_link = f"http://localhost:3000/reset-password?token={token}"
     
     try:
-        msg = MIMEMultipart()
-        msg['From'] = 'pavelkobrin58@gmail.com'
-        msg['To'] = request.email
-        msg['Subject'] = 'Сброс пароля'
+        response = httpx.post(
+            "https://api.resend.com/emails",
+            headers={
+                "Authorization": f"Bearer {os.getenv('RESEND_API_KEY')}",
+                "Content-Type": "application/json"
+            },
+            json={
+                "from": "onboarding@resend.dev",
+                "to": request.email,
+                "subject": "Сброс пароля",
+                "html": f"""
+                <h2>Сброс пароля</h2>
+                <p>Для сброса пароля перейдите по ссылке:</p>
+                <a href="{reset_link}">{reset_link}</a>
+                <p>Ссылка действительна 1 час.</p>
+                """
+            },
+            timeout=10.0
+        )
         
-        reset_link = f"http://localhost:3000/reset-password?token={token}"
-        
-        body = f"""
-        <h2>Сброс пароля</h2>
-        <p>Для сброса пароля перейдите по ссылке:</p>
-        <a href="{reset_link}">{reset_link}</a>
-        <p>Ссылка действительна 1 час.</p>
-        """
-        
-        msg.attach(MIMEText(body, 'html'))
-        
-        server = smtplib.SMTP('smtp.gmail.com', 465, timeout=10)
-        server.starttls()
-        server.login('pavelkobrin58@gmail.com', 'keycgetygbvxldjs')
-        server.send_message(msg)
-        server.quit()
-        
-        email_result = f"Sent to {request.email}"
-        print(email_result)
+        print(f"Resend status: {response.status_code}")
         
     except Exception as e:
-        error_msg = str(e)
-        print(f"ERROR: {error_msg}")
+        print(f"Email error: {e}")
     
-    return {
-        "message": "Если такой email зарегистрирован, инструкция отправлена",
-        "debug": email_result or error_msg
-    }
+    return {"message": "Если такой email зарегистрирован, инструкция отправлена"}
 
 @router.post("/reset-password")
 async def reset_password(
