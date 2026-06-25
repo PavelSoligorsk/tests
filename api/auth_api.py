@@ -122,7 +122,7 @@ async def forgot_password(
         
         msg.attach(MIMEText(body, 'html'))
         
-        server = smtplib.SMTP('smtp.gmail.com', 587, timeout=10)
+        server = smtplib.SMTP('smtp.gmail.com', 465, timeout=10)
         server.starttls()
         server.login('pavelkobrin58@gmail.com', 'keycgetygbvxldjs')
         server.send_message(msg)
