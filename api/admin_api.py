@@ -242,15 +242,10 @@ def rebuild_all_static_tests(
     """
     🔄 Пересобрать статические (автособранные) тесты.
     
-    ✅ Что делает:
-    1. Собирает все категории (класс + тема) из заданий
-    2. Для каждой категории создает/обновляет автотест
-    3. Удаляет ТОЛЬКО старые автособранные тесты админа
-    
-    🛡️ ЧТО НЕ ТРОГАЕТ:
-    - Тесты, созданные учителями (creator_id != admin)
+    🛡️ НЕ ТРОГАЕТ:
+    - Тесты учителей (creator_id != admin)
     - Ручные тесты (is_autocompile=False)
-    - Тесты с защитой (is_protected=True) — если добавишь
+    - AI-тесты (is_ai_generated=True)
     """
     try:
         # ========== 1. Собираем актуальные категории из задач ==========
@@ -269,8 +264,9 @@ def rebuild_all_static_tests(
             test = db.query(models.Test).filter(
                 models.Test.target_class == t_class_str,
                 models.Test.target_topic == t_num_str,
-                models.Test.is_autocompile == True,  # Только автособранные
-                models.Test.creator_id == current_admin.id  # Только админские
+                models.Test.is_autocompile == True,
+                models.Test.is_ai_generated == False,  # ⬅️ НЕ AI-тесты
+                models.Test.creator_id == current_admin.id
             ).first()
 
             if not test:
@@ -300,30 +296,31 @@ def rebuild_all_static_tests(
 
         db.flush()
 
-        # ========== 2. 🛡️ Удаляем ТОЛЬКО старые автотесты АДМИНА ==========
+        # ========== 2. Удаляем ТОЛЬКО старые автотесты АДМИНА ==========
         if updated_test_ids:
-            # 🔥 КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: удаляем ТОЛЬКО автособранные тесты админа
             bad_tests_query = db.query(models.Test.id).filter(
                 models.Test.id.not_in(updated_test_ids),
-                models.Test.is_autocompile == True,      # Только автособранные
-                models.Test.creator_id == current_admin.id  # Только админские
+                models.Test.is_autocompile == True,
+                models.Test.is_ai_generated == False,  # ⬅️ НЕ AI-тесты
+                models.Test.creator_id == current_admin.id
             )
             
-            # Также удаляем пустые тесты админа (без задач)
+            # Пустые тесты админа
             empty_tests = db.query(models.Test.id).filter(
                 ~models.Test.tasks.any(),
                 models.Test.id.not_in(updated_test_ids),
                 models.Test.is_autocompile == True,
+                models.Test.is_ai_generated == False,
                 models.Test.creator_id == current_admin.id
             ).all()
             
             bad_test_ids = [t[0] for t in bad_tests_query.all()]
             bad_test_ids.extend([t[0] for t in empty_tests])
-            bad_test_ids = list(set(bad_test_ids))  # Удаляем дубликаты
+            bad_test_ids = list(set(bad_test_ids))
 
             deleted_count = 0
             if bad_test_ids:
-                # 1. Удаляем UserAnswer (через TestResult)
+                # 1. UserAnswer (через TestResult)
                 bad_result_ids = [
                     r[0] for r in db.query(models.TestResult.id)
                     .filter(models.TestResult.test_id.in_(bad_test_ids))
@@ -339,24 +336,24 @@ def rebuild_all_static_tests(
                         models.TestResult.id.in_(bad_result_ids)
                     ).delete(synchronize_session=False)
 
-                # 2. Удаляем связи test_task_association
+                # 2. test_task_association
                 db.query(models.TestTaskAssociation).filter(
                     models.TestTaskAssociation.test_id.in_(bad_test_ids)
                 ).delete(synchronize_session=False)
 
-                # 3. Удаляем назначения тестов
+                # 3. TestAssignment
                 db.query(models.TestAssignment).filter(
                     models.TestAssignment.test_id.in_(bad_test_ids)
                 ).delete(synchronize_session=False)
 
-                # 4. Удаляем сами тесты
+                # 4. Сами тесты
                 deleted_count = db.query(models.Test).filter(
                     models.Test.id.in_(bad_test_ids)
                 ).delete(synchronize_session=False)
         else:
             deleted_count = 0
 
-        # ========== 3. Перепроверка ответов пользователей ==========
+        # ========== 3. Перепроверка ответов ==========
         rechecked_answers_count = 0
         rechecked_results_count = 0
         
@@ -439,7 +436,6 @@ def rebuild_all_static_tests(
         print(f"Error: {str(e)}")
         print(f"Traceback: {error_details}")
         raise HTTPException(status_code=500, detail=f"Database Error: {str(e)}")
-    
     
 @router.delete("/tasks/{task_id}")
 def delete_task(
