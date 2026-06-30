@@ -235,127 +235,173 @@ def get_task(task_id: int, db: Session = Depends(get_db),
     return task
 
 @router.post("/rebuild-all-static-tests")
-def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User = Depends(auth.check_admin)):
+def rebuild_all_static_tests(
+    db: Session = Depends(get_db), 
+    current_admin: models.User = Depends(auth.check_admin)
+):
+    """
+    🔄 Пересобрать статические (автособранные) тесты.
+    
+    ✅ Что делает:
+    1. Собирает все категории (класс + тема) из заданий
+    2. Для каждой категории создает/обновляет автотест
+    3. Удаляет ТОЛЬКО старые автособранные тесты админа
+    
+    🛡️ ЧТО НЕ ТРОГАЕТ:
+    - Тесты, созданные учителями (creator_id != admin)
+    - Ручные тесты (is_autocompile=False)
+    - Тесты с защитой (is_protected=True) — если добавишь
+    """
     try:
-        # 1. Собираем актуальные категории из задач
+        # ========== 1. Собираем актуальные категории из задач ==========
         active_categories = db.query(
-            Task.task_class, 
-            Task.topic_number
-        ).distinct().all()               
+            models.Task.task_class, 
+            models.Task.topic_number
+        ).distinct().all()
+        
         updated_test_ids = []
 
         for t_class, t_num in active_categories:
-            # Преобразуем к строке для консистентности
             t_class_str = str(t_class)
             t_num_str = str(t_num)
             
-            test = db.query(Test).filter(
-                Test.target_class == t_class_str,
-                Test.target_topic == t_num_str
+            # Ищем существующий тест по категории
+            test = db.query(models.Test).filter(
+                models.Test.target_class == t_class_str,
+                models.Test.target_topic == t_num_str,
+                models.Test.is_autocompile == True,  # Только автособранные
+                models.Test.creator_id == current_admin.id  # Только админские
             ).first()
 
             if not test:
-                test = Test(
+                test = models.Test(
                     title=f"Тест: {t_class_str} класс, Тема {t_num_str}",
                     target_class=t_class_str,
                     target_topic=t_num_str,
                     is_autocompile=True,
-                    creator_id=current_admin.id
+                    is_ai_generated=False,
+                    creator_id=current_admin.id,
+                    is_active=True
                 )
                 db.add(test)
                 db.flush()
 
-            relevant_tasks = db.query(Task).filter(
-                Task.task_class == t_class,
-                Task.topic_number == t_num
-            ).order_by(Task.is_open_answer.asc(), Task.difficulty.asc()).all()
+            # Обновляем задания в тесте
+            relevant_tasks = db.query(models.Task).filter(
+                models.Task.task_class == t_class,
+                models.Task.topic_number == t_num
+            ).order_by(
+                models.Task.is_open_answer.asc(),
+                models.Task.difficulty.asc()
+            ).all()
 
             test.tasks = relevant_tasks
             updated_test_ids.append(test.id)
 
         db.flush()
 
-        # 2. ЖЕСТКАЯ ЗАЧИСТКА (только один раз!)
+        # ========== 2. 🛡️ Удаляем ТОЛЬКО старые автотесты АДМИНА ==========
         if updated_test_ids:
-            # Находим тесты, которые нужно удалить
-            bad_tests_query = db.query(Test.id).filter(
-                Test.id.not_in(updated_test_ids)
+            # 🔥 КЛЮЧЕВОЕ ИСПРАВЛЕНИЕ: удаляем ТОЛЬКО автособранные тесты админа
+            bad_tests_query = db.query(models.Test.id).filter(
+                models.Test.id.not_in(updated_test_ids),
+                models.Test.is_autocompile == True,      # Только автособранные
+                models.Test.creator_id == current_admin.id  # Только админские
             )
             
-            # Добавляем тесты без задач (но только если они не в updated_test_ids)
-            empty_tests = db.query(Test.id).filter(
-                ~Test.tasks.any(),
-                Test.id.not_in(updated_test_ids)
+            # Также удаляем пустые тесты админа (без задач)
+            empty_tests = db.query(models.Test.id).filter(
+                ~models.Test.tasks.any(),
+                models.Test.id.not_in(updated_test_ids),
+                models.Test.is_autocompile == True,
+                models.Test.creator_id == current_admin.id
             ).all()
             
             bad_test_ids = [t[0] for t in bad_tests_query.all()]
             bad_test_ids.extend([t[0] for t in empty_tests])
-            
-            # Удаляем дубликаты
-            bad_test_ids = list(set(bad_test_ids))
+            bad_test_ids = list(set(bad_test_ids))  # Удаляем дубликаты
 
+            deleted_count = 0
             if bad_test_ids:
                 # 1. Удаляем UserAnswer (через TestResult)
-                bad_result_ids = [r[0] for r in db.query(TestResult.id).filter(TestResult.test_id.in_(bad_test_ids)).all()]
+                bad_result_ids = [
+                    r[0] for r in db.query(models.TestResult.id)
+                    .filter(models.TestResult.test_id.in_(bad_test_ids))
+                    .all()
+                ]
 
                 if bad_result_ids:
-                    db.query(UserAnswer).filter(UserAnswer.result_id.in_(bad_result_ids)).delete(synchronize_session=False)
-                    db.query(TestResult).filter(TestResult.id.in_(bad_result_ids)).delete(synchronize_session=False)
+                    db.query(models.UserAnswer).filter(
+                        models.UserAnswer.result_id.in_(bad_result_ids)
+                    ).delete(synchronize_session=False)
+                    
+                    db.query(models.TestResult).filter(
+                        models.TestResult.id.in_(bad_result_ids)
+                    ).delete(synchronize_session=False)
 
                 # 2. Удаляем связи test_task_association
-                db.query(TestTaskAssociation).filter(TestTaskAssociation.test_id.in_(bad_test_ids)).delete(synchronize_session=False)
+                db.query(models.TestTaskAssociation).filter(
+                    models.TestTaskAssociation.test_id.in_(bad_test_ids)
+                ).delete(synchronize_session=False)
 
-                # 3. Удаляем назначения тестов (TestAssignment)
-                db.query(TestAssignment).filter(TestAssignment.test_id.in_(bad_test_ids)).delete(synchronize_session=False)
+                # 3. Удаляем назначения тестов
+                db.query(models.TestAssignment).filter(
+                    models.TestAssignment.test_id.in_(bad_test_ids)
+                ).delete(synchronize_session=False)
 
-                # 4. Теперь можно удалять tests
-                deleted_count = db.query(Test).filter(Test.id.in_(bad_test_ids)).delete(synchronize_session=False)
-            else:
-                deleted_count = 0
+                # 4. Удаляем сами тесты
+                deleted_count = db.query(models.Test).filter(
+                    models.Test.id.in_(bad_test_ids)
+                ).delete(synchronize_session=False)
         else:
             deleted_count = 0
 
-        # 3. ✅ ИСПРАВЛЕННАЯ перепроверка ответов пользователей
+        # ========== 3. Перепроверка ответов пользователей ==========
         rechecked_answers_count = 0
         rechecked_results_count = 0
         
         for test_id in updated_test_ids:
-            results = db.query(TestResult).filter(TestResult.test_id == test_id).all()
+            results = db.query(models.TestResult).filter(
+                models.TestResult.test_id == test_id
+            ).all()
             
             for result in results:
                 total_points = 0
                 answers_changed = False
                 
-                user_answers = db.query(UserAnswer).filter(UserAnswer.result_id == result.id).all()
+                user_answers = db.query(models.UserAnswer).filter(
+                    models.UserAnswer.result_id == result.id
+                ).all()
                 
                 for ua in user_answers:
-                    task = db.query(Task).filter(Task.id == ua.task_id).first()
+                    task = db.query(models.Task).filter(
+                        models.Task.id == ua.task_id
+                    ).first()
+                    
                     if not task:
                         continue
                     
                     was_correct = ua.is_correct
                     is_correct_now = False
                     
-                    # ✅ ИСПРАВЛЕНО: Используем ту же логику, что и при отправке теста
                     if task.is_open_answer:
-                        # Для открытых ответов - простое сравнение строк
                         if ua.user_text_answer and task.answer:
-                            is_correct_now = ua.user_text_answer.strip().lower() == task.answer.strip().lower()
+                            is_correct_now = (
+                                ua.user_text_answer.strip().lower() == 
+                                task.answer.strip().lower()
+                            )
                     else:
-                        # Для закрытых тестов (с вариантами или без)
                         if ua.user_text_answer:
-                            # Просто сравниваем строки, как в /submit
-                            is_correct_now = str(ua.user_text_answer).strip().lower() == str(task.answer).strip().lower()
+                            is_correct_now = (
+                                str(ua.user_text_answer).strip().lower() == 
+                                str(task.answer).strip().lower()
+                            )
                     
                     if was_correct != is_correct_now:
                         ua.is_correct = is_correct_now
                         answers_changed = True
                     
-                    # Обновленная логика баллов (такая же как в /submit)
-                    if is_correct_now:
-                        new_points = 2 if task.is_open_answer else 1
-                    else:
-                        new_points = 0
+                    new_points = 2 if (is_correct_now and task.is_open_answer) else (1 if is_correct_now else 0)
                     
                     if ua.points_earned != new_points:
                         ua.points_earned = new_points
@@ -370,14 +416,20 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User 
                     rechecked_results_count += 1
                     rechecked_answers_count += len(user_answers)
                     
-                    # Логируем изменение
                     print(f"TestResult {result.id}: points changed from {old_total} to {total_points}")
 
         db.commit()
         
         return {
-            "status": "success", 
-            "message": f"Deleted {deleted_count} tests. Rechecked {rechecked_answers_count} answers in {rechecked_results_count} test results."
+            "status": "success",
+            "message": (
+                f"Обновлено {len(updated_test_ids)} тестов. "
+                f"Удалено {deleted_count} старых автотестов админа. "
+                f"Перепроверено {rechecked_answers_count} ответов "
+                f"в {rechecked_results_count} результатах."
+            ),
+            "updated_test_ids": updated_test_ids,
+            "deleted_count": deleted_count
         }
 
     except Exception as e:
@@ -387,7 +439,8 @@ def rebuild_all_static_tests(db: Session = Depends(get_db), current_admin: User 
         print(f"Error: {str(e)}")
         print(f"Traceback: {error_details}")
         raise HTTPException(status_code=500, detail=f"Database Error: {str(e)}")
-
+    
+    
 @router.delete("/tasks/{task_id}")
 def delete_task(
     task_id: int, 
