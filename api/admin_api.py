@@ -243,12 +243,23 @@ def rebuild_all_static_tests(
     🔄 Пересобрать статические (автособранные) тесты.
     
     🛡️ НЕ ТРОГАЕТ:
-    - Тесты учителей (creator_id != admin)
-    - Ручные тесты (is_autocompile=False)
-    - AI-тесты (is_ai_generated=True)
+    - Тесты учителей (creator_id != admin) — НЕ УДАЛЯЕТ
+    - Ручные тесты (is_autocompile=False) — НЕ УДАЛЯЕТ
+    - AI-тесты (is_ai_generated=True) — НЕ УДАЛЯЕТ
+    
+    🔥 Пересчитывает ответы ТОЛЬКО для ИЗМЕНЁННЫХ заданий
     """
     try:
-        # ========== 1. Собираем актуальные категории из задач ==========
+        # ========== 1. Запоминаем старые ответы заданий ==========
+        all_tasks_before = db.query(models.Task).all()
+        old_answers = {}
+        for task in all_tasks_before:
+            old_answers[task.id] = {
+                "answer": task.answer,
+                "is_open_answer": task.is_open_answer
+            }
+        
+        # ========== 2. Собираем актуальные категории из задач ==========
         active_categories = db.query(
             models.Task.task_class, 
             models.Task.topic_number
@@ -260,12 +271,11 @@ def rebuild_all_static_tests(
             t_class_str = str(t_class)
             t_num_str = str(t_num)
             
-            # Ищем существующий тест по категории
             test = db.query(models.Test).filter(
                 models.Test.target_class == t_class_str,
                 models.Test.target_topic == t_num_str,
                 models.Test.is_autocompile == True,
-                models.Test.is_ai_generated == False,  # ⬅️ НЕ AI-тесты
+                models.Test.is_ai_generated == False,
                 models.Test.creator_id == current_admin.id
             ).first()
 
@@ -282,7 +292,6 @@ def rebuild_all_static_tests(
                 db.add(test)
                 db.flush()
 
-            # Обновляем задания в тесте
             relevant_tasks = db.query(models.Task).filter(
                 models.Task.task_class == t_class,
                 models.Task.topic_number == t_num
@@ -296,16 +305,15 @@ def rebuild_all_static_tests(
 
         db.flush()
 
-        # ========== 2. Удаляем ТОЛЬКО старые автотесты АДМИНА ==========
+        # ========== 3. Удаляем старые автотесты админа ==========
         if updated_test_ids:
             bad_tests_query = db.query(models.Test.id).filter(
                 models.Test.id.not_in(updated_test_ids),
                 models.Test.is_autocompile == True,
-                models.Test.is_ai_generated == False,  # ⬅️ НЕ AI-тесты
+                models.Test.is_ai_generated == False,
                 models.Test.creator_id == current_admin.id
             )
             
-            # Пустые тесты админа
             empty_tests = db.query(models.Test.id).filter(
                 ~models.Test.tasks.any(),
                 models.Test.id.not_in(updated_test_ids),
@@ -320,7 +328,6 @@ def rebuild_all_static_tests(
 
             deleted_count = 0
             if bad_test_ids:
-                # 1. UserAnswer (через TestResult)
                 bad_result_ids = [
                     r[0] for r in db.query(models.TestResult.id)
                     .filter(models.TestResult.test_id.in_(bad_test_ids))
@@ -336,84 +343,96 @@ def rebuild_all_static_tests(
                         models.TestResult.id.in_(bad_result_ids)
                     ).delete(synchronize_session=False)
 
-                # 2. test_task_association
                 db.query(models.TestTaskAssociation).filter(
                     models.TestTaskAssociation.test_id.in_(bad_test_ids)
                 ).delete(synchronize_session=False)
 
-                # 3. TestAssignment
                 db.query(models.TestAssignment).filter(
                     models.TestAssignment.test_id.in_(bad_test_ids)
                 ).delete(synchronize_session=False)
 
-                # 4. Сами тесты
                 deleted_count = db.query(models.Test).filter(
                     models.Test.id.in_(bad_test_ids)
                 ).delete(synchronize_session=False)
         else:
             deleted_count = 0
 
-        # ========== 3. Перепроверка ответов ==========
+        # ========== 4. 🔥 Находим ИЗМЕНЁННЫЕ задания ==========
+        all_tasks_after = db.query(models.Task).all()
+        changed_task_ids = []
+        
+        for task in all_tasks_after:
+            old = old_answers.get(task.id)
+            if old:
+                # Сравниваем ответ и тип задания
+                if old["answer"] != task.answer or old["is_open_answer"] != task.is_open_answer:
+                    changed_task_ids.append(task.id)
+                    print(f"  🔥 Задание {task.id} изменилось: {old['answer']} → {task.answer}")
+        
+        # ========== 5. Пересчитываем ответы ТОЛЬКО для изменённых заданий ==========
         rechecked_answers_count = 0
         rechecked_results_count = 0
         
-        for test_id in updated_test_ids:
-            results = db.query(models.TestResult).filter(
-                models.TestResult.test_id == test_id
+        if changed_task_ids:
+            print(f"\n🔄 Пересчёт ответов для {len(changed_task_ids)} изменённых заданий...")
+            
+            # 🔥 Находим ВСЕ UserAnswer для изменённых заданий
+            user_answers = db.query(models.UserAnswer).filter(
+                models.UserAnswer.task_id.in_(changed_task_ids)
             ).all()
             
-            for result in results:
-                total_points = 0
-                answers_changed = False
+            # Группируем по result_id для обновления TestResult
+            results_to_update = {}
+            
+            for ua in user_answers:
+                task = db.query(models.Task).filter(models.Task.id == ua.task_id).first()
+                if not task:
+                    continue
                 
-                user_answers = db.query(models.UserAnswer).filter(
-                    models.UserAnswer.result_id == result.id
-                ).all()
+                was_correct = ua.is_correct
+                is_correct_now = False
                 
-                for ua in user_answers:
-                    task = db.query(models.Task).filter(
-                        models.Task.id == ua.task_id
-                    ).first()
-                    
-                    if not task:
-                        continue
-                    
-                    was_correct = ua.is_correct
-                    is_correct_now = False
-                    
-                    if task.is_open_answer:
-                        if ua.user_text_answer and task.answer:
-                            is_correct_now = (
-                                ua.user_text_answer.strip().lower() == 
-                                task.answer.strip().lower()
-                            )
-                    else:
-                        if ua.user_text_answer:
-                            is_correct_now = (
-                                str(ua.user_text_answer).strip().lower() == 
-                                str(task.answer).strip().lower()
-                            )
-                    
-                    if was_correct != is_correct_now:
-                        ua.is_correct = is_correct_now
-                        answers_changed = True
-                    
-                    new_points = 2 if (is_correct_now and task.is_open_answer) else (1 if is_correct_now else 0)
-                    
-                    if ua.points_earned != new_points:
-                        ua.points_earned = new_points
-                        answers_changed = True
-                    
-                    if is_correct_now:
-                        total_points += new_points
+                if task.is_open_answer:
+                    if ua.user_text_answer and task.answer:
+                        is_correct_now = (
+                            ua.user_text_answer.strip().lower() == 
+                            task.answer.strip().lower()
+                        )
+                else:
+                    if ua.user_text_answer:
+                        is_correct_now = (
+                            str(ua.user_text_answer).strip().lower() == 
+                            str(task.answer).strip().lower()
+                        )
                 
-                if answers_changed or result.total_points != total_points:
+                new_points = 2 if (is_correct_now and task.is_open_answer) else (1 if is_correct_now else 0)
+                
+                if was_correct != is_correct_now or ua.points_earned != new_points:
+                    ua.is_correct = is_correct_now
+                    ua.points_earned = new_points
+                    rechecked_answers_count += 1
+                    
+                    if ua.result_id not in results_to_update:
+                        results_to_update[ua.result_id] = 0
+                    results_to_update[ua.result_id] += new_points
+            
+            # Обновляем total_points в TestResult
+            for result_id, _ in results_to_update.items():
+                result = db.query(models.TestResult).filter(
+                    models.TestResult.id == result_id
+                ).first()
+                if result:
                     old_total = result.total_points
-                    result.total_points = total_points
-                    rechecked_results_count += 1
-                    rechecked_answers_count += len(user_answers)
                     
-                    print(f"TestResult {result.id}: points changed from {old_total} to {total_points}")
+                    # Пересчитываем сумму баллов по всем ответам этого результата
+                    all_ua_for_result = db.query(models.UserAnswer).filter(
+                        models.UserAnswer.result_id == result_id
+                    ).all()
+                    new_total = sum(ua.points_earned for ua in all_ua_for_result)
+                    
+                    result.total_points = new_total
+                    rechecked_results_count += 1
+                    print(f"  ✅ TestResult {result.id}: {old_total} → {new_total}")
 
         db.commit()
         
@@ -422,11 +441,15 @@ def rebuild_all_static_tests(
             "message": (
                 f"Обновлено {len(updated_test_ids)} тестов. "
                 f"Удалено {deleted_count} старых автотестов админа. "
+                f"Найдено изменённых заданий: {len(changed_task_ids)}. "
                 f"Перепроверено {rechecked_answers_count} ответов "
                 f"в {rechecked_results_count} результатах."
             ),
             "updated_test_ids": updated_test_ids,
-            "deleted_count": deleted_count
+            "deleted_count": deleted_count,
+            "changed_task_ids": changed_task_ids,
+            "rechecked_answers": rechecked_answers_count,
+            "rechecked_results": rechecked_results_count
         }
 
     except Exception as e:
@@ -437,6 +460,7 @@ def rebuild_all_static_tests(
         print(f"Traceback: {error_details}")
         raise HTTPException(status_code=500, detail=f"Database Error: {str(e)}")
     
+      
 @router.delete("/tasks/{task_id}")
 def delete_task(
     task_id: int, 
