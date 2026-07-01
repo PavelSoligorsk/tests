@@ -240,26 +240,12 @@ def rebuild_all_static_tests(
     current_admin: models.User = Depends(auth.check_admin)
 ):
     """
-    🔄 Пересобрать статические (автособранные) тесты.
+    🔄 Полная синхронизация тестов и глобальный пересчёт ВСЕХ оценок в системе.
     
-    🛡️ НЕ ТРОГАЕТ:
-    - Тесты учителей (creator_id != admin) — НЕ УДАЛЯЕТ
-    - Ручные тесты (is_autocompile=False) — НЕ УДАЛЯЕТ
-    - AI-тесты (is_ai_generated=True) — НЕ УДАЛЯЕТ
-    
-    🔥 Пересчитывает ответы ТОЛЬКО для ИЗМЕНЁННЫХ заданий
+    🔥 Бежит по ВСЕМ заданиям базы данных и принудительно обновляет user_answers и test_results.
     """
     try:
-        # ========== 1. Запоминаем старые ответы заданий ==========
-        all_tasks_before = db.query(models.Task).all()
-        old_answers = {}
-        for task in all_tasks_before:
-            old_answers[task.id] = {
-                "answer": task.answer,
-                "is_open_answer": task.is_open_answer
-            }
-        
-        # ========== 2. Собираем актуальные категории из задач ==========
+        # ========== 1. Собираем актуальные категории из задач ==========
         active_categories = db.query(
             models.Task.task_class, 
             models.Task.topic_number
@@ -305,7 +291,8 @@ def rebuild_all_static_tests(
 
         db.flush()
 
-        # ========== 3. Удаляем старые автотесты админа ==========
+        # ========== 2. Удаляем старые автотесты админа ==========
+        deleted_count = 0
         if updated_test_ids:
             bad_tests_query = db.query(models.Test.id).filter(
                 models.Test.id.not_in(updated_test_ids),
@@ -326,7 +313,6 @@ def rebuild_all_static_tests(
             bad_test_ids.extend([t[0] for t in empty_tests])
             bad_test_ids = list(set(bad_test_ids))
 
-            deleted_count = 0
             if bad_test_ids:
                 bad_result_ids = [
                     r[0] for r in db.query(models.TestResult.id)
@@ -354,113 +340,94 @@ def rebuild_all_static_tests(
                 deleted_count = db.query(models.Test).filter(
                     models.Test.id.in_(bad_test_ids)
                 ).delete(synchronize_session=False)
-        else:
-            deleted_count = 0
 
-        # ========== 4. 🔥 Находим ИЗМЕНЁННЫЕ задания ==========
-        all_tasks_after = db.query(models.Task).all()
-        changed_task_ids = []
-        
-        for task in all_tasks_after:
-            old = old_answers.get(task.id)
-            if old:
-                # Сравниваем ответ и тип задания
-                if old["answer"] != task.answer or old["is_open_answer"] != task.is_open_answer:
-                    changed_task_ids.append(task.id)
-                    print(f"  🔥 Задание {task.id} изменилось: {old['answer']} → {task.answer}")
-        
-        # ========== 5. Пересчитываем ответы ТОЛЬКО для изменённых заданий ==========
+        # ========== 3. 🔥 Тотальный пересчёт ответов по ВСЕМ заданиям ==========
         rechecked_answers_count = 0
         rechecked_results_count = 0
         
-        if changed_task_ids:
-            print(f"\n🔄 Пересчёт ответов для {len(changed_task_ids)} изменённых заданий...")
+        # Индексируем абсолютно все задания из базы в память, чтобы избежать N+1 запросов
+        all_tasks = db.query(models.Task).all()
+        tasks_lookup = {task.id: task for task in all_tasks}
+        
+        if tasks_lookup:
+            print(f"\n🔄 Запуск тотальной проверки ответов для {len(tasks_lookup)} заданий...")
             
-            # 🔥 Находим ВСЕ UserAnswer для изменённых заданий
-            user_answers = db.query(models.UserAnswer).filter(
-                models.UserAnswer.task_id.in_(changed_task_ids)
-            ).all()
+            # Выгребаем вообще ВСЕ ответы пользователей, которые есть в БД
+            user_answers = db.query(models.UserAnswer).all()
             
-            # Группируем по result_id для обновления TestResult
-            results_to_update = {}
+            # Множество для сохранения ID карточек результатов, где поменялись баллы
+            results_to_update = set()
             
             for ua in user_answers:
-                task = db.query(models.Task).filter(models.Task.id == ua.task_id).first()
+                task = tasks_lookup.get(ua.task_id)
                 if not task:
-                    continue
+                    continue  # Если задача вдруг была физически удалена из базы
                 
                 was_correct = ua.is_correct
+                old_points = ua.points_earned
                 is_correct_now = False
                 
-                if task.is_open_answer:
-                    if ua.user_text_answer and task.answer:
-                        is_correct_now = (
-                            ua.user_text_answer.strip().lower() == 
-                            task.answer.strip().lower()
-                        )
-                else:
-                    if ua.user_text_answer:
-                        is_correct_now = (
-                            str(ua.user_text_answer).strip().lower() == 
-                            str(task.answer).strip().lower()
-                        )
+                # Приведение к строкам и чистка от пробелов/регистра
+                user_ans_str = str(ua.user_text_answer).strip().lower() if ua.user_text_answer else ""
+                task_ans_str = str(task.answer).strip().lower() if task.answer else ""
                 
+                if user_ans_str and task_ans_str:
+                    is_correct_now = (user_ans_str == task_ans_str)
+                
+                # Считаем баллы (2 за открытый, 1 за закрытый)
                 new_points = 2 if (is_correct_now and task.is_open_answer) else (1 if is_correct_now else 0)
                 
-                if was_correct != is_correct_now or ua.points_earned != new_points:
+                # Если статус ответа или баллы изменились по сравнению с тем, что было в БД
+                if was_correct != is_correct_now or old_points != new_points:
                     ua.is_correct = is_correct_now
                     ua.points_earned = new_points
                     rechecked_answers_count += 1
-                    
-                    if ua.result_id not in results_to_update:
-                        results_to_update[ua.result_id] = 0
-                    results_to_update[ua.result_id] += new_points
-            
-            # Обновляем total_points в TestResult
-            for result_id, _ in results_to_update.items():
-                result = db.query(models.TestResult).filter(
-                    models.TestResult.id == result_id
-                ).first()
-                if result:
-                    old_total = result.total_points
-                    
-                    # Пересчитываем сумму баллов по всем ответам этого результата
-                    all_ua_for_result = db.query(models.UserAnswer).filter(
-                        models.UserAnswer.result_id == result_id
-                    ).all()
-                    new_total = sum(ua.points_earned for ua in all_ua_for_result)
-                    
-                    result.total_points = new_total
-                    rechecked_results_count += 1
-                    print(f"  ✅ TestResult {result.id}: {old_total} → {new_total}")
+                    results_to_update.add(ua.result_id)
 
+            # ========== 4. Пакетное обновление total_points в TestResult ==========
+            if results_to_update:
+                print(f"🔄 Пересчет суммарных баллов для {len(results_to_update)} измененных результатов...")
+                
+                # Подгружаем карточки результатов вместе с ответами одним махом
+                from sqlalchemy.orm import joinedload
+                dirty_results = db.query(models.TestResult).options(
+                    joinedload(models.TestResult.answers)
+                ).filter(models.TestResult.id.in_(list(results_to_update))).all()
+                
+                for result in dirty_results:
+                    old_total = result.total_points
+                    # Считаем сумму по обновленным объектам прямо в оперативной памяти
+                    new_total = sum(answer.points_earned for answer in result.answers)
+                    
+                    if old_total != new_total:
+                        result.total_points = new_total
+                        rechecked_results_count += 1
+                        print(f"  ✅ TestResult {result.id}: {old_total} → {new_total}")
+
+        # Фиксируем все изменения в базе данных
         db.commit()
         
         return {
             "status": "success",
             "message": (
-                f"Обновлено {len(updated_test_ids)} тестов. "
-                f"Удалено {deleted_count} старых автотестов админа. "
-                f"Найдено изменённых заданий: {len(changed_task_ids)}. "
-                f"Перепроверено {rechecked_answers_count} ответов "
-                f"в {rechecked_results_count} результатах."
+                f"Успешно синхронизировано {len(updated_test_ids)} тестов. "
+                f"Удалено устаревших автотестов: {deleted_count}. "
+                f"Принудительно перепроверено ответов: {rechecked_answers_count}. "
+                f"Обновлено оценок в результатах: {rechecked_results_count}."
             ),
             "updated_test_ids": updated_test_ids,
             "deleted_count": deleted_count,
-            "changed_task_ids": changed_task_ids,
-            "rechecked_answers": rechecked_answers_count,
-            "rechecked_results": rechecked_results_count
+            "rechecked_answers_count": rechecked_answers_count,
+            "rechecked_results_count": rechecked_results_count
         }
 
     except Exception as e:
         db.rollback()
         import traceback
-        error_details = traceback.format_exc()
-        print(f"Error: {str(e)}")
-        print(f"Traceback: {error_details}")
+        print(f"Error: {str(e)}\nTraceback: {traceback.format_exc()}")
         raise HTTPException(status_code=500, detail=f"Database Error: {str(e)}")
-    
-      
+
+
 @router.delete("/tasks/{task_id}")
 def delete_task(
     task_id: int, 
