@@ -8,6 +8,13 @@ class TheoryRepository:
     def get_all_topics(self):
         return self.db.query(models.Theory.topic).distinct().all()
     
+    def get_all_theory(self):
+        """Получить весь теоретический материал"""
+        return self.db.query(models.Theory).order_by(
+            models.Theory.topic, 
+            models.Theory.section
+        ).all()
+    
     def get_theory_by_topic(self, topic: str):
         return self.db.query(models.Theory)\
             .filter(models.Theory.topic == topic)\

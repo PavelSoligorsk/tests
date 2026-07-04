@@ -72,7 +72,7 @@ def get_user_history(
 
 # ==================== ЗАДАНИЯ ====================
 
-@router.get("/tasks", response_model=List[dto.TaskResponse])
+@router.get("/", response_model=List[dto.TaskResponse])
 def get_tasks(
     service: AdminService = Depends(get_admin_service),
     current_admin: models.User = Depends(auth.check_admin)
