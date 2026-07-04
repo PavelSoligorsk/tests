@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
 import models
+from typing import List  # ← ДОБАВИТЬ В НАЧАЛО ФАЙЛА
 
 class UserRepository:
     def __init__(self, db: Session):
