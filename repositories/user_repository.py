@@ -57,3 +57,33 @@ class UserRepository:
             "total_attempts": total_attempts,
             "avg_score": round(float(avg_percentage), 1)
         }
+    
+    def get_all_users(self):
+        """Получить всех пользователей"""
+        return self.db.query(models.User).all()
+
+    def get_user_by_id(self, user_id: int):
+        """Получить пользователя по ID"""
+        return self.db.query(models.User).filter(models.User.id == user_id).first()
+
+    def get_teachers_by_ids(self, teacher_ids: List[int]):
+        """Получить учителей по ID"""
+        return self.db.query(models.User).filter(
+            models.User.id.in_(teacher_ids)
+        ).all()
+
+    def update_user_role(self, user: models.User, new_role: str):
+        """Обновить роль пользователя"""
+        user.role = new_role
+        self.db.commit()
+
+    def delete_user(self, user: models.User):
+        """Удалить пользователя"""
+        self.db.delete(user)
+        self.db.commit()
+
+    def get_user_by_email(self, email: str):
+        """Найти пользователя по email (username)"""
+        return self.db.query(models.User).filter(
+            models.User.username == email
+        ).first()

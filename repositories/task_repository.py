@@ -91,3 +91,65 @@ class TaskRepository:
             models.Task.is_open_answer.asc(),
             models.Task.difficulty.asc()
         ).all()
+    
+    def get_all_tasks(self):
+        """Получить все задания"""
+        return self.db.query(models.Task).all()
+
+    def create_task(self, task_data: dict):
+        """Создать задание"""
+        new_task = models.Task(**task_data)
+        self.db.add(new_task)
+        self.db.commit()
+        self.db.refresh(new_task)
+        return new_task
+
+    def update_task(self, task: models.Task, update_data: dict):
+        """Обновить задание"""
+        for key, value in update_data.items():
+            setattr(task, key, value)
+        self.db.commit()
+        self.db.refresh(task)
+        return task
+
+    def delete_task(self, task_id: int):
+        """Удалить задание и связанные данные"""
+        try:
+            self.db.query(models.UserAnswer).filter(
+                models.UserAnswer.task_id == task_id
+            ).delete(synchronize_session=False)
+            
+            self.db.query(models.TestTaskAssociation).filter(
+                models.TestTaskAssociation.task_id == task_id
+            ).delete(synchronize_session=False)
+            
+            task = self.get_task_by_id(task_id)
+            if task:
+                self.db.delete(task)
+                self.db.commit()
+            return True
+        except Exception as e:
+            self.db.rollback()
+            raise e
+
+    def get_active_categories(self):
+        """Получить уникальные пары класс-тема"""
+        return self.db.query(
+            models.Task.task_class,
+            models.Task.topic_number
+        ).distinct().all()
+
+    def get_all_tasks_dict(self):
+        """Получить словарь {id: task}"""
+        tasks = self.db.query(models.Task).all()
+        return {task.id: task for task in tasks}
+
+    def get_tasks_by_class_and_topic(self, task_class, topic_number):
+        """Получить задания по классу и теме"""
+        return self.db.query(models.Task).filter(
+            models.Task.task_class == task_class,
+            models.Task.topic_number == topic_number
+        ).order_by(
+            models.Task.is_open_answer.asc(),
+            models.Task.difficulty.asc()
+        ).all()
