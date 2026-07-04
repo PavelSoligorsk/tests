@@ -252,3 +252,7 @@ class ResetPasswordRequest(BaseModel):
     token: str
     new_password: str
     confirm_password: str
+
+class AssignStudentRequest(BaseModel):
+    teacher_id: int
+    student_id: int
