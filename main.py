@@ -7,7 +7,6 @@ from api.admin_api import router as admin_router
 from api.teacher_api import router as teacher_router
 from api.student_api import router as student_router
 from api.stats_api import router as stats_router
-from api.teacher_groups import router as teachergroups_router  # Добавляем
 
 from fastapi.middleware.cors import CORSMiddleware # 1. Обязательный импорт
 from fastapi.security import OAuth2PasswordRequestForm
