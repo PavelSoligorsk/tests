@@ -489,6 +489,107 @@ class TeacherService:
             },
             "details": details
         }
+    
+        # ==================== УПРАВЛЕНИЕ ГРУППАМИ ====================
+    
+    def get_my_groups(self, teacher_id: int):
+        """Получить все группы учителя"""
+        groups = self.group_repo.get_teacher_groups(teacher_id)
+        
+        result = []
+        for group in groups:
+            result.append({
+                "id": group.id,
+                "name": group.name,
+                "description": group.description,
+                "students_count": len(group.students),
+                "created_at": group.created_at,
+                "students": [
+                    {
+                        "id": s.id,
+                        "first_name": s.first_name,
+                        "last_name": s.last_name,
+                        "username": s.username,
+                        "tg_username": s.tg_username
+                    }
+                    for s in group.students
+                ]
+            })
+        
+        return result
+    
+    def create_group(self, name: str, teacher_id: int, description: str = None):
+        """Создать новую группу"""
+        if not name:
+            raise ValueError("Название группы обязательно")
+        
+        return self.group_repo.create_group(name, teacher_id, description)
+    
+    def update_group(self, group_id: int, teacher_id: int, name: str = None, description: str = None):
+        """Обновить группу"""
+        group = self.group_repo.get_group_by_id(group_id, teacher_id)
+        if not group:
+            raise ValueError("Группа не найдена")
+        
+        if name:
+            existing = self.group_repo.get_group_by_name(name, teacher_id)
+            if existing and existing.id != group_id:
+                raise PermissionError("Группа с таким названием уже существует")
+        
+        return self.group_repo.update_group(group, name, description)
+    
+    def delete_group(self, group_id: int, teacher_id: int):
+        """Удалить группу"""
+        group = self.group_repo.get_group_by_id(group_id, teacher_id)
+        if not group:
+            raise ValueError("Группа не найдена")
+        
+        self.group_repo.delete_group(group)
+        return {"message": f"Группа '{group.name}' удалена"}
+    
+    def add_students_to_group(self, group_id: int, teacher_id: int, student_ids: list):
+        """Добавить студентов в группу"""
+        group = self.group_repo.get_group_by_id(group_id, teacher_id)
+        if not group:
+            raise ValueError("Группа не найдена")
+        
+        if not student_ids:
+            raise ValueError("Не указаны студенты")
+        
+        added = self.group_repo.add_students(group, student_ids, teacher_id)
+        
+        return {
+            "message": f"Добавлено {added} студентов в группу '{group.name}'",
+            "added": added
+        }
+    
+    def remove_student_from_group(self, group_id: int, student_id: int, teacher_id: int):
+        """Удалить студента из группы"""
+        group = self.group_repo.get_group_by_id(group_id, teacher_id)
+        if not group:
+            raise ValueError("Группа не найдена")
+        
+        if not self.group_repo.remove_student(group, student_id):
+            raise ValueError("Студент не в группе")
+        
+        return {"message": "Студент удалён из группы"}
+    
+    def get_group_students(self, group_id: int, teacher_id: int):
+        """Получить список студентов группы"""
+        group = self.group_repo.get_group_by_id(group_id, teacher_id)
+        if not group:
+            raise ValueError("Группа не найдена")
+        
+        return [
+            {
+                "id": s.id,
+                "first_name": s.first_name,
+                "last_name": s.last_name,
+                "username": s.username,
+                "tg_username": s.tg_username
+            }
+            for s in group.students
+        ]
 
 
 class PermissionError(Exception):
