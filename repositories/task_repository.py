@@ -62,3 +62,32 @@ class TaskRepository:
             .filter(models.TestTaskAssociation.test_id == test_id)\
             .order_by(models.Task.topic_number)\
             .all()
+    
+    def get_filtered_tasks(self, task_class=None, topic=None, topic_number=None, section=None):
+        """Получить задания с фильтрацией"""
+        query = self.db.query(models.Task).order_by(
+            models.Task.task_class,
+            models.Task.topic_number,
+            models.Task.is_open_answer.asc(),
+            models.Task.difficulty.asc()
+        )
+        
+        if task_class is not None:
+            query = query.filter(models.Task.task_class == str(task_class))
+        if topic:
+            query = query.filter(models.Task.topic == topic)
+        if topic_number:
+            query = query.filter(models.Task.topic_number == topic_number)
+        if section:
+            query = query.filter(models.Task.section == section)
+        
+        return query.all()
+
+    def get_all_tasks_ordered(self):
+        """Получить все задания с сортировкой"""
+        return self.db.query(models.Task).order_by(
+            models.Task.task_class,
+            models.Task.topic_number,
+            models.Task.is_open_answer.asc(),
+            models.Task.difficulty.asc()
+        ).all()
