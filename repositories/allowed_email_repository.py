@@ -23,3 +23,10 @@ class AllowedEmailRepository:
     def delete(self, allowed_email):
         self.db.delete(allowed_email)
         self.db.commit()
+
+    def is_email_allowed(self, email: str) -> bool:
+        """Проверить, разрешен ли email"""
+        if email == "admin@gmail.com":
+            return True
+        allowed = self.get_by_email(email)
+        return allowed is not None

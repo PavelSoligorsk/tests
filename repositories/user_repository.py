@@ -1,6 +1,7 @@
 from sqlalchemy.orm import Session
 from sqlalchemy import func, case
 import models
+import auth  # ← ДОБАВИТЬ
 from typing import List  # ← ДОБАВИТЬ В НАЧАЛО ФАЙЛА
 
 class UserRepository:
@@ -88,3 +89,31 @@ class UserRepository:
         return self.db.query(models.User).filter(
             models.User.username == email
         ).first()
+    
+    def get_user_by_email(self, email: str):
+        """Найти пользователя по email (username)"""
+        return self.db.query(models.User).filter(
+            models.User.username == email
+        ).first()
+
+    def create_user(self, username: str, password: str, role: str, 
+                    first_name: str = None, last_name: str = None,
+                    phone: str = None, tg_username: str = None):
+        """Создать пользователя"""
+        user = models.User(
+            username=username,
+            hashed_password=auth.get_password_hash(password),
+            role=role,
+            first_name=first_name,
+            last_name=last_name,
+            phone=phone,
+            tg_username=tg_username
+        )
+        self.db.add(user)
+        self.db.commit()
+        self.db.refresh(user)
+        return user
+
+    def update_password(self, user: models.User, new_password: str):
+        """Обновить пароль"""
+        user.hashed_password = auth.get_password_hash(new_password)
