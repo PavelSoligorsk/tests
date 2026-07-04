@@ -269,3 +269,109 @@ def assign_test_to_group(
         raise HTTPException(status_code=404, detail=str(e))
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
+    
+# ==================== УПРАВЛЕНИЕ ГРУППАМИ ====================
+
+@router.get("/groups/")
+def get_my_groups(
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Получить все группы учителя"""
+    return service.get_my_groups(current_teacher.id)
+
+
+@router.post("/groups/")
+def create_group(
+    payload: dict,
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Создать новую группу"""
+    try:
+        return service.create_group(
+            name=payload.get("name", "").strip(),
+            description=payload.get("description"),
+            teacher_id=current_teacher.id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.put("/groups/{group_id}")
+def update_group(
+    group_id: int,
+    payload: dict,
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Обновить группу"""
+    try:
+        return service.update_group(
+            group_id=group_id,
+            teacher_id=current_teacher.id,
+            name=payload.get("name", "").strip(),
+            description=payload.get("description")
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.delete("/groups/{group_id}")
+def delete_group(
+    group_id: int,
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Удалить группу"""
+    try:
+        return service.delete_group(group_id, current_teacher.id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/groups/{group_id}/students")
+def add_students_to_group(
+    group_id: int,
+    payload: dict,
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Добавить студентов в группу"""
+    try:
+        return service.add_students_to_group(
+            group_id=group_id,
+            teacher_id=current_teacher.id,
+            student_ids=payload.get("student_ids", [])
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.delete("/groups/{group_id}/students/{student_id}")
+def remove_student_from_group(
+    group_id: int,
+    student_id: int,
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Удалить студента из группы"""
+    try:
+        return service.remove_student_from_group(group_id, student_id, current_teacher.id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/groups/{group_id}/students")
+def get_group_students(
+    group_id: int,
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Получить список студентов группы"""
+    try:
+        return service.get_group_students(group_id, current_teacher.id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
