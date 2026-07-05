@@ -189,7 +189,7 @@ def get_teacher_detailed_result(
 
 # ==================== НАЗНАЧЕНИЕ ТЕСТОВ ====================
 
-@router.post("/assign-test", response_model=List[dto.TestAssignmentResponse])
+@router.post("/assign-test")
 def assign_test_to_students(
     assignment: dto.TestAssignmentCreate,
     service: TeacherService = Depends(get_teacher_service),

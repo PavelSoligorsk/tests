@@ -30,3 +30,17 @@ class GroupRepository:
         if not group:
             return []
         return [s.id for s in group.students]
+    
+    def remove_student(self, group: models.Group, student_id: int) -> bool:
+        """Удалить студента из группы"""
+        link = self.db.query(models.GroupStudent).filter(
+            models.GroupStudent.group_id == group.id,
+            models.GroupStudent.student_id == student_id
+        ).first()
+        
+        if not link:
+            return False
+        
+        self.db.delete(link)
+        self.db.commit()
+        return True

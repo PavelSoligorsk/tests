@@ -255,7 +255,7 @@ class TeacherService:
         for assignment in created_assignments:
             student = self.user_repo.get_user_by_id(assignment.user_id)
             result.append({
-                "id": assignment.id,
+                "id": assignment.id if assignment.id else 0,
                 "test_id": assignment.test_id,
                 "test_title": test.title,
                 "user_id": assignment.user_id,
