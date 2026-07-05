@@ -4,6 +4,7 @@ import models
 import auth  # ← ДОБАВИТЬ
 from typing import List  # ← ДОБАВИТЬ В НАЧАЛО ФАЙЛА
 
+
 class UserRepository:
     def __init__(self, db: Session):
         self.db = db
