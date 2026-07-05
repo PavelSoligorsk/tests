@@ -213,11 +213,11 @@ class TeacherService:
             raise PermissionError("У вас нет доступа к этому ученику")
         
         return self._format_detailed_result(result)
-    
+
     # ==================== НАЗНАЧЕНИЕ ТЕСТОВ ====================
     
     def assign_test(self, test_id: int, teacher_id: int, user_ids: List[int],
-                    due_date=None, role: str = "teacher"):
+                due_date=None, role: str = "teacher"):
         """Назначить тест студентам"""
         test = self.test_repo.get_test_by_id(test_id)
         if not test:
@@ -226,17 +226,14 @@ class TeacherService:
         if role == "teacher" and test.creator_id != teacher_id:
             raise PermissionError("Вы не можете назначать этот тест")
         
-        # Проверяем студентов
         students = self.teacher_student_repo.get_students_by_ids(user_ids)
         if len(students) != len(user_ids):
             raise ValueError("Некоторые пользователи не найдены или не являются студентами")
         
-        # Проверяем принадлежность студентов учителю
         missing = self.teacher_student_repo.check_students_belong_to_teacher(user_ids, teacher_id)
         if missing:
             raise PermissionError(f"Вы не можете назначать тесты студентам: {missing}")
         
-        # Создаём назначения
         created_assignments = []
         for user_id in user_ids:
             existing = self.assignment_repo.check_existing_assignment(test_id, user_id)
@@ -250,7 +247,12 @@ class TeacherService:
             )
             created_assignments.append(assignment)
         
-        # Формируем результат
+        # 🔥 ВОТ ЭТО ВАЖНО - КОММИТ!
+        if created_assignments:
+            self.assignment_repo.db.commit()
+            for a in created_assignments:
+                self.assignment_repo.db.refresh(a)
+        
         result = []
         for assignment in created_assignments:
             student = self.user_repo.get_user_by_id(assignment.user_id)
@@ -262,7 +264,7 @@ class TeacherService:
                 "student_name": f"{student.first_name} {student.last_name}" if student else "Неизвестный",
                 "assigned_at": assignment.assigned_at,
                 "due_date": assignment.due_date,
-                "is_completed": assignment.is_completed,
+                "is_completed": assignment.is_completed if assignment.is_completed is not None else False,
                 "completed_at": assignment.completed_at
             })
         
