@@ -385,7 +385,7 @@ class TeacherService:
         return {"message": "Назначение удалено"}
     
     def assign_test_to_group(self, group_id: int, test_id: int, teacher_id: int,
-                            due_date=None, role: str = "teacher"):
+                        due_date=None, role: str = "teacher"):
         """Назначить тест всей группе"""
         group = self.group_repo.get_group_by_id(group_id, teacher_id)
         if not group:
@@ -415,6 +415,10 @@ class TeacherService:
                 group_id=group.id
             )
             created += 1
+        
+        # 🔥 ДОБАВЬ ЭТО:
+        if created > 0:
+            self.assignment_repo.db.commit()
         
         return {
             "message": f"Тест назначен {created} студентам группы '{group.name}'",
