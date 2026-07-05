@@ -188,6 +188,18 @@ def ask_ai_about_theory(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка AI: {str(e)}")
 
+@router.get("/theory/by-topic/{topic}/section/{section}")
+def get_theory_by_topic_section(
+    topic: str,
+    section: str,
+    service: StudentService = Depends(get_student_service),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """Получить теорию по теме и разделу"""
+    try:
+        return service.get_theory_by_topic_section(topic, section)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 @router.post("/generate-test")
 def generate_ai_test(

@@ -506,6 +506,13 @@ class StudentService:
         
         return result
 
+    def get_theory_by_topic_section(self, topic: str, section: str):
+        """Получить теорию по теме и разделу"""
+        theory = self.theory_repo.get_theory_by_topic_and_section(topic, section)
+        if not theory:
+            raise ValueError(f"Теория для темы '{topic}' и раздела '{section}' не найдена")
+        return theory
+
     def _check_answer(self, task, user_answer) -> bool:
         """Проверить правильность ответа"""
         if not task.is_open_answer and isinstance(user_answer, list):
