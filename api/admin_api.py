@@ -289,3 +289,26 @@ async def send_task_to_tg(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    
+@router.post("/rebuild-all-static-tests")
+def rebuild_all_static_tests(
+    service: AdminService = Depends(get_admin_service),
+    current_admin: models.User = Depends(auth.check_admin)
+):
+    """Пересборка всех статических тестов"""
+    try:
+        return service.rebuild_all_static_tests(current_admin.id)
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    
+@router.get("/{task_id}", response_model=dto.TaskResponse)
+def get_task_short(
+    task_id: int,
+    service: AdminService = Depends(get_admin_service),
+    current_admin: models.User = Depends(auth.check_admin)
+):
+    """Короткая ссылка на задание (для совместимости с админкой)"""
+    try:
+        return service.get_task(task_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail="Task not found")

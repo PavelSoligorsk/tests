@@ -77,6 +77,7 @@ class TestRepository:
             return None
         
         try:
+            # 1. Сначала удаляем ответы пользователей
             result_ids = self.db.query(models.TestResult.id).filter(
                 models.TestResult.test_id == test_id
             ).all()
@@ -87,18 +88,21 @@ class TestRepository:
                     models.UserAnswer.result_id.in_(result_ids)
                 ).delete(synchronize_session=False)
             
+            # 2. Удаляем результаты
             self.db.query(models.TestResult).filter(
                 models.TestResult.test_id == test_id
-            ).delete()
+            ).delete(synchronize_session=False)
             
+            # 3. Удаляем назначения
             self.db.query(models.TestAssignment).filter(
                 models.TestAssignment.test_id == test_id
-            ).delete()
+            ).delete(synchronize_session=False)
             
-            self.db.query(models.TestTaskAssociation).filter(
-                models.TestTaskAssociation.test_id == test_id
-            ).delete()
+            # 4. 🔥 Очищаем связи с задачами ПЕРЕД удалением теста
+            test.tasks = []  # ← Это очистит test_task_association
+            self.db.flush()
             
+            # 5. Удаляем сам тест
             self.db.delete(test)
             self.db.commit()
             return test

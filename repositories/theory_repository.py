@@ -4,6 +4,24 @@ import models
 class TheoryRepository:
     def __init__(self, db: Session):
         self.db = db
+
+    def create_theory(self, theory_data: dict):
+        new_theory = models.Theory(**theory_data)
+        self.db.add(new_theory)
+        self.db.commit()
+        self.db.refresh(new_theory)
+        return new_theory
+
+    def update_theory(self, theory: models.Theory, update_data: dict):
+        for key, value in update_data.items():
+            setattr(theory, key, value)
+        self.db.commit()
+        self.db.refresh(theory)
+        return theory
+
+    def delete_theory(self, theory: models.Theory):
+        self.db.delete(theory)
+        self.db.commit()
     
     def get_all_topics(self):
         return self.db.query(models.Theory.topic).distinct().all()

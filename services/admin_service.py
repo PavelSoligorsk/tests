@@ -424,6 +424,175 @@ class AdminService:
             except httpx.RequestError as e:
                 raise Exception(f"Не удалось связаться с рендер-ботом: {str(e)}")
     
+    def rebuild_all_static_tests(self, admin_id: int):
+        """
+        🔄 Пересобрать статические (автособранные) тесты.
+        """
+        try:
+            # ========== 1. Собираем актуальные категории из задач ==========
+            active_categories = self.db.query(
+                models.Task.task_class, 
+                models.Task.topic_number
+            ).distinct().all()
+            
+            updated_test_ids = []
+
+            for t_class, t_num in active_categories:
+                t_class_str = str(t_class)
+                t_num_str = str(t_num)
+                
+                test = self.db.query(models.Test).filter(
+                    models.Test.target_class == t_class_str,
+                    models.Test.target_topic == t_num_str,
+                    models.Test.is_autocompile == True,
+                    models.Test.is_ai_generated == False,
+                    models.Test.creator_id == admin_id
+                ).first()
+
+                if not test:
+                    test = models.Test(
+                        title=f"Тест: {t_class_str} класс, Тема {t_num_str}",
+                        target_class=t_class_str,
+                        target_topic=t_num_str,
+                        is_autocompile=True,
+                        is_ai_generated=False,
+                        creator_id=admin_id,
+                        is_active=True
+                    )
+                    self.db.add(test)
+                    self.db.flush()
+
+                relevant_tasks = self.db.query(models.Task).filter(
+                    models.Task.task_class == t_class,
+                    models.Task.topic_number == t_num
+                ).order_by(
+                    models.Task.is_open_answer.asc(),
+                    models.Task.difficulty.asc()
+                ).all()
+
+                test.tasks = relevant_tasks
+                updated_test_ids.append(test.id)
+
+            self.db.flush()
+
+            # ========== 2. Удаляем старые автотесты админа ==========
+            deleted_count = 0
+            if updated_test_ids:
+                bad_tests_query = self.db.query(models.Test.id).filter(
+                    models.Test.id.not_in(updated_test_ids),
+                    models.Test.is_autocompile == True,
+                    models.Test.is_ai_generated == False,
+                    models.Test.creator_id == admin_id
+                )
+
+                empty_tests = self.db.query(models.Test.id).filter(
+                    ~models.Test.tasks.any(),
+                    models.Test.id.not_in(updated_test_ids),
+                    models.Test.is_autocompile == True,
+                    models.Test.is_ai_generated == False,
+                    models.Test.creator_id == admin_id
+                ).all()
+
+                bad_test_ids = [t[0] for t in bad_tests_query.all()]
+                bad_test_ids.extend([t[0] for t in empty_tests])
+                bad_test_ids = list(set(bad_test_ids))
+
+                if bad_test_ids:
+                    bad_result_ids = [
+                        r[0] for r in self.db.query(models.TestResult.id)
+                        .filter(models.TestResult.test_id.in_(bad_test_ids))
+                        .all()
+                    ]
+
+                    if bad_result_ids:
+                        self.db.query(models.UserAnswer).filter(
+                            models.UserAnswer.result_id.in_(bad_result_ids)
+                        ).delete(synchronize_session=False)
+                        
+                        self.db.query(models.TestResult).filter(
+                            models.TestResult.id.in_(bad_result_ids)
+                        ).delete(synchronize_session=False)
+
+                    self.db.query(models.TestTaskAssociation).filter(
+                        models.TestTaskAssociation.test_id.in_(bad_test_ids)
+                    ).delete(synchronize_session=False)
+
+                    self.db.query(models.TestAssignment).filter(
+                        models.TestAssignment.test_id.in_(bad_test_ids)
+                    ).delete(synchronize_session=False)
+
+                    deleted_count = self.db.query(models.Test).filter(
+                        models.Test.id.in_(bad_test_ids)
+                    ).delete(synchronize_session=False)
+
+            # ========== 3. Перепроверка ответов ==========
+            rechecked_answers_count = 0
+            rechecked_results_count = 0
+            
+            all_tasks = self.db.query(models.Task).all()
+            tasks_lookup = {task.id: task for task in all_tasks}
+            
+            if tasks_lookup:
+                user_answers = self.db.query(models.UserAnswer).all()
+                results_to_update = set()
+                
+                for ua in user_answers:
+                    task = tasks_lookup.get(ua.task_id)
+                    if not task:
+                        continue
+                    
+                    was_correct = ua.is_correct
+                    old_points = ua.points_earned
+                    is_correct_now = False
+                    
+                    user_ans_str = str(ua.user_text_answer).strip().lower() if ua.user_text_answer else ""
+                    task_ans_str = str(task.answer).strip().lower() if task.answer else ""
+                    
+                    if user_ans_str and task_ans_str:
+                        is_correct_now = (user_ans_str == task_ans_str)
+                    
+                    new_points = 2 if (is_correct_now and task.is_open_answer) else (1 if is_correct_now else 0)
+                    
+                    if was_correct != is_correct_now or old_points != new_points:
+                        ua.is_correct = is_correct_now
+                        ua.points_earned = new_points
+                        rechecked_answers_count += 1
+                        results_to_update.add(ua.result_id)
+
+                if results_to_update:
+                    from sqlalchemy.orm import joinedload
+                    dirty_results = self.db.query(models.TestResult).options(
+                        joinedload(models.TestResult.answers)
+                    ).filter(models.TestResult.id.in_(list(results_to_update))).all()
+                    
+                    for result in dirty_results:
+                        old_total = result.total_points
+                        new_total = sum(answer.points_earned for answer in result.answers)
+                        
+                        if old_total != new_total:
+                            result.total_points = new_total
+                            rechecked_results_count += 1
+
+            self.db.commit()
+            
+            return {
+                "status": "success",
+                "message": (
+                    f"Успешно синхронизировано {len(updated_test_ids)} тестов. "
+                    f"Удалено устаревших автотестов: {deleted_count}. "
+                    f"Принудительно перепроверено ответов: {rechecked_answers_count}. "
+                    f"Обновлено оценок в результатах: {rechecked_results_count}."
+                ),
+                "updated_test_ids": updated_test_ids,
+                "deleted_count": deleted_count,
+                "rechecked_answers_count": rechecked_answers_count,
+                "rechecked_results_count": rechecked_results_count
+            }
+
+        except Exception as e:
+            self.db.rollback()
+            raise Exception(f"Database Error: {str(e)}")
+
     def _parse_correct_option_ids(self, task_answer: str, render_options: list) -> list:
         correct_option_ids = []
         raw_answers = str(task_answer).strip()
