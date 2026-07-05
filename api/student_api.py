@@ -159,6 +159,18 @@ def get_theory_by_topic(
         raise HTTPException(status_code=404, detail=str(e))
 
 
+@router.get("/theory/sections/{topic}")
+def get_theory_sections(
+    topic: str,
+    service: StudentService = Depends(get_student_service),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """Получить все разделы по теме"""
+    try:
+        return service.get_theory_sections(topic)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 @router.post("/theory/ask-ai")
 def ask_ai_about_theory(
     request: dict,

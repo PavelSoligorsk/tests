@@ -491,6 +491,21 @@ class StudentService:
         
         return self.test_repo.create_test(test_data, sorted_tasks)
     
+    def get_theory_sections(self, topic: str):
+        """Получить все разделы по теме"""
+        theories = self.theory_repo.get_theory_by_topic(topic)
+        if not theories:
+            raise ValueError(f"Теория для темы '{topic}' не найдена")
+        
+        result = []
+        for theory in theories:
+            result.append({
+                "section": theory.section,
+                "theory_id": theory.id
+            })
+        
+        return result
+
     def _check_answer(self, task, user_answer) -> bool:
         """Проверить правильность ответа"""
         if not task.is_open_answer and isinstance(user_answer, list):
