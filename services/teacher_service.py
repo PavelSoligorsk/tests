@@ -628,33 +628,21 @@ class TeacherService:
         return tasks
     
     def get_tasks_meta(self):
-        """Получить метаинформацию о заданиях (без контента)"""
+        """Получить метаинформацию: { task_class: { topic_number: count } }"""
         tasks = self.task_repo.get_all_tasks()
         result = {}
         for task in tasks:
             cls = str(task.task_class)
-            topic = task.topic or "Без темы"
-            section = task.section or "Без раздела"
+            topic_num = str(task.topic_number)
             
             if cls not in result:
                 result[cls] = {}
-            if topic not in result[cls]:
-                result[cls][topic] = {"sections": set(), "count": 0}
+            if topic_num not in result[cls]:
+                result[cls][topic_num] = 0
             
-            result[cls][topic]["sections"].add(section)
-            result[cls][topic]["count"] += 1
+            result[cls][topic_num] += 1
         
-        # Преобразуем sets в списки
-        output = {}
-        for cls, topics in result.items():
-            output[cls] = {}
-            for topic, data in topics.items():
-                output[cls][topic] = {
-                    "sections": list(data["sections"]),
-                    "count": data["count"]
-                }
-        
-        return output
+        return result
 
 
 class PermissionError(Exception):
