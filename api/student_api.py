@@ -233,3 +233,11 @@ def get_my_assignments_meta(
 ):
     """Получить метаинформацию о назначенных тестах"""
     return service.get_assignments_meta(current_user.id)
+
+@router.get("/ai-tests")
+def get_my_ai_tests(
+    service: StudentService = Depends(get_student_service),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """Получить AI-тесты студента (в том числе недопройденные)"""
+    return service.get_ai_tests(current_user.id)

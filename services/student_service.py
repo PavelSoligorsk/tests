@@ -552,6 +552,30 @@ class StudentService:
                 "assigned_at": assignment.assigned_at
             })
         return result
+    
+    def get_ai_tests(self, user_id: int):
+        """Получить AI-тесты студента (созданные им и недопройденные)"""
+        tests = self.test_repo.get_ai_tests_by_user(user_id)
+        
+        result = []
+        for test in tests:
+            # Проверяем, есть ли незавершённые попытки
+            has_incomplete = self.result_repo.has_incomplete_attempt(user_id, test.id)
+            
+            result.append({
+                "id": test.id,
+                "title": test.title,
+                "target_class": test.target_class,
+                "target_topic": test.target_topic,
+                "is_ai_generated": True,
+                "tasks_count": len(test.tasks) if test.tasks else 0,
+                "is_active": test.is_active,
+                "is_completed": not has_incomplete,  # true если нет незавершённых
+                "has_incomplete_attempt": has_incomplete,  # можно продолжить
+                "created_at": test.created_at if hasattr(test, 'created_at') else None
+            })
+        
+        return result
 
     def _check_answer(self, task, user_answer) -> bool:
         """Проверить правильность ответа"""

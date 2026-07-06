@@ -67,3 +67,12 @@ class ResultRepository:
                     models.Task.topic_number == topic_number
                 ).all()
         return []
+    
+    def has_incomplete_attempt(self, user_id: int, test_id: int) -> bool:
+        """Проверить, есть ли незавершённая попытка (result без completed_at)"""
+        result = self.db.query(models.TestResult).filter(
+            models.TestResult.user_id == user_id,
+            models.TestResult.test_id == test_id,
+            models.TestResult.completed_at == None
+        ).first()
+        return result is not None

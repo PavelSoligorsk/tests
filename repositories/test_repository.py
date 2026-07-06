@@ -143,3 +143,10 @@ class TestRepository:
                 else:
                     max_points += 2
         return max_points
+    
+    def get_ai_tests_by_user(self, user_id: int):
+        """Получить AI-тесты, созданные пользователем"""
+        return self.db.query(models.Test).filter(
+            models.Test.creator_id == user_id,
+            models.Test.is_ai_generated == True
+        ).order_by(models.Test.id.desc()).all()
