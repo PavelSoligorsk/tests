@@ -153,3 +153,13 @@ class TaskRepository:
             models.Task.is_open_answer.asc(),
             models.Task.difficulty.asc()
         ).all()
+    
+    def get_tasks_by_topic_and_section(self, topic: str, section: str):
+        """Получить задания по теме и разделу"""
+        return self.db.query(models.Task).filter(
+            models.Task.topic == topic,
+            models.Task.section == section
+        ).order_by(
+            models.Task.is_open_answer.asc(),
+            models.Task.difficulty.asc()
+        ).all()

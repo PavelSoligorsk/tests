@@ -375,3 +375,36 @@ def get_group_students(
         return service.get_group_students(group_id, current_teacher.id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    
+@router.get("/tasks/by-topic/{topic}/section/{section}")
+def get_tasks_by_topic_section(
+    topic: str,
+    section: str,
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Получить задания по теме и разделу (ленивая загрузка)"""
+    return service.get_tasks_by_topic_section(topic, section)
+
+
+@router.get("/tests/{test_id}/tasks")
+def get_test_tasks(
+    test_id: int,
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Получить только задания теста (без метаинформации)"""
+    try:
+        return service.get_test_tasks(test_id, current_teacher.id, current_teacher.role)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+    
+@router.get("/tasks-meta")
+def get_tasks_meta(
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Получить только структуру заданий (классы, темы, разделы) без содержимого"""
+    return service.get_tasks_meta()

@@ -596,6 +596,65 @@ class TeacherService:
             }
             for s in group.students
         ]
+    
+    def get_tasks_by_topic_section(self, topic: str, section: str):
+        """Получить задания по теме и разделу"""
+        return self.task_repo.get_tasks_by_topic_and_section(topic, section)
+
+    def get_test_tasks(self, test_id: int, teacher_id: int, role: str):
+        """Получить задания теста (для ленивой загрузки)"""
+        test = self.test_repo.get_test_with_tasks(test_id)
+        if not test:
+            raise ValueError("Тест не найден")
+        if role == "teacher" and test.creator_id != teacher_id:
+            raise PermissionError("У вас нет доступа к этому тесту")
+        
+        tasks = []
+        for task in test.tasks:
+            tasks.append({
+                "id": task.id,
+                "content": task.content,
+                "options": task.options,
+                "answer": task.answer,
+                "hint": task.hint,
+                "solution": task.solution,
+                "is_open_answer": task.is_open_answer,
+                "difficulty": task.difficulty,
+                "topic": task.topic,
+                "section": task.section,
+                "topic_number": task.topic_number,
+                "task_class": task.task_class
+            })
+        return tasks
+    
+    def get_tasks_meta(self):
+        """Получить метаинформацию о заданиях (без контента)"""
+        tasks = self.task_repo.get_all_tasks()
+        result = {}
+        for task in tasks:
+            cls = str(task.task_class)
+            topic = task.topic or "Без темы"
+            section = task.section or "Без раздела"
+            
+            if cls not in result:
+                result[cls] = {}
+            if topic not in result[cls]:
+                result[cls][topic] = {"sections": set(), "count": 0}
+            
+            result[cls][topic]["sections"].add(section)
+            result[cls][topic]["count"] += 1
+        
+        # Преобразуем sets в списки
+        output = {}
+        for cls, topics in result.items():
+            output[cls] = {}
+            for topic, data in topics.items():
+                output[cls][topic] = {
+                    "sections": list(data["sections"]),
+                    "count": data["count"]
+                }
+        
+        return output
 
 
 class PermissionError(Exception):
