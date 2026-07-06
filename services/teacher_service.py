@@ -643,6 +643,11 @@ class TeacherService:
             result[cls][topic_num] += 1
         
         return result
+    
+    def get_tasks_by_class_and_topic(self, task_class: str, topic_number: str):
+        return self.task_repo.get_tasks_by_class_and_topic(task_class, topic_number)
+    
+    
 
 
 class PermissionError(Exception):

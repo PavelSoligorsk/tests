@@ -408,3 +408,13 @@ def get_tasks_meta(
 ):
     """Получить только структуру заданий (классы, темы, разделы) без содержимого"""
     return service.get_tasks_meta()
+
+@router.get("/tasks/by-class/{task_class}/topic/{topic_number}")
+def get_tasks_by_class_and_topic(
+    task_class: str,
+    topic_number: str,
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Получить задания по классу и номеру темы"""
+    return service.get_tasks_by_class_and_topic(task_class, topic_number)
