@@ -40,6 +40,15 @@ def get_tasks_grouped(
 ):
     return service.get_tasks_grouped()
 
+@router.get("/tasks/by-class-topic")
+def get_tasks_by_class_and_topic_query(
+    task_class: str = Query(...),
+    topic_number: str = Query(...),
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Получить задания по классу и номеру темы (query-параметры)"""
+    return service.get_tasks_by_class_and_topic(task_class, topic_number)
 
 @router.get("/tasks/{task_id}", response_model=dto.TaskResponse)
 def get_single_task(
@@ -419,12 +428,3 @@ def get_tasks_by_class_and_topic(
     """Получить задания по классу и номеру темы"""
     return service.get_tasks_by_class_and_topic(task_class, topic_number)
 
-@router.get("/tasks/by-class-topic")
-def get_tasks_by_class_and_topic_query(
-    task_class: str = Query(...),
-    topic_number: str = Query(...),
-    service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
-):
-    """Получить задания по классу и номеру темы (query-параметры)"""
-    return service.get_tasks_by_class_and_topic(task_class, topic_number)
