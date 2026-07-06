@@ -418,3 +418,13 @@ def get_tasks_by_class_and_topic(
 ):
     """Получить задания по классу и номеру темы"""
     return service.get_tasks_by_class_and_topic(task_class, topic_number)
+
+@router.get("/tasks/by-class-topic")
+def get_tasks_by_class_and_topic_query(
+    task_class: str = Query(...),
+    topic_number: str = Query(...),
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Получить задания по классу и номеру темы (query-параметры)"""
+    return service.get_tasks_by_class_and_topic(task_class, topic_number)
