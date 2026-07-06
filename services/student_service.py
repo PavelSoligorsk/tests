@@ -512,6 +512,46 @@ class StudentService:
         if not theory:
             raise ValueError(f"Теория для темы '{topic}' и раздела '{section}' не найдена")
         return theory
+    
+    def get_available_tests_meta(self):
+        """Получить метаинформацию о тестах без заданий"""
+        tests = self.test_repo.get_available_tests_meta()
+        result = []
+        for test in tests:
+            result.append({
+                "id": test.id,
+                "title": test.title,
+                "target_class": test.target_class,
+                "target_topic": test.target_topic,
+                "is_autocompile": test.is_autocompile,
+                "is_ai_generated": test.is_ai_generated,
+                "tasks_count": len(test.tasks) if test.tasks else 0,
+                "is_active": test.is_active
+            })
+        return result
+    
+    def get_assignments_meta(self, user_id: int):
+        
+        """Получить метаинформацию о назначенных тестах"""
+        assignments = self.assignment_repo.get_user_assignments(user_id)
+        result = []
+        for assignment in assignments:
+            test = self.test_repo.get_test_by_id(assignment.test_id)
+            if not test:
+                continue
+            result.append({
+                "assignment_id": assignment.id,
+                "test_id": assignment.test_id,
+                "test_title": test.title,
+                "target_class": test.target_class,
+                "target_topic": test.target_topic,
+                "is_autocompile": test.is_autocompile,
+                "tasks_count": len(test.tasks) if test.tasks else 0,
+                "due_date": assignment.due_date,
+                "is_completed": assignment.is_completed,
+                "assigned_at": assignment.assigned_at
+            })
+        return result
 
     def _check_answer(self, task, user_answer) -> bool:
         """Проверить правильность ответа"""

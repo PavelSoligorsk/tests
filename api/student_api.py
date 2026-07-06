@@ -218,3 +218,18 @@ def generate_ai_test(
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Ошибка генерации теста: {str(e)}")
+    
+@router.get("/tests-meta")
+def get_student_tests_meta(
+    service: StudentService = Depends(get_student_service)
+):
+    """Получить только метаинформацию о тестах (без заданий)"""
+    return service.get_available_tests_meta()
+
+@router.get("/my-assignments-meta")
+def get_my_assignments_meta(
+    service: StudentService = Depends(get_student_service),
+    current_user: models.User = Depends(auth.get_current_user)
+):
+    """Получить метаинформацию о назначенных тестах"""
+    return service.get_assignments_meta(current_user.id)

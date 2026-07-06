@@ -110,6 +110,15 @@ class TestRepository:
             self.db.rollback()
             raise e
 
+
+    def get_available_tests_meta(self):
+        """Получить доступные тесты без загрузки заданий"""
+        return self.db.query(models.Test).filter(
+            models.Test.is_active == True,
+            (models.Test.is_autocompile == True) | (models.Test.is_autocompile == None)
+        ).all()
+
+
     def check_test_owner(self, test_id: int, teacher_id: int):
         """Проверить владельца теста"""
         test = self.get_test_by_id(test_id)
