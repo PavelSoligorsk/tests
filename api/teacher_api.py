@@ -428,3 +428,11 @@ def get_tasks_by_class_and_topic(
     """Получить задания по классу и номеру темы"""
     return service.get_tasks_by_class_and_topic(task_class, topic_number)
 
+@router.get("/tasks-meta-by-topic-section")
+def get_tasks_meta_by_topic_section(
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: models.User = Depends(check_teacher)
+):
+    """Получить структуру: { topic: { section: count } }"""
+    return service.get_tasks_meta_by_topic_section()
+

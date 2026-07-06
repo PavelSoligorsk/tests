@@ -647,7 +647,26 @@ class TeacherService:
     def get_tasks_by_class_and_topic(self, task_class: str, topic_number: str):
         return self.task_repo.get_tasks_by_class_and_topic(task_class, topic_number)
     
+    def get_tasks_meta_by_topic_section(self):
+        """Получить метаинформацию по topic и section: { topic: { section: count } }"""
+        tasks = self.task_repo.get_all_tasks()
+        result = {}
+        
+        for task in tasks:
+            topic = task.topic or "Без темы"
+            section = task.section or "Без раздела"
+            
+            if topic not in result:
+                result[topic] = {}
+            if section not in result[topic]:
+                result[topic][section] = 0
+            
+            result[topic][section] += 1
+        
+        return result
     
+
+
 
 
 class PermissionError(Exception):
