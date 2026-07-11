@@ -7,7 +7,7 @@ from typing import List, Dict, Optional
 class AIService:
     def __init__(self):
         self.client = Mistral(api_key=os.getenv("MISTRAL_TOKEN"))
-        self.model = "ministral-8b-2512"
+        self.model = "ministral-14b-2512"
     
     def _chat_completion(self, system_prompt: str, user_prompt: str, temperature: float = 0.7, max_tokens: int = 800) -> str:
         """Базовый метод для отправки запросов в Mistral"""
