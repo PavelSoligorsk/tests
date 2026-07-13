@@ -155,11 +155,27 @@ class TaskRepository:
         ).all()
     
     def get_tasks_by_topic_and_section(self, topic: str, section: str):
-        """Получить задания по теме и разделу"""
-        return self.db.query(models.Task).filter(
-            models.Task.topic == topic,
-            models.Task.section == section
-        ).order_by(
+        """Получить задания по теме и разделу, обрабатывая NULL-значения."""
+        query = self.db.query(models.Task)
+
+        # Обработка темы
+        if topic == "Без темы":
+            # Ищем задания, у которых topic IS NULL или пустая строка
+            query = query.filter(
+                (models.Task.topic.is_(None)) | (models.Task.topic == '')
+            )
+        else:
+            query = query.filter(models.Task.topic == topic)
+
+        # Обработка раздела
+        if section == "Без раздела":
+            query = query.filter(
+                (models.Task.section.is_(None)) | (models.Task.section == '')
+            )
+        else:
+            query = query.filter(models.Task.section == section)
+
+        return query.order_by(
             models.Task.is_open_answer.asc(),
             models.Task.difficulty.asc()
         ).all()
