@@ -144,7 +144,22 @@ class AdminService:
         task = self.task_repo.get_task_by_id(task_id)
         if not task:
             raise ValueError("Задание не найдено")
-        return self.task_repo.update_task(task, update_data)
+
+        # Обновляем атрибуты (без коммита)
+        for key, value in update_data.items():
+            setattr(task, key, value)
+
+        self.db.flush()  # сохраняем изменения в БД, но не коммитим
+
+        # Пересчитываем ответы и результаты для этого задания
+        recompute_stats = self._recompute_answers_for_task(task)
+
+        self.db.commit()
+
+        return {
+            "message": "Задание обновлено",
+            "recomputed": recompute_stats
+        }
     
     def get_tasks(self):
         return self.task_repo.get_all_tasks()
@@ -525,74 +540,22 @@ class AdminService:
                         models.Test.id.in_(bad_test_ids)
                     ).delete(synchronize_session=False)
 
-            # ========== 3. Перепроверка ответов ==========
-            rechecked_answers_count = 0
-            rechecked_results_count = 0
-            
-            all_tasks = self.db.query(models.Task).all()
-            tasks_lookup = {task.id: task for task in all_tasks}
-            
-            if tasks_lookup:
-                user_answers = self.db.query(models.UserAnswer).all()
-                results_to_update = set()
-                
-                for ua in user_answers:
-                    task = tasks_lookup.get(ua.task_id)
-                    if not task:
-                        continue
-                    
-                    was_correct = ua.is_correct
-                    old_points = ua.points_earned
-                    is_correct_now = False
-                    
-                    user_ans_str = str(ua.user_text_answer).strip().lower() if ua.user_text_answer else ""
-                    task_ans_str = str(task.answer).strip().lower() if task.answer else ""
-                    
-                    if user_ans_str and task_ans_str:
-                        is_correct_now = (user_ans_str == task_ans_str)
-                    
-                    new_points = 2 if (is_correct_now and task.is_open_answer) else (1 if is_correct_now else 0)
-                    
-                    if was_correct != is_correct_now or old_points != new_points:
-                        ua.is_correct = is_correct_now
-                        ua.points_earned = new_points
-                        rechecked_answers_count += 1
-                        results_to_update.add(ua.result_id)
-
-                if results_to_update:
-                    from sqlalchemy.orm import joinedload
-                    dirty_results = self.db.query(models.TestResult).options(
-                        joinedload(models.TestResult.answers)
-                    ).filter(models.TestResult.id.in_(list(results_to_update))).all()
-                    
-                    for result in dirty_results:
-                        old_total = result.total_points
-                        new_total = sum(answer.points_earned for answer in result.answers)
-                        
-                        if old_total != new_total:
-                            result.total_points = new_total
-                            rechecked_results_count += 1
-
             self.db.commit()
             
             return {
                 "status": "success",
                 "message": (
                     f"Успешно синхронизировано {len(updated_test_ids)} тестов. "
-                    f"Удалено устаревших автотестов: {deleted_count}. "
-                    f"Принудительно перепроверено ответов: {rechecked_answers_count}. "
-                    f"Обновлено оценок в результатах: {rechecked_results_count}."
+                    f"Удалено устаревших автотестов: {deleted_count}."
                 ),
                 "updated_test_ids": updated_test_ids,
-                "deleted_count": deleted_count,
-                "rechecked_answers_count": rechecked_answers_count,
-                "rechecked_results_count": rechecked_results_count
+                "deleted_count": deleted_count
             }
 
         except Exception as e:
             self.db.rollback()
             raise Exception(f"Database Error: {str(e)}")
-
+        
     def _parse_correct_option_ids(self, task_answer: str, render_options: list) -> list:
         correct_option_ids = []
         raw_answers = str(task_answer).strip()
@@ -620,3 +583,61 @@ class AdminService:
             correct_option_ids.append(0)
         
         return sorted(correct_option_ids)
+    
+    def _recompute_answers_for_task(self, task: models.Task):
+        """
+        Пересчитывает правильность и баллы для всех UserAnswer, привязанных к task,
+        и обновляет total_points в соответствующих TestResult.
+        Возвращает статистику: сколько обновлено ответов и результатов.
+        """
+        if not task:
+            return {"answers_updated": 0, "results_updated": 0}
+
+        # Получаем все ответы на это задание
+        user_answers = self.db.query(models.UserAnswer).filter(
+            models.UserAnswer.task_id == task.id
+        ).all()
+
+        if not user_answers:
+            return {"answers_updated": 0, "results_updated": 0}
+
+        result_ids = set()
+        answers_updated = 0
+
+        for ua in user_answers:
+            # Определяем, правильный ли ответ сейчас
+            is_correct_now = False
+            user_ans_str = str(ua.user_text_answer).strip().lower() if ua.user_text_answer else ""
+            task_ans_str = str(task.answer).strip().lower() if task.answer else ""
+
+            if user_ans_str and task_ans_str:
+                # Для закрытых заданий (is_open_answer=False) сравниваем с эталоном
+                # Для открытых – точное совпадение (можно усложнить, но пока так)
+                is_correct_now = (user_ans_str == task_ans_str)
+
+            # Вычисляем баллы: 2 за открытый правильный, 1 за закрытый правильный, иначе 0
+            new_points = 0
+            if is_correct_now:
+                new_points = 2 if task.is_open_answer else 1
+
+            if ua.is_correct != is_correct_now or ua.points_earned != new_points:
+                ua.is_correct = is_correct_now
+                ua.points_earned = new_points
+                answers_updated += 1
+                result_ids.add(ua.result_id)
+
+        # Обновляем total_points для всех затронутых результатов
+        results_updated = 0
+        if result_ids:
+            from sqlalchemy.orm import joinedload
+            results = self.db.query(models.TestResult).options(
+                joinedload(models.TestResult.answers)
+            ).filter(models.TestResult.id.in_(list(result_ids))).all()
+
+            for result in results:
+                new_total = sum(ans.points_earned for ans in result.answers)
+                if result.total_points != new_total:
+                    result.total_points = new_total
+                    results_updated += 1
+
+        return {"answers_updated": answers_updated, "results_updated": results_updated}
