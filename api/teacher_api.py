@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import models, dto, auth
-from database import get_db
+from core.database import get_db
 from services.teacher_service import TeacherService, PermissionError
 
 router = APIRouter(prefix="/teacher", tags=["Teacher API"])

@@ -1,6 +1,6 @@
 from fastapi import FastAPI, Response
 import models
-from database import engine
+from core.database import engine
 
 from api.auth_api import router as auth_router
 from api.admin_api import router as admin_router

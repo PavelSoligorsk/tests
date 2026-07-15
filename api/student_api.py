@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 import models, dto, auth
-from database import get_db
+from core.database import get_db
 from typing import List
 from services.student_service import StudentService
 

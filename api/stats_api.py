@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 import models, auth
-from database import get_db
+from core.database import get_db
 from services.stats_service import StatsService, PermissionError
 
 router = APIRouter(prefix="/stats", tags=["Statistics"])
