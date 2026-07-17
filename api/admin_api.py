@@ -101,7 +101,7 @@ def create_task(
     return service.create_task(payload.dict())
 
 
-@router.put("/tasks/{task_id}", response_model=dto.TaskResponse)
+@router.put("/tasks/{task_id}")
 def update_task(
     task_id: int,
     payload: dto.TaskCreate,
