@@ -113,7 +113,12 @@ class TestRepository:
 
     def get_available_tests_meta(self):
         """Получить доступные тесты без загрузки заданий"""
-        return self.db.query(models.Test).filter(
+        from sqlalchemy.orm import joinedload
+        
+        # Загружаем тесты вместе с заданиями одним запросом
+        return self.db.query(models.Test).options(
+            joinedload(models.Test.tasks)
+        ).filter(
             models.Test.is_active == True,
             (models.Test.is_autocompile == True) | (models.Test.is_autocompile == None)
         ).all()
