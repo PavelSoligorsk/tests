@@ -1,14 +1,19 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
-import models, dto, auth
+from core.models import User
+from schemas import (
+    TaskResponse, TestResponse, TestCreate,
+    TestAssignmentCreate, TestGroupAssignment
+)
+from core import auth
 from core.database import get_db
 from services.teacher_service import TeacherService, PermissionError
 
 router = APIRouter(prefix="/teacher", tags=["Teacher API"])
 
 
-def check_teacher(user: models.User = Depends(auth.get_current_user)):
+def check_teacher(user: User = Depends(auth.get_current_user)):
     """Проверяет, что пользователь — учитель или админ"""
     if user.role not in ["teacher", "admin"]:
         raise HTTPException(status_code=403, detail="Доступ запрещён. Требуется роль teacher или admin")
@@ -21,14 +26,14 @@ def get_teacher_service(db: Session = Depends(get_db)) -> TeacherService:
 
 # ==================== БАНК ЗАДАНИЙ ====================
 
-@router.get("/tasks", response_model=List[dto.TaskResponse])
+@router.get("/tasks", response_model=List[TaskResponse])
 def get_all_tasks(
     task_class: Optional[int] = Query(None),
     topic: Optional[str] = Query(None),
     topic_number: Optional[str] = Query(None),
     section: Optional[str] = Query(None),
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     return service.get_tasks(task_class, topic, topic_number, section)
 
@@ -36,7 +41,7 @@ def get_all_tasks(
 @router.get("/tasks-grouped")
 def get_tasks_grouped(
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     return service.get_tasks_grouped()
 
@@ -45,16 +50,16 @@ def get_tasks_by_class_and_topic_query(
     task_class: str = Query(...),
     topic_number: str = Query(...),
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     """Получить задания по классу и номеру темы (query-параметры)"""
     return service.get_tasks_by_class_and_topic(task_class, topic_number)
 
-@router.get("/tasks/{task_id}", response_model=dto.TaskResponse)
+@router.get("/tasks/{task_id}", response_model=TaskResponse)
 def get_single_task(
     task_id: int,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     try:
         return service.get_task_by_id(task_id)
@@ -64,19 +69,19 @@ def get_single_task(
 
 # ==================== КОНСТРУКТОР ТЕСТОВ ====================
 
-@router.get("/tests", response_model=List[dto.TestResponse])
+@router.get("/tests", response_model=List[TestResponse])
 def get_teacher_tests(
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     return service.get_tests(current_teacher.id, current_teacher.role)
 
 
-@router.post("/tests", response_model=dto.TestResponse)
+@router.post("/tests", response_model=TestResponse)
 def create_test(
-    payload: dto.TestCreate,
+    payload: TestCreate,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     try:
         return service.create_test(
@@ -91,12 +96,12 @@ def create_test(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.put("/tests/{test_id}", response_model=dto.TestResponse)
+@router.put("/tests/{test_id}", response_model=TestResponse)
 def update_test(
     test_id: int,
-    payload: dto.TestCreate,
+    payload: TestCreate,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     try:
         return service.update_test(
@@ -118,7 +123,7 @@ def update_test(
 def delete_test(
     test_id: int,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     try:
         return service.delete_test(test_id, current_teacher.id, current_teacher.role)
@@ -130,11 +135,11 @@ def delete_test(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@router.get("/tests/{test_id}", response_model=dto.TestResponse)
+@router.get("/tests/{test_id}", response_model=TestResponse)
 def get_test_detail(
     test_id: int,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     try:
         return service.get_test_detail(test_id, current_teacher.id, current_teacher.role)
@@ -149,7 +154,7 @@ def get_test_detail(
 @router.get("/students")
 def get_my_students(
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     return service.get_my_students(current_teacher.id)
 
@@ -158,7 +163,7 @@ def get_my_students(
 def get_student_profile(
     user_id: int,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     try:
         return service.get_student_profile(user_id, current_teacher.id)
@@ -172,7 +177,7 @@ def get_student_profile(
 def get_student_history(
     user_id: int,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     try:
         return service.get_student_history(user_id, current_teacher.id)
@@ -186,7 +191,7 @@ def get_student_history(
 def get_teacher_detailed_result(
     result_id: int,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     try:
         return service.get_detailed_result(result_id, current_teacher.id)
@@ -200,9 +205,9 @@ def get_teacher_detailed_result(
 
 @router.post("/assign-test")
 def assign_test_to_students(
-    assignment: dto.TestAssignmentCreate,
+    assignment: TestAssignmentCreate,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     try:
         return service.assign_test(
@@ -222,7 +227,7 @@ def assign_test_to_students(
 def get_test_assignments(
     test_id: int,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     try:
         return service.get_test_assignments(test_id, current_teacher.id, current_teacher.role)
@@ -236,7 +241,7 @@ def get_test_assignments(
 def get_student_assignments(
     student_id: int,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     try:
         return service.get_student_assignments(student_id, current_teacher.id, current_teacher.role)
@@ -250,7 +255,7 @@ def get_student_assignments(
 def delete_assignment(
     assignment_id: int,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     try:
         return service.delete_assignment(assignment_id, current_teacher.id, current_teacher.role)
@@ -262,9 +267,9 @@ def delete_assignment(
 
 @router.post("/assign-test-to-group")
 def assign_test_to_group(
-    assignment: dto.TestGroupAssignment,
+    assignment: TestGroupAssignment,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     try:
         return service.assign_test_to_group(
@@ -278,13 +283,13 @@ def assign_test_to_group(
         raise HTTPException(status_code=404, detail=str(e))
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
-    
+
 # ==================== УПРАВЛЕНИЕ ГРУППАМИ ====================
 
 @router.get("/groups/")
 def get_my_groups(
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     """Получить все группы учителя"""
     return service.get_my_groups(current_teacher.id)
@@ -294,7 +299,7 @@ def get_my_groups(
 def create_group(
     payload: dict,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     """Создать новую группу"""
     try:
@@ -312,7 +317,7 @@ def update_group(
     group_id: int,
     payload: dict,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     """Обновить группу"""
     try:
@@ -332,7 +337,7 @@ def update_group(
 def delete_group(
     group_id: int,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     """Удалить группу"""
     try:
@@ -346,7 +351,7 @@ def add_students_to_group(
     group_id: int,
     payload: dict,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     """Добавить студентов в группу"""
     try:
@@ -364,7 +369,7 @@ def remove_student_from_group(
     group_id: int,
     student_id: int,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     """Удалить студента из группы"""
     try:
@@ -377,20 +382,20 @@ def remove_student_from_group(
 def get_group_students(
     group_id: int,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     """Получить список студентов группы"""
     try:
         return service.get_group_students(group_id, current_teacher.id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
-    
+
 @router.get("/tasks/by-topic/{topic}/section/{section}")
 def get_tasks_by_topic_section(
     topic: str,
     section: str,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     """Получить задания по теме и разделу (ленивая загрузка)"""
     return service.get_tasks_by_topic_section(topic, section)
@@ -400,7 +405,7 @@ def get_tasks_by_topic_section(
 def get_test_tasks(
     test_id: int,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     """Получить только задания теста (без метаинформации)"""
     try:
@@ -409,11 +414,11 @@ def get_test_tasks(
         raise HTTPException(status_code=404, detail=str(e))
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
-    
+
 @router.get("/tasks-meta")
 def get_tasks_meta(
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     """Получить только структуру заданий (классы, темы, разделы) без содержимого"""
     return service.get_tasks_meta()
@@ -423,7 +428,7 @@ def get_tasks_by_class_and_topic(
     task_class: str,
     topic_number: str,
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     """Получить задания по классу и номеру темы"""
     return service.get_tasks_by_class_and_topic(task_class, topic_number)
@@ -431,8 +436,7 @@ def get_tasks_by_class_and_topic(
 @router.get("/tasks-meta-by-topic-section")
 def get_tasks_meta_by_topic_section(
     service: TeacherService = Depends(get_teacher_service),
-    current_teacher: models.User = Depends(check_teacher)
+    current_teacher: User = Depends(check_teacher)
 ):
     """Получить структуру: { topic: { section: count } }"""
     return service.get_tasks_meta_by_topic_section()
-

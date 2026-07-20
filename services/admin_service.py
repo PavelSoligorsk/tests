@@ -16,7 +16,25 @@ from repositories.group_repository import GroupRepository
 from repositories.teacher_student_repository import TeacherStudentRepository
 from repositories.allowed_email_repository import AllowedEmailRepository
 from repositories.theory_repository import TheoryRepository
-import models
+import os
+import uuid
+import base64
+import re
+import httpx
+import boto3
+from botocore.config import Config
+from typing import List
+from sqlalchemy.orm import joinedload
+from repositories.user_repository import UserRepository
+from repositories.task_repository import TaskRepository
+from repositories.test_repository import TestRepository
+from repositories.result_repository import ResultRepository
+from repositories.assignment_repository import AssignmentRepository
+from repositories.group_repository import GroupRepository
+from repositories.teacher_student_repository import TeacherStudentRepository
+from repositories.allowed_email_repository import AllowedEmailRepository
+from repositories.theory_repository import TheoryRepository
+from core.models import Task, Test, TestResult, UserAnswer, TestTaskAssociation, TestAssignment
 
 
 
@@ -447,8 +465,8 @@ class AdminService:
         try:
             # ========== 1. Собираем актуальные категории из задач ==========
             active_categories = self.db.query(
-                models.Task.task_class, 
-                models.Task.topic_number
+                Task.task_class, 
+                Task.topic_number
             ).distinct().all()
             
             updated_test_ids = []
@@ -457,16 +475,16 @@ class AdminService:
                 t_class_str = str(t_class)
                 t_num_str = str(t_num)
                 
-                test = self.db.query(models.Test).filter(
-                    models.Test.target_class == t_class_str,
-                    models.Test.target_topic == t_num_str,
-                    models.Test.is_autocompile == True,
-                    models.Test.is_ai_generated == False,
-                    models.Test.creator_id == admin_id
+                test = self.db.query(Test).filter(
+                    Test.target_class == t_class_str,
+                    Test.target_topic == t_num_str,
+                    Test.is_autocompile == True,
+                    Test.is_ai_generated == False,
+                    Test.creator_id == admin_id
                 ).first()
 
                 if not test:
-                    test = models.Test(
+                    test = Test(
                         title=f"Тест: {t_class_str} класс, Тема {t_num_str}",
                         target_class=t_class_str,
                         target_topic=t_num_str,
@@ -478,12 +496,12 @@ class AdminService:
                     self.db.add(test)
                     self.db.flush()
 
-                relevant_tasks = self.db.query(models.Task).filter(
-                    models.Task.task_class == t_class,
-                    models.Task.topic_number == t_num
+                relevant_tasks = self.db.query(Task).filter(
+                    Task.task_class == t_class,
+                    Task.topic_number == t_num
                 ).order_by(
-                    models.Task.is_open_answer.asc(),
-                    models.Task.difficulty.asc()
+                    Task.is_open_answer.asc(),
+                    Task.difficulty.asc()
                 ).all()
 
                 test.tasks = relevant_tasks
@@ -494,19 +512,19 @@ class AdminService:
             # ========== 2. Удаляем старые автотесты админа ==========
             deleted_count = 0
             if updated_test_ids:
-                bad_tests_query = self.db.query(models.Test.id).filter(
-                    models.Test.id.not_in(updated_test_ids),
-                    models.Test.is_autocompile == True,
-                    models.Test.is_ai_generated == False,
-                    models.Test.creator_id == admin_id
+                bad_tests_query = self.db.query(Test.id).filter(
+                    Test.id.not_in(updated_test_ids),
+                    Test.is_autocompile == True,
+                    Test.is_ai_generated == False,
+                    Test.creator_id == admin_id
                 )
 
-                empty_tests = self.db.query(models.Test.id).filter(
-                    ~models.Test.tasks.any(),
-                    models.Test.id.not_in(updated_test_ids),
-                    models.Test.is_autocompile == True,
-                    models.Test.is_ai_generated == False,
-                    models.Test.creator_id == admin_id
+                empty_tests = self.db.query(Test.id).filter(
+                    ~Test.tasks.any(),
+                    Test.id.not_in(updated_test_ids),
+                    Test.is_autocompile == True,
+                    Test.is_ai_generated == False,
+                    Test.creator_id == admin_id
                 ).all()
 
                 bad_test_ids = [t[0] for t in bad_tests_query.all()]
@@ -515,30 +533,30 @@ class AdminService:
 
                 if bad_test_ids:
                     bad_result_ids = [
-                        r[0] for r in self.db.query(models.TestResult.id)
-                        .filter(models.TestResult.test_id.in_(bad_test_ids))
+                        r[0] for r in self.db.query(TestResult.id)
+                        .filter(TestResult.test_id.in_(bad_test_ids))
                         .all()
                     ]
 
                     if bad_result_ids:
-                        self.db.query(models.UserAnswer).filter(
-                            models.UserAnswer.result_id.in_(bad_result_ids)
+                        self.db.query(UserAnswer).filter(
+                            UserAnswer.result_id.in_(bad_result_ids)
                         ).delete(synchronize_session=False)
                         
-                        self.db.query(models.TestResult).filter(
-                            models.TestResult.id.in_(bad_result_ids)
+                        self.db.query(TestResult).filter(
+                            TestResult.id.in_(bad_result_ids)
                         ).delete(synchronize_session=False)
 
-                    self.db.query(models.TestTaskAssociation).filter(
-                        models.TestTaskAssociation.test_id.in_(bad_test_ids)
+                    self.db.query(TestTaskAssociation).filter(
+                        TestTaskAssociation.test_id.in_(bad_test_ids)
                     ).delete(synchronize_session=False)
 
-                    self.db.query(models.TestAssignment).filter(
-                        models.TestAssignment.test_id.in_(bad_test_ids)
+                    self.db.query(TestAssignment).filter(
+                        TestAssignment.test_id.in_(bad_test_ids)
                     ).delete(synchronize_session=False)
 
-                    deleted_count = self.db.query(models.Test).filter(
-                        models.Test.id.in_(bad_test_ids)
+                    deleted_count = self.db.query(Test).filter(
+                        Test.id.in_(bad_test_ids)
                     ).delete(synchronize_session=False)
 
             self.db.commit()
@@ -556,89 +574,61 @@ class AdminService:
         except Exception as e:
             self.db.rollback()
             raise Exception(f"Database Error: {str(e)}")
-        
-    def _parse_correct_option_ids(self, task_answer: str, render_options: list) -> list:
-        correct_option_ids = []
-        raw_answers = str(task_answer).strip()
-        
-        if re.match(r'^[\d\s,;]+$', raw_answers):
-            digit_answers = re.findall(r'\d+', raw_answers)
-            for num_str in digit_answers:
-                idx = int(num_str) - 1
-                if 0 <= idx < len(render_options):
-                    if idx not in correct_option_ids:
-                        correct_option_ids.append(idx)
-            
-            if correct_option_ids:
-                return sorted(correct_option_ids)
-        
-        clean_answers_list = [a.strip().strip('"').strip("'") 
-                             for a in re.split(r'[,;|\n]', raw_answers) if a.strip()]
-        
-        for idx, opt in enumerate(render_options):
-            clean_opt = opt.strip().strip('"').strip("'")
-            if any(ans == clean_opt for ans in clean_answers_list):
-                correct_option_ids.append(idx)
-        
-        if not correct_option_ids:
-            correct_option_ids.append(0)
-        
-        return sorted(correct_option_ids)
-    
-    def _recompute_answers_for_task(self, task: models.Task):
-        """
-        Пересчитывает правильность и баллы для всех UserAnswer, привязанных к task,
-        и обновляет total_points в соответствующих TestResult.
-        Возвращает статистику: сколько обновлено ответов и результатов.
-        """
-        if not task:
-            return {"answers_updated": 0, "results_updated": 0}
 
-        # Получаем все ответы на это задание
-        user_answers = self.db.query(models.UserAnswer).filter(
-            models.UserAnswer.task_id == task.id
-        ).all()
+def _recompute_answers_for_task(self, task: Task):
+    """
+    Пересчитывает правильность и баллы для всех UserAnswer, привязанных к task,
+    и обновляет total_points в соответствующих TestResult.
+    Возвращает статистику: сколько обновлено ответов и результатов.
+    """
+    if not task:
+        return {"answers_updated": 0, "results_updated": 0}
 
-        if not user_answers:
-            return {"answers_updated": 0, "results_updated": 0}
+    # Получаем все ответы на это задание
+    user_answers = self.db.query(UserAnswer).filter(
+        UserAnswer.task_id == task.id
+    ).all()
 
-        result_ids = set()
-        answers_updated = 0
+    if not user_answers:
+        return {"answers_updated": 0, "results_updated": 0}
 
-        for ua in user_answers:
-            # Определяем, правильный ли ответ сейчас
-            is_correct_now = False
-            user_ans_str = str(ua.user_text_answer).strip().lower() if ua.user_text_answer else ""
-            task_ans_str = str(task.answer).strip().lower() if task.answer else ""
+    result_ids = set()
+    answers_updated = 0
 
-            if user_ans_str and task_ans_str:
-                # Для закрытых заданий (is_open_answer=False) сравниваем с эталоном
-                # Для открытых – точное совпадение (можно усложнить, но пока так)
-                is_correct_now = (user_ans_str == task_ans_str)
+    for ua in user_answers:
+        # Определяем, правильный ли ответ сейчас
+        is_correct_now = False
+        user_ans_str = str(ua.user_text_answer).strip().lower() if ua.user_text_answer else ""
+        task_ans_str = str(task.answer).strip().lower() if task.answer else ""
 
-            # Вычисляем баллы: 2 за открытый правильный, 1 за закрытый правильный, иначе 0
-            new_points = 0
-            if is_correct_now:
-                new_points = 2 if task.is_open_answer else 1
+        if user_ans_str and task_ans_str:
+            # Для закрытых заданий (is_open_answer=False) сравниваем с эталоном
+            # Для открытых – точное совпадение (можно усложнить, но пока так)
+            is_correct_now = (user_ans_str == task_ans_str)
 
-            if ua.is_correct != is_correct_now or ua.points_earned != new_points:
-                ua.is_correct = is_correct_now
-                ua.points_earned = new_points
-                answers_updated += 1
-                result_ids.add(ua.result_id)
+        # Вычисляем баллы: 2 за открытый правильный, 1 за закрытый правильный, иначе 0
+        new_points = 0
+        if is_correct_now:
+            new_points = 2 if task.is_open_answer else 1
 
-        # Обновляем total_points для всех затронутых результатов
-        results_updated = 0
-        if result_ids:
-            from sqlalchemy.orm import joinedload
-            results = self.db.query(models.TestResult).options(
-                joinedload(models.TestResult.answers)
-            ).filter(models.TestResult.id.in_(list(result_ids))).all()
+        if ua.is_correct != is_correct_now or ua.points_earned != new_points:
+            ua.is_correct = is_correct_now
+            ua.points_earned = new_points
+            answers_updated += 1
+            result_ids.add(ua.result_id)
 
-            for result in results:
-                new_total = sum(ans.points_earned for ans in result.answers)
-                if result.total_points != new_total:
-                    result.total_points = new_total
-                    results_updated += 1
+    # Обновляем total_points для всех затронутых результатов
+    results_updated = 0
+    if result_ids:
+        from sqlalchemy.orm import joinedload
+        results = self.db.query(TestResult).options(
+            joinedload(TestResult.answers)
+        ).filter(TestResult.id.in_(list(result_ids))).all()
 
-        return {"answers_updated": answers_updated, "results_updated": results_updated}
+        for result in results:
+            new_total = sum(ans.points_earned for ans in result.answers)
+            if result.total_points != new_total:
+                result.total_points = new_total
+                results_updated += 1
+
+    return {"answers_updated": answers_updated, "results_updated": results_updated}

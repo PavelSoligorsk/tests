@@ -1,34 +1,38 @@
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import func
-import models
 from typing import List, Optional
+
+from core.models import (
+    Test, Task, TestResult, UserAnswer, TestAssignment
+)
+
 
 class TestRepository:
     def __init__(self, db: Session):
         self.db = db
     
     def get_available_tests(self):
-        return self.db.query(models.Test)\
-            .options(joinedload(models.Test.tasks))\
+        return self.db.query(Test)\
+            .options(joinedload(Test.tasks))\
             .filter(
-                models.Test.is_active == True,
-                (models.Test.is_autocompile == True) | (models.Test.is_autocompile == None)
+                Test.is_active == True,
+                (Test.is_autocompile == True) | (Test.is_autocompile == None)
             ).all()
     
     def get_test_by_id(self, test_id: int):
-        return self.db.query(models.Test)\
-            .options(joinedload(models.Test.tasks))\
-            .filter(models.Test.id == test_id)\
+        return self.db.query(Test)\
+            .options(joinedload(Test.tasks))\
+            .filter(Test.id == test_id)\
             .first()
     
     def get_tests_by_ids(self, test_ids: List[int]):
-        return self.db.query(models.Test)\
-            .options(joinedload(models.Test.tasks))\
-            .filter(models.Test.id.in_(test_ids))\
+        return self.db.query(Test)\
+            .options(joinedload(Test.tasks))\
+            .filter(Test.id.in_(test_ids))\
             .all()
     
-    def create_test(self, test_data: dict, tasks: List[models.Task]):
-        new_test = models.Test(**test_data)
+    def create_test(self, test_data: dict, tasks: List[Task]):
+        new_test = Test(**test_data)
         self.db.add(new_test)
         self.db.flush()
         new_test.tasks = tasks
@@ -44,21 +48,21 @@ class TestRepository:
         return test
     
     def get_test_with_tasks(self, test_id: int):
-        return self.db.query(models.Test)\
-            .options(joinedload(models.Test.tasks))\
-            .filter(models.Test.id == test_id)\
+        return self.db.query(Test)\
+            .options(joinedload(Test.tasks))\
+            .filter(Test.id == test_id)\
             .first()
     
     def get_teacher_tests(self, teacher_id: int, role: str):
         """Получить тесты учителя или все для админа"""
-        query = self.db.query(models.Test).options(joinedload(models.Test.tasks))
+        query = self.db.query(Test).options(joinedload(Test.tasks))
         
         if role == "teacher":
-            query = query.filter(models.Test.creator_id == teacher_id)
+            query = query.filter(Test.creator_id == teacher_id)
         
-        return query.order_by(models.Test.id.desc()).all()
+        return query.order_by(Test.id.desc()).all()
 
-    def update_test(self, test: models.Test, update_data: dict, tasks=None):
+    def update_test(self, test: Test, update_data: dict, tasks=None):
         """Обновить тест"""
         for field, value in update_data.items():
             setattr(test, field, value)
@@ -72,34 +76,34 @@ class TestRepository:
 
     def delete_test_cascade(self, test_id: int):
         """Удалить тест и все связанные данные"""
-        test = self.db.query(models.Test).filter(models.Test.id == test_id).first()
+        test = self.db.query(Test).filter(Test.id == test_id).first()
         if not test:
             return None
         
         try:
             # 1. Сначала удаляем ответы пользователей
-            result_ids = self.db.query(models.TestResult.id).filter(
-                models.TestResult.test_id == test_id
+            result_ids = self.db.query(TestResult.id).filter(
+                TestResult.test_id == test_id
             ).all()
             result_ids = [r[0] for r in result_ids]
             
             if result_ids:
-                self.db.query(models.UserAnswer).filter(
-                    models.UserAnswer.result_id.in_(result_ids)
+                self.db.query(UserAnswer).filter(
+                    UserAnswer.result_id.in_(result_ids)
                 ).delete(synchronize_session=False)
             
             # 2. Удаляем результаты
-            self.db.query(models.TestResult).filter(
-                models.TestResult.test_id == test_id
+            self.db.query(TestResult).filter(
+                TestResult.test_id == test_id
             ).delete(synchronize_session=False)
             
             # 3. Удаляем назначения
-            self.db.query(models.TestAssignment).filter(
-                models.TestAssignment.test_id == test_id
+            self.db.query(TestAssignment).filter(
+                TestAssignment.test_id == test_id
             ).delete(synchronize_session=False)
             
-            # 4. 🔥 Очищаем связи с задачами ПЕРЕД удалением теста
-            test.tasks = []  # ← Это очистит test_task_association
+            # 4. Очищаем связи с задачами ПЕРЕД удалением теста
+            test.tasks = []
             self.db.flush()
             
             # 5. Удаляем сам тест
@@ -110,19 +114,14 @@ class TestRepository:
             self.db.rollback()
             raise e
 
-
     def get_available_tests_meta(self):
         """Получить доступные тесты без загрузки заданий"""
-        from sqlalchemy.orm import joinedload
-        
-        # Загружаем тесты вместе с заданиями одним запросом
-        return self.db.query(models.Test).options(
-            joinedload(models.Test.tasks)
+        return self.db.query(Test).options(
+            joinedload(Test.tasks)
         ).filter(
-            models.Test.is_active == True,
-            (models.Test.is_autocompile == True) | (models.Test.is_autocompile == None)
+            Test.is_active == True,
+            (Test.is_autocompile == True) | (Test.is_autocompile == None)
         ).all()
-
 
     def check_test_owner(self, test_id: int, teacher_id: int):
         """Проверить владельца теста"""
@@ -151,7 +150,7 @@ class TestRepository:
     
     def get_ai_tests_by_user(self, user_id: int):
         """Получить AI-тесты, созданные пользователем"""
-        return self.db.query(models.Test).filter(
-            models.Test.creator_id == user_id,
-            models.Test.is_ai_generated == True
-        ).order_by(models.Test.id.desc()).all()
+        return self.db.query(Test).filter(
+            Test.creator_id == user_id,
+            Test.is_ai_generated == True
+        ).order_by(Test.id.desc()).all()

@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-import dto
+from schemas import UserRegister, ForgotPasswordRequest, ResetPasswordRequest
 from core.database import get_db
 from services.auth_service import AuthService, PermissionError
 
@@ -14,7 +14,7 @@ def get_auth_service(db: Session = Depends(get_db)) -> AuthService:
 
 @router.post("/register")
 def register(
-    user_data: dto.UserRegister,
+    user_data: UserRegister,
     service: AuthService = Depends(get_auth_service)
 ):
     try:
@@ -42,7 +42,7 @@ def login(
 
 @router.post("/forgot-password")
 async def forgot_password(
-    request: dto.ForgotPasswordRequest,
+    request: ForgotPasswordRequest,
     service: AuthService = Depends(get_auth_service)
 ):
     return service.forgot_password(request.email)
@@ -50,7 +50,7 @@ async def forgot_password(
 
 @router.post("/reset-password")
 async def reset_password(
-    request: dto.ResetPasswordRequest,
+    request: ResetPasswordRequest,
     service: AuthService = Depends(get_auth_service)
 ):
     try:

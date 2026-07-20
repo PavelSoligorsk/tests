@@ -3,7 +3,10 @@ import secrets
 import httpx
 from datetime import datetime, timedelta
 from sqlalchemy.orm import Session
-import models, auth
+from core import models
+import core.auth as auth
+
+from core.auth import *
 
 from repositories.user_repository import UserRepository
 from repositories.allowed_email_repository import AllowedEmailRepository

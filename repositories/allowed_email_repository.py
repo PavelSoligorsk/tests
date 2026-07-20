@@ -1,20 +1,21 @@
 from sqlalchemy.orm import Session
-import models
+from core.models import AllowedEmail
+
 
 class AllowedEmailRepository:
     def __init__(self, db: Session):
         self.db = db
     
     def get_all(self):
-        return self.db.query(models.AllowedEmail).all()
+        return self.db.query(AllowedEmail).all()
     
     def get_by_email(self, email: str):
-        return self.db.query(models.AllowedEmail).filter(
-            models.AllowedEmail.email == email
+        return self.db.query(AllowedEmail).filter(
+            AllowedEmail.email == email
         ).first()
     
     def create(self, email: str):
-        new_email = models.AllowedEmail(email=email)
+        new_email = AllowedEmail(email=email)
         self.db.add(new_email)
         self.db.commit()
         self.db.refresh(new_email)

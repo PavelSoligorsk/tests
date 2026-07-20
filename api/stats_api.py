@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-import models, auth
+from core.models import User
+from core import auth
 from core.database import get_db
 from services.stats_service import StatsService, PermissionError
 
@@ -17,7 +18,7 @@ def get_stats_service(db: Session = Depends(get_db)) -> StatsService:
 def get_my_period_stats(
     period: str = Query("month"),
     service: StatsService = Depends(get_stats_service),
-    current_user: models.User = Depends(auth.get_current_user)
+    current_user: User = Depends(auth.get_current_user)
 ):
     try:
         return service.get_period_stats(current_user.id, period, current_user)
@@ -29,7 +30,7 @@ def get_my_period_stats(
 def get_my_topic_stats(
     period: str = Query("all"),
     service: StatsService = Depends(get_stats_service),
-    current_user: models.User = Depends(auth.get_current_user)
+    current_user: User = Depends(auth.get_current_user)
 ):
     try:
         return service.get_topics_stats(current_user.id, period, current_user)
@@ -41,7 +42,7 @@ def get_my_topic_stats(
 def get_my_difficulty_stats(
     period: str = Query("all"),
     service: StatsService = Depends(get_stats_service),
-    current_user: models.User = Depends(auth.get_current_user)
+    current_user: User = Depends(auth.get_current_user)
 ):
     try:
         return service.get_difficulty_stats(current_user.id, period, current_user)
@@ -53,7 +54,7 @@ def get_my_difficulty_stats(
 def get_my_full_stats(
     period: str = Query("month"),
     service: StatsService = Depends(get_stats_service),
-    current_user: models.User = Depends(auth.get_current_user)
+    current_user: User = Depends(auth.get_current_user)
 ):
     try:
         return service.get_full_stats(current_user.id, period, current_user)
@@ -68,7 +69,7 @@ def get_user_period_stats(
     user_id: int,
     period: str = Query("month"),
     service: StatsService = Depends(get_stats_service),
-    current_user: models.User = Depends(auth.get_current_user)
+    current_user: User = Depends(auth.get_current_user)
 ):
     try:
         return service.get_period_stats(user_id, period, current_user)
@@ -83,7 +84,7 @@ def get_user_topic_stats(
     user_id: int,
     period: str = Query("all"),
     service: StatsService = Depends(get_stats_service),
-    current_user: models.User = Depends(auth.get_current_user)
+    current_user: User = Depends(auth.get_current_user)
 ):
     try:
         return service.get_topics_stats(user_id, period, current_user)
@@ -98,7 +99,7 @@ def get_user_difficulty_stats(
     user_id: int,
     period: str = Query("all"),
     service: StatsService = Depends(get_stats_service),
-    current_user: models.User = Depends(auth.get_current_user)
+    current_user: User = Depends(auth.get_current_user)
 ):
     try:
         return service.get_difficulty_stats(user_id, period, current_user)
@@ -113,7 +114,7 @@ def get_user_full_stats(
     user_id: int,
     period: str = Query("month"),
     service: StatsService = Depends(get_stats_service),
-    current_user: models.User = Depends(auth.get_current_user)
+    current_user: User = Depends(auth.get_current_user)
 ):
     try:
         return service.get_full_stats(user_id, period, current_user)

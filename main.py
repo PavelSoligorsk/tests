@@ -1,5 +1,5 @@
 from fastapi import FastAPI, Response
-import models
+from core.models import Base
 from core.database import engine
 
 from api.auth_api import router as auth_router
@@ -12,7 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware # 1. Обязательный
 from fastapi.security import OAuth2PasswordRequestForm
 
 # Создание таблиц в базе данных SQLite
-models.Base.metadata.create_all(bind=engine)
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Education Platform API (SQLite)")
 

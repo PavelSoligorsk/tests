@@ -1,28 +1,30 @@
 from sqlalchemy.orm import Session, joinedload
-import models
 from typing import Optional, List
 from datetime import datetime
+
+from core.models import Group, GroupStudent, TestAssignment, TeacherStudent, User
+
 
 class GroupRepository:
     def __init__(self, db: Session):
         self.db = db
     
     def get_group_by_id(self, group_id: int, teacher_id: Optional[int] = None):
-        query = self.db.query(models.Group).options(
-            joinedload(models.Group.students)
-        ).filter(models.Group.id == group_id)
+        query = self.db.query(Group).options(
+            joinedload(Group.students)
+        ).filter(Group.id == group_id)
         
         if teacher_id:
-            query = query.filter(models.Group.teacher_id == teacher_id)
+            query = query.filter(Group.teacher_id == teacher_id)
         
         return query.first()
     
     def get_teacher_groups(self, teacher_id: int):
-        return self.db.query(models.Group).options(
-            joinedload(models.Group.students)
-        ).filter(models.Group.teacher_id == teacher_id).all()
+        return self.db.query(Group).options(
+            joinedload(Group.students)
+        ).filter(Group.teacher_id == teacher_id).all()
     
-    def get_group_students(self, group_id: int) -> List[models.User]:
+    def get_group_students(self, group_id: int) -> List[User]:
         group = self.get_group_by_id(group_id)
         return group.students if group else []
     
@@ -32,11 +34,11 @@ class GroupRepository:
             return []
         return [s.id for s in group.students]
     
-    def remove_student(self, group: models.Group, student_id: int) -> bool:
+    def remove_student(self, group: Group, student_id: int) -> bool:
         """Удалить студента из группы"""
-        link = self.db.query(models.GroupStudent).filter(
-            models.GroupStudent.group_id == group.id,
-            models.GroupStudent.student_id == student_id
+        link = self.db.query(GroupStudent).filter(
+            GroupStudent.group_id == group.id,
+            GroupStudent.student_id == student_id
         ).first()
         
         if not link:
@@ -48,7 +50,7 @@ class GroupRepository:
     
     def create_group(self, name: str, teacher_id: int, description: str = None):
         """Создать группу"""
-        group = models.Group(
+        group = Group(
             name=name,
             description=description,
             teacher_id=teacher_id,
@@ -67,7 +69,7 @@ class GroupRepository:
             "students": []
         }
 
-    def update_group(self, group: models.Group, name: str = None, description: str = None):
+    def update_group(self, group: Group, name: str = None, description: str = None):
         """Обновить группу"""
         if name:
             group.name = name
@@ -85,28 +87,28 @@ class GroupRepository:
             "created_at": group.created_at
         }
 
-    def delete_group(self, group: models.Group):
+    def delete_group(self, group: Group):
         """Удалить группу и все связи"""
         # Удаляем связи со студентами
-        self.db.query(models.GroupStudent).filter(
-            models.GroupStudent.group_id == group.id
+        self.db.query(GroupStudent).filter(
+            GroupStudent.group_id == group.id
         ).delete()
         
         # Удаляем назначения тестов
-        self.db.query(models.TestAssignment).filter(
-            models.TestAssignment.group_id == group.id
+        self.db.query(TestAssignment).filter(
+            TestAssignment.group_id == group.id
         ).delete()
         
         # Удаляем группу
         self.db.delete(group)
         self.db.commit()
 
-    def add_students(self, group: models.Group, student_ids: List[int], teacher_id: int) -> int:
+    def add_students(self, group: Group, student_ids: List[int], teacher_id: int) -> int:
         """Добавить студентов в группу"""
         # Проверяем, что студенты принадлежат учителю
-        teacher_students = self.db.query(models.TeacherStudent).filter(
-            models.TeacherStudent.teacher_id == teacher_id,
-            models.TeacherStudent.student_id.in_(student_ids)
+        teacher_students = self.db.query(TeacherStudent).filter(
+            TeacherStudent.teacher_id == teacher_id,
+            TeacherStudent.student_id.in_(student_ids)
         ).all()
         
         teacher_student_ids = {s.student_id for s in teacher_students}
@@ -116,15 +118,15 @@ class GroupRepository:
             if student_id not in teacher_student_ids:
                 continue
             
-            existing = self.db.query(models.GroupStudent).filter(
-                models.GroupStudent.group_id == group.id,
-                models.GroupStudent.student_id == student_id
+            existing = self.db.query(GroupStudent).filter(
+                GroupStudent.group_id == group.id,
+                GroupStudent.student_id == student_id
             ).first()
             
             if existing:
                 continue
             
-            self.db.add(models.GroupStudent(
+            self.db.add(GroupStudent(
                 group_id=group.id,
                 student_id=student_id
             ))
@@ -135,33 +137,33 @@ class GroupRepository:
 
     def get_group_by_name(self, name: str, teacher_id: int):
         """Найти группу по имени"""
-        return self.db.query(models.Group).filter(
-            models.Group.teacher_id == teacher_id,
-            models.Group.name == name
+        return self.db.query(Group).filter(
+            Group.teacher_id == teacher_id,
+            Group.name == name
         ).first()
 
     def delete_groups_by_teacher(self, teacher_id: int):
         """Удалить все группы учителя"""
-        group_ids = self.db.query(models.Group.id).filter(
-            models.Group.teacher_id == teacher_id
+        group_ids = self.db.query(Group.id).filter(
+            Group.teacher_id == teacher_id
         ).all()
         group_ids = [g[0] for g in group_ids]
         
         if group_ids:
-            self.db.query(models.GroupStudent).filter(
-                models.GroupStudent.group_id.in_(group_ids)
+            self.db.query(GroupStudent).filter(
+                GroupStudent.group_id.in_(group_ids)
             ).delete(synchronize_session=False)
             
-            self.db.query(models.TestAssignment).filter(
-                models.TestAssignment.group_id.in_(group_ids)
+            self.db.query(TestAssignment).filter(
+                TestAssignment.group_id.in_(group_ids)
             ).update({"group_id": None}, synchronize_session=False)
             
-            self.db.query(models.Group).filter(
-                models.Group.teacher_id == teacher_id
+            self.db.query(Group).filter(
+                Group.teacher_id == teacher_id
             ).delete(synchronize_session=False)
 
     def delete_student_from_all_groups(self, student_id: int):
         """Удалить студента из всех групп"""
-        self.db.query(models.GroupStudent).filter(
-            models.GroupStudent.student_id == student_id
+        self.db.query(GroupStudent).filter(
+            GroupStudent.student_id == student_id
         ).delete(synchronize_session=False)
