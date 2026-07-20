@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 from core.models import User
-from schemas import (
+from dto_schemas import (
     UserResponseWithStats, UserResponse, TestResponse,
     UserUpdate, AITestRequest
 )

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 from typing import List, Optional
 from core.models import User
-from schemas import (
+from dto_schemas import (
     TaskResponse, TestResponse, TestCreate,
     TestAssignmentCreate, TestGroupAssignment
 )

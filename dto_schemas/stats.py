@@ -1,5 +1,5 @@
 from pydantic import BaseModel
-from schemas.user import UserResponse
+from dto_schemas.user import UserResponse
 
 class UserStats(BaseModel):
     total_attempts: int
