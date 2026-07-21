@@ -3,17 +3,19 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 import os
 
-# Пытаемся взять URL из переменных окружения (Railway)
+# Берём URL из переменной окружения (Railway, локальный PostgreSQL и т.д.)
 DATABASE_URL = os.getenv("DATABASE_URL")
 
-# Если переменной нет (локальная разработка) — используем SQLite
 if not DATABASE_URL:
-    DATABASE_URL = "sqlite:///./tasks_database.db"
-    # Для SQLite нужен этот параметр
-    connect_args = {"check_same_thread": False}
-else:
-    # Для PostgreSQL этот параметр не нужен
-    connect_args = {}
+    raise ValueError(
+        "DATABASE_URL не задан. Укажите PostgreSQL URL в переменной окружения.\n"
+        "Пример для локальной разработки:\n"
+        '  DATABASE_URL="postgresql://postgres:postgres@localhost:5432/education_platform"\n'
+        "Его можно указать в .env файле или через export/установку переменной."
+    )
+
+# Для PostgreSQL connect_args обычно пустые
+connect_args = {}
 
 # Создаем engine
 engine = create_engine(

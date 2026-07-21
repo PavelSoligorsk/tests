@@ -9,6 +9,8 @@ from dto_schemas import (
 from core import auth
 from core.database import get_db
 from services.teacher_service import TeacherService, PermissionError
+from fastapi import Query
+
 
 router = APIRouter(prefix="/teacher", tags=["Teacher API"])
 
@@ -423,10 +425,10 @@ def get_tasks_meta(
     """Получить только структуру заданий (классы, темы, разделы) без содержимого"""
     return service.get_tasks_meta()
 
-@router.get("/tasks/by-class/{task_class}/topic/{topic_number}")
+@router.get("/tasks/by-class/")
 def get_tasks_by_class_and_topic(
-    task_class: str,
-    topic_number: str,
+    task_class: str = Query(...),
+    topic_number: str = Query(...),
     service: TeacherService = Depends(get_teacher_service),
     current_teacher: User = Depends(check_teacher)
 ):
