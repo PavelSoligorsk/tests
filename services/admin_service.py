@@ -16,25 +16,7 @@ from repositories.group_repository import GroupRepository
 from repositories.teacher_student_repository import TeacherStudentRepository
 from repositories.allowed_email_repository import AllowedEmailRepository
 from repositories.theory_repository import TheoryRepository
-import os
-import uuid
-import base64
-import re
-import httpx
-import boto3
-from botocore.config import Config
-from typing import List
-from sqlalchemy.orm import joinedload
-from repositories.user_repository import UserRepository
-from repositories.task_repository import TaskRepository
-from repositories.test_repository import TestRepository
-from repositories.result_repository import ResultRepository
-from repositories.assignment_repository import AssignmentRepository
-from repositories.group_repository import GroupRepository
-from repositories.teacher_student_repository import TeacherStudentRepository
-from repositories.allowed_email_repository import AllowedEmailRepository
-from repositories.theory_repository import TheoryRepository
-from core.models import Task, Test, TestResult, UserAnswer, TestTaskAssociation, TestAssignment
+from core.models import Task, Test, TestResult, UserAnswer, TestAssignment, TestTaskAssociation, UserRole
 
 
 
@@ -88,17 +70,6 @@ class AdminService:
             result.append(user_data)
         
         return result
-    
-    def change_user_role(self, user_id: int, new_role: str, admin_id: int):
-        user = self.user_repo.get_user_by_id(user_id)
-        if not user:
-            raise ValueError("Пользователь не найден")
-        
-        if user.id == admin_id and new_role != "admin":
-            raise ValueError("Вы не можете снять роль админа с самого себя")
-        
-        self.user_repo.update_user_role(user, new_role)
-        return {"message": f"Роль пользователя {user.username} изменена на {new_role}"}
     
     def delete_user(self, user_id: int, admin_id: int):
         user = self.user_repo.get_user_by_id(user_id)
@@ -159,6 +130,22 @@ class AdminService:
     def create_task(self, task_data: dict):
         return self.task_repo.create_task(task_data)
     
+    def change_user_role(self, user_id: int, new_role: str, admin_id: int):
+        try:
+            UserRole(new_role)
+        except ValueError:
+            raise ValueError(f"Недопустимая роль: {new_role}. Допустимые: admin, teacher, student")
+        
+        user = self.user_repo.get_user_by_id(user_id)
+        if not user:
+            raise ValueError("Пользователь не найден")
+        
+        if user.id == admin_id and new_role != "admin":
+            raise ValueError("Вы не можете снять роль админа с самого себя")
+        
+        self.user_repo.update_user_role(user, new_role)
+        return {"message": f"Роль пользователя {user.username} изменена на {new_role}"}
+    
     def update_task(self, task_id: int, update_data: dict):
         task = self.task_repo.get_task_by_id(task_id)
         if not task:
@@ -175,10 +162,7 @@ class AdminService:
 
         self.db.commit()
 
-        return {
-            "message": "Задание обновлено",
-            "recomputed": recompute_stats
-        }
+        return task
     
     def get_tasks(self):
         return self.task_repo.get_all_tasks()
@@ -574,61 +558,62 @@ class AdminService:
         except Exception as e:
             self.db.rollback()
             raise Exception(f"Database Error: {str(e)}")
+        
+    def _recompute_answers_for_task(self, task: Task):
+        """
+        Пересчитывает правильность и баллы для всех UserAnswer, привязанных к task,
+        и обновляет total_points в соответствующих TestResult.
+        Возвращает статистику: сколько обновлено ответов и результатов.
+        """
+        if not task:
+            return {"answers_updated": 0, "results_updated": 0}
 
-def _recompute_answers_for_task(self, task: Task):
-    """
-    Пересчитывает правильность и баллы для всех UserAnswer, привязанных к task,
-    и обновляет total_points в соответствующих TestResult.
-    Возвращает статистику: сколько обновлено ответов и результатов.
-    """
-    if not task:
-        return {"answers_updated": 0, "results_updated": 0}
+        # Получаем все ответы на это задание
+        user_answers = self.db.query(UserAnswer).filter(
+            UserAnswer.task_id == task.id
+        ).all()
 
-    # Получаем все ответы на это задание
-    user_answers = self.db.query(UserAnswer).filter(
-        UserAnswer.task_id == task.id
-    ).all()
+        if not user_answers:
+            return {"answers_updated": 0, "results_updated": 0}
 
-    if not user_answers:
-        return {"answers_updated": 0, "results_updated": 0}
+        result_ids = set()
+        answers_updated = 0
 
-    result_ids = set()
-    answers_updated = 0
+        for ua in user_answers:
+            # Определяем, правильный ли ответ сейчас
+            is_correct_now = False
+            user_ans_str = str(ua.user_text_answer).strip().lower() if ua.user_text_answer else ""
+            task_ans_str = str(task.answer).strip().lower() if task.answer else ""
 
-    for ua in user_answers:
-        # Определяем, правильный ли ответ сейчас
-        is_correct_now = False
-        user_ans_str = str(ua.user_text_answer).strip().lower() if ua.user_text_answer else ""
-        task_ans_str = str(task.answer).strip().lower() if task.answer else ""
+            if user_ans_str and task_ans_str:
+                # Для закрытых заданий (is_open_answer=False) сравниваем с эталоном
+                # Для открытых – точное совпадение (можно усложнить, но пока так)
+                is_correct_now = (user_ans_str == task_ans_str)
 
-        if user_ans_str and task_ans_str:
-            # Для закрытых заданий (is_open_answer=False) сравниваем с эталоном
-            # Для открытых – точное совпадение (можно усложнить, но пока так)
-            is_correct_now = (user_ans_str == task_ans_str)
+            # Вычисляем баллы: 2 за открытый правильный, 1 за закрытый правильный, иначе 0
+            new_points = 0
+            if is_correct_now:
+                new_points = 2 if task.is_open_answer else 1
 
-        # Вычисляем баллы: 2 за открытый правильный, 1 за закрытый правильный, иначе 0
-        new_points = 0
-        if is_correct_now:
-            new_points = 2 if task.is_open_answer else 1
+            if ua.is_correct != is_correct_now or ua.points_earned != new_points:
+                ua.is_correct = is_correct_now
+                ua.points_earned = new_points
+                answers_updated += 1
+                result_ids.add(ua.result_id)
 
-        if ua.is_correct != is_correct_now or ua.points_earned != new_points:
-            ua.is_correct = is_correct_now
-            ua.points_earned = new_points
-            answers_updated += 1
-            result_ids.add(ua.result_id)
+        # Обновляем total_points для всех затронутых результатов
+        results_updated = 0
+        if result_ids:
+            from sqlalchemy.orm import joinedload
+            results = self.db.query(TestResult).options(
+                joinedload(TestResult.answers)
+            ).filter(TestResult.id.in_(list(result_ids))).all()
 
-    # Обновляем total_points для всех затронутых результатов
-    results_updated = 0
-    if result_ids:
-        from sqlalchemy.orm import joinedload
-        results = self.db.query(TestResult).options(
-            joinedload(TestResult.answers)
-        ).filter(TestResult.id.in_(list(result_ids))).all()
+            for result in results:
+                new_total = sum(ans.points_earned for ans in result.answers)
+                if result.total_points != new_total:
+                    result.total_points = new_total
+                    results_updated += 1
 
-        for result in results:
-            new_total = sum(ans.points_earned for ans in result.answers)
-            if result.total_points != new_total:
-                result.total_points = new_total
-                results_updated += 1
+        return {"answers_updated": answers_updated, "results_updated": results_updated}
 
-    return {"answers_updated": answers_updated, "results_updated": results_updated}

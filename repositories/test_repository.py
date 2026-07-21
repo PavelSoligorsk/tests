@@ -154,3 +154,32 @@ class TestRepository:
             Test.creator_id == user_id,
             Test.is_ai_generated == True
         ).order_by(Test.id.desc()).all()
+
+    def get_test_ids_by_creator(self, creator_id: int) -> List[int]:
+        """Получить IDs всех тестов создателя"""
+        return [t[0] for t in self.db.query(Test.id).filter(
+            Test.creator_id == creator_id
+        ).all()]
+
+    def delete_tests_by_ids(self, test_ids: List[int]):
+        """Удалить тесты по IDs"""
+        from core.models import TestTaskAssociation
+        result_ids = [r[0] for r in self.db.query(TestResult.id).filter(
+            TestResult.test_id.in_(test_ids)
+        ).all()]
+        if result_ids:
+            self.db.query(UserAnswer).filter(
+                UserAnswer.result_id.in_(result_ids)
+            ).delete(synchronize_session=False)
+            self.db.query(TestResult).filter(
+                TestResult.id.in_(result_ids)
+            ).delete(synchronize_session=False)
+        self.db.query(TestTaskAssociation).filter(
+            TestTaskAssociation.test_id.in_(test_ids)
+        ).delete(synchronize_session=False)
+        self.db.query(TestAssignment).filter(
+            TestAssignment.test_id.in_(test_ids)
+        ).delete(synchronize_session=False)
+        self.db.query(Test).filter(
+            Test.id.in_(test_ids)
+        ).delete(synchronize_session=False)

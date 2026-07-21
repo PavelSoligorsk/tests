@@ -234,10 +234,46 @@ class TeacherService:
         if missing:
             raise PermissionError(f"Вы не можете назначать тесты студентам: {missing}")
         
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
         created_assignments = []
+        existing_assignments = []
         for user_id in user_ids:
             existing = self.assignment_repo.check_existing_assignment(test_id, user_id)
             if existing:
+                existing_assignments.append(existing)
                 continue
             
             assignment = self.assignment_repo.create_assignment(
@@ -247,14 +283,15 @@ class TeacherService:
             )
             created_assignments.append(assignment)
         
-        # 🔥 ВОТ ЭТО ВАЖНО - КОММИТ!
         if created_assignments:
             self.assignment_repo.db.commit()
             for a in created_assignments:
                 self.assignment_repo.db.refresh(a)
         
+        all_assignments = created_assignments + existing_assignments
+        
         result = []
-        for assignment in created_assignments:
+        for assignment in all_assignments:
             student = self.user_repo.get_user_by_id(assignment.user_id)
             result.append({
                 "id": assignment.id if assignment.id else 0,

@@ -94,3 +94,9 @@ class AssignmentRepository:
             (TestResult.test_id == subq.c.test_id) &
             (TestResult.completed_at == subq.c.max_completed_at)
         ).all()
+
+    def delete_assignments_by_user(self, user_id: int):
+        """Удалить все назначения пользователя"""
+        self.db.query(TestAssignment).filter(
+            TestAssignment.user_id == user_id
+        ).delete(synchronize_session=False)

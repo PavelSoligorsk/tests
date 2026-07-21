@@ -78,3 +78,21 @@ class ResultRepository:
             TestResult.completed_at == None
         ).first()
         return result is not None
+
+    def get_result_ids_by_user(self, user_id: int) -> List[int]:
+        """Получить IDs всех результатов пользователя"""
+        return [r[0] for r in self.db.query(TestResult.id).filter(
+            TestResult.user_id == user_id
+        ).all()]
+
+    def delete_answers_by_result_ids(self, result_ids: List[int]):
+        """Удалить ответы по IDs результатов"""
+        self.db.query(UserAnswer).filter(
+            UserAnswer.result_id.in_(result_ids)
+        ).delete(synchronize_session=False)
+
+    def delete_results_by_user(self, user_id: int):
+        """Удалить все результаты пользователя"""
+        self.db.query(TestResult).filter(
+            TestResult.user_id == user_id
+        ).delete(synchronize_session=False)
