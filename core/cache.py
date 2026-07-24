@@ -1,118 +1,261 @@
-"""
-Redis-кеширование для эндпоинтов FastAPI.
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+from core.models import User
+from dto_schemas import (
+    UserResponseWithStats, UserResponse, TestResponse,
+    UserUpdate, AITestRequest
+)
+from core import auth
+from core.database import get_db
+from typing import List
+from services.student_service import StudentService
+from core.cache import cached, invalidate_all_user_cache, invalidate_global_cache
 
-Использование:
-    from core.cache import cache_result, invalidate_user_cache
-
-    # Кеширование результата
-    result = cache_result(prefix, user_id, lambda: expensive_func(), ttl=300)
-
-    # Инвалидация
-    invalidate_user_cache(user_id, "get_student_profile")
-    invalidate_cache_pattern("get_tests_meta:*")
-"""
-
-import json
-import os
-from typing import Optional, Callable, Any
-
-try:
-    import redis as redis_lib
-    REDIS_AVAILABLE = True
-except ImportError:
-    REDIS_AVAILABLE = False
-
-redis_client = None
+router = APIRouter(prefix="/student", tags=["Student API"])
 
 
-def get_redis() -> Optional[object]:
-    """Получить Redis-клиент (ленивая инициализация)"""
-    global redis_client
-    if not REDIS_AVAILABLE:
-        return None
-    if redis_client is None:
-        redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-        try:
-            redis_client = redis_lib.from_url(redis_url, decode_responses=True)
-            redis_client.ping()
-        except Exception:
-            redis_client = None
-    return redis_client
+def get_student_service(db: Session = Depends(get_db)) -> StudentService:
+    return StudentService(db)
 
 
-def cache_result(prefix: str, user_id: Optional[int], fetcher: Callable[[], Any], ttl: int = 300) -> Any:
-    """
-    Универсальная функция кеширования.
-    Args:
-        prefix: Префикс ключа (например "get_student_profile")
-        user_id: ID пользователя (или None для глобального кеша)
-        fetcher: Функция, которая возвращает данные (вызывается при промахе кеша)
-        ttl: Время жизни в секундах
-
-    Returns:
-        Данные (из кеша или свежеполученные)
-    """
-    redis_conn = get_redis()
-    if redis_conn is None:
-        return fetcher()
-
-    key_parts = [prefix]
-    if user_id is not None:
-        key_parts.append(str(user_id))
-    cache_key = ":".join(key_parts)
+@router.get("/me", response_model=UserResponseWithStats)
+def get_student_profile(
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
     try:
-        cached = redis_conn.get(cache_key)
-        if cached is not None:
-            return json.loads(cached)
-    except Exception:
-        pass
+        return service.get_profile(current_user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
-    result = fetcher()
+
+@router.put("/me", response_model=UserResponse)
+def update_student_profile(
+    obj_in: UserUpdate,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
     try:
-        redis_conn.setex(cache_key, ttl, json.dumps(result, default=str))
-    except Exception:
-        pass
-
-    return result
-
-
-def invalidate_user_cache(user_id: int, *prefixes: str):
-    """
-    Инвалидировать кеш пользователя по указанным префиксам.
-
-    Args:
-        user_id: ID пользователя
-        *prefixes: Префиксы ключей (например "get_student_profile")
-    """
-    redis_conn = get_redis()
-    if redis_conn is None:
-        return
-
-    for prefix in prefixes:
-        pattern = f"{prefix}:{user_id}" if prefix else f"*:{user_id}"
-        try:
-            keys = redis_conn.keys(pattern)
-            if keys:
-                redis_conn.delete(*keys)
-        except Exception:
-            pass
+        update_data = obj_in.dict(exclude_unset=True)
+        invalidate_all_user_cache(current_user.id)
+        return service.update_profile(current_user.id, update_data)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Ошибка при обновлении профиля")
 
 
-def invalidate_cache_pattern(pattern: str):
-    """Инвалидировать кеш по glob-паттерну (например 'get_tests_meta:*')"""
-    redis_conn = get_redis()
-    if redis_conn is None:
-        return
+@router.get("/tests", response_model=List[TestResponse])
+def get_student_tests(
+    service: StudentService = Depends(get_student_service)
+):
+    return service.get_available_tests()
 
+
+@router.get("/tests/{test_id}", response_model=TestResponse)
+def get_test_for_passing(
+    test_id: int,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
     try:
-        keys = redis_conn.keys(pattern)
-        if keys:
-            redis_conn.delete(*keys)
-    except Exception:
-        pass
+        return service.get_test_for_passing(test_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
-def invalidate_all_user_cache(user_id: int):
-    """Инвалидировать весь кеш пользователя (все префиксы)"""
-    invalidate_user_cache(user_id, "get_student_profile", "get_my_history",
-                          "get_my_assignments_meta", "get_my_ai_tests")
+@router.post("/tests/{test_id}/submit")
+def submit_test_results(
+    test_id: int,
+    answers: List[dict],
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    try:
+        result = service.submit_test(test_id, current_user.id, answers)
+        invalidate_all_user_cache(current_user.id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/history")
+@cached("my_history", user_key=True)
+def get_my_history(
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    return service.get_history(current_user.id)
+
+
+@router.get("/results/{result_id}")
+def get_detailed_result(
+    result_id: int,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    try:
+        return service.get_detailed_result(result_id, current_user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/my-assignments")
+def get_my_assignments(
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    return service.get_assignments(current_user.id)
+
+
+@router.post("/start-test/{test_id}")
+def start_assigned_test(
+    test_id: int,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    try:
+        result = service.start_assigned_test(test_id, current_user.id)
+        invalidate_all_user_cache(current_user.id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400 if "Срок" in str(e) else 403, detail=str(e))
+
+
+@router.post("/tasks/{task_id}/hint")
+def get_ai_hint_while_solving(
+    task_id: int,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    try:
+        return service.get_ai_hint(task_id, current_user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка AI: {str(e)}")
+
+
+@router.post("/tasks/{task_id}/ai-solve")
+def get_ai_solution(
+    task_id: int,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    try:
+        return service.get_ai_solution(task_id, current_user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка AI: {str(e)}")
+
+
+# Теоретические эндпоинты
+@router.get("/theory/topics")
+@cached("theory_topics")
+def get_theory_topics(
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    return service.get_theory_topics()
+
+
+@router.get("/theory/by-topic/{topic}")
+def get_theory_by_topic(
+    topic: str,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    try:
+        return service.get_theory_by_topic(topic)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/theory/sections/{topic}")
+def get_theory_sections(
+    topic: str,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """Получить все разделы по теме"""
+    try:
+        return service.get_theory_sections(topic)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@router.post("/theory/ask-ai")
+def ask_ai_about_theory(
+    request: dict,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    try:
+        theory_id = request.get("theory_id")
+        question = request.get("question", "").strip()
+        theory_content = request.get("theory_content", "")
+
+        return service.ask_ai_about_theory(question, theory_id, theory_content)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка AI: {str(e)}")
+
+@router.get("/theory/by-topic/{topic}/section/{section}")
+def get_theory_by_topic_section(
+    topic: str,
+    section: str,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """Получить теорию по теме и разделу"""
+    try:
+        return service.get_theory_by_topic_section(topic, section)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+@router.post("/generate-test")
+def generate_ai_test(
+    request: AITestRequest,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    try:
+        result = service.generate_ai_test(
+            current_user.id,
+            request.prompt,
+            request.task_count,
+            request.difficulty
+        )
+        invalidate_all_user_cache(current_user.id)
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Ошибка генерации теста: {str(e)}")
+
+@router.get("/tests-meta")
+@cached("tests_meta")
+def get_student_tests_meta(
+    service: StudentService = Depends(get_student_service)
+):
+    """Получить только метаинформацию о тестах (без заданий)"""
+    return service.get_available_tests_meta()
+
+@router.get("/my-assignments-meta")
+@cached("my_assignments_meta", user_key=True)
+def get_my_assignments_meta(
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """Получить метаинформацию о назначенных тестах"""
+    return service.get_assignments_meta(current_user.id)
+
+@router.get("/ai-tests")
+@cached("my_ai_tests", user_key=True)
+def get_my_ai_tests(
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """Получить AI-тесты студента (в том числе недопройденные)"""
+    return service.get_ai_tests(current_user.id)

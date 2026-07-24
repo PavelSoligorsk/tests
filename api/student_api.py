@@ -9,7 +9,7 @@ from core import auth
 from core.database import get_db
 from typing import List
 from services.student_service import StudentService
-from core.cache import cache_result, invalidate_all_user_cache, invalidate_cache_pattern
+from core.cache import cached, invalidate_all_user_cache, invalidate_global_cache
 
 router = APIRouter(prefix="/student", tags=["Student API"])
 
@@ -80,15 +80,12 @@ def submit_test_results(
 
 
 @router.get("/history")
+@cached("my_history", user_key=True)
 def get_my_history(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
-    return cache_result(
-        "get_my_history", current_user.id,
-        lambda: service.get_history(current_user.id),
-        ttl=300
-    )
+    return service.get_history(current_user.id)
 
 
 @router.get("/results/{result_id}")
@@ -155,15 +152,12 @@ def get_ai_solution(
 
 # Теоретические эндпоинты
 @router.get("/theory/topics")
+@cached("theory_topics")
 def get_theory_topics(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
-    return cache_result(
-        "get_theory_topics", None,
-        lambda: service.get_theory_topics(),
-        ttl=300
-    )
+    return service.get_theory_topics()
 
 
 @router.get("/theory/by-topic/{topic}")
@@ -241,36 +235,27 @@ def generate_ai_test(
         raise HTTPException(status_code=500, detail=f"Ошибка генерации теста: {str(e)}")
 
 @router.get("/tests-meta")
+@cached("tests_meta")
 def get_student_tests_meta(
     service: StudentService = Depends(get_student_service)
 ):
     """Получить только метаинформацию о тестах (без заданий)"""
-    return cache_result(
-        "get_student_tests_meta", None,
-        lambda: service.get_available_tests_meta(),
-        ttl=300
-    )
+    return service.get_available_tests_meta()
 
 @router.get("/my-assignments-meta")
+@cached("my_assignments_meta", user_key=True)
 def get_my_assignments_meta(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Получить метаинформацию о назначенных тестах"""
-    return cache_result(
-        "get_my_assignments_meta", current_user.id,
-        lambda: service.get_assignments_meta(current_user.id),
-        ttl=300
-    )
+    return service.get_assignments_meta(current_user.id)
 
 @router.get("/ai-tests")
+@cached("my_ai_tests", user_key=True)
 def get_my_ai_tests(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Получить AI-тесты студента (в том числе недопройденные)"""
-    return cache_result(
-        "get_my_ai_tests", current_user.id,
-        lambda: service.get_ai_tests(current_user.id),
-        ttl=300
-    )
+    return service.get_ai_tests(current_user.id)
