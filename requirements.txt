@@ -60,3 +60,4 @@ psycopg2-binary
 requests==2.31.0
 boto3==1.34.0
 mistralai
+redis
