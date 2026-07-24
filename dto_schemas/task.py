@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from typing import List, Optional
 
 class TaskBase(BaseModel):
@@ -14,13 +14,11 @@ class TaskBase(BaseModel):
     is_open_answer: bool = True
     difficulty: Optional[int] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TaskResponse(TaskBase):
     id: int
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TaskCreate(TaskBase):
     pass
@@ -45,5 +43,4 @@ class TaskUpdateRequest(BaseModel):
     is_open_answer: Optional[bool] = None
     difficulty: Optional[int] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

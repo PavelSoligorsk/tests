@@ -4,7 +4,10 @@ from typing import List, Optional
 from core.models import User
 from dto_schemas import (
     TaskResponse, TestResponse, TestCreate,
-    TestAssignmentCreate, TestGroupAssignment
+    TestAssignmentCreate, TestGroupAssignment,
+    TaskGroupedResponse, TaskClassTopicMetaResponse,
+    TopicSectionMetaResponse, TeacherAssignmentItemResponse,
+    TeacherGroupResponse, DetailedResultResponse, UserResponse
 )
 from core import auth
 from core.database import get_db
@@ -42,6 +45,7 @@ def get_all_tasks(
         "teacher_tasks",
         None,  # Глобальный кеш для всех учителей
         lambda: service.get_tasks(task_class, topic, topic_number, section),
+        model_class=TaskResponse,
         ttl=3600,  # 1 час - задания меняются редко
         task_class=task_class,
         topic=topic,
@@ -60,6 +64,7 @@ def get_tasks_grouped(
         "teacher_tasks_grouped",
         None,
         lambda: service.get_tasks_grouped(),
+        model_class=TaskGroupedResponse,
         ttl=3600
     )
 
@@ -76,6 +81,7 @@ def get_tasks_by_class_and_topic_query(
         "teacher_tasks_by_class_topic",
         None,
         lambda: service.get_tasks_by_class_and_topic(task_class, topic_number),
+        model_class=TaskResponse,
         ttl=3600,
         task_class=task_class,
         topic_number=topic_number
@@ -94,8 +100,9 @@ def get_single_task(
             "teacher_task_detail",
             None,
             lambda: service.get_task_by_id(task_id),
+            model_class=TaskResponse,
             ttl=3600,
-            task_id=task_id
+            entity_id=task_id
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -113,6 +120,7 @@ def get_tasks_by_topic_section(
         "teacher_tasks_by_topic_section",
         None,
         lambda: service.get_tasks_by_topic_section(topic, section),
+        model_class=TaskResponse,
         ttl=3600,
         topic=topic,
         section=section
@@ -129,6 +137,7 @@ def get_tasks_meta(
         "teacher_tasks_meta",
         None,
         lambda: service.get_tasks_meta(),
+        model_class=TaskClassTopicMetaResponse,
         ttl=7200  # 2 часа - структура меняется очень редко
     )
 
@@ -145,6 +154,7 @@ def get_tasks_by_class_and_topic(
         "teacher_tasks_by_class",
         None,
         lambda: service.get_tasks_by_class_and_topic(task_class, topic_number),
+        model_class=TaskResponse,
         ttl=3600,
         task_class=task_class,
         topic_number=topic_number
@@ -161,6 +171,7 @@ def get_tasks_meta_by_topic_section(
         "teacher_tasks_meta_by_topic_section",
         None,
         lambda: service.get_tasks_meta_by_topic_section(),
+        model_class=TopicSectionMetaResponse,
         ttl=7200
     )
 
@@ -177,6 +188,7 @@ def get_teacher_tests(
         "teacher_tests",
         current_teacher.id,  # Персональный кеш для каждого учителя
         lambda: service.get_tests(current_teacher.id, current_teacher.role),
+        model_class=TestResponse,
         ttl=300  # 5 минут - тесты могут часто меняться
     )
 
@@ -201,7 +213,10 @@ def create_test(
         # Инвалидируем кеш тестов учителя
         invalidate_user_cache(current_teacher.id, "teacher_tests")
         # Инвалидируем глобальный кеш тестов для студентов
+        invalidate_cache_pattern("available_tests")
         invalidate_cache_pattern("available_tests:*")
+        invalidate_cache_pattern("tests_meta")
+        invalidate_cache_pattern("tests_meta:*")
         
         return result
     except Exception as e:
@@ -229,8 +244,13 @@ def update_test(
         
         # Инвалидируем кеш
         invalidate_user_cache(current_teacher.id, "teacher_tests")
-        invalidate_cache_pattern(f"test_details:*{test_id}*")
+        invalidate_cache_pattern(f"teacher_test_detail:{current_teacher.id}:{test_id}")
+        invalidate_cache_pattern(f"teacher_test_tasks:{current_teacher.id}:{test_id}")
+        invalidate_cache_pattern(f"test_details:{test_id}")
         invalidate_cache_pattern("available_tests:*")
+        invalidate_cache_pattern("available_tests")
+        invalidate_cache_pattern("tests_meta")
+        invalidate_cache_pattern("tests_meta:*")
         
         return result
     except ValueError as e:
@@ -251,8 +271,13 @@ def delete_test(
         
         # Инвалидируем кеш
         invalidate_user_cache(current_teacher.id, "teacher_tests")
-        invalidate_cache_pattern(f"test_details:*{test_id}*")
+        invalidate_cache_pattern(f"teacher_test_detail:{current_teacher.id}:{test_id}")
+        invalidate_cache_pattern(f"teacher_test_tasks:{current_teacher.id}:{test_id}")
+        invalidate_cache_pattern(f"test_details:{test_id}")
         invalidate_cache_pattern("available_tests:*")
+        invalidate_cache_pattern("available_tests")
+        invalidate_cache_pattern("tests_meta")
+        invalidate_cache_pattern("tests_meta:*")
         
         return result
     except ValueError as e:
@@ -275,8 +300,9 @@ def get_test_detail(
             "teacher_test_detail",
             current_teacher.id,  # Персональный кеш
             lambda: service.get_test_detail(test_id, current_teacher.id, current_teacher.role),
+            model_class=TestResponse,
             ttl=300,
-            test_id=test_id
+            entity_id=test_id
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -296,8 +322,9 @@ def get_test_tasks(
             "teacher_test_tasks",
             current_teacher.id,
             lambda: service.get_test_tasks(test_id, current_teacher.id, current_teacher.role),
+            model_class=TaskResponse,
             ttl=300,
-            test_id=test_id
+            entity_id=test_id
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -317,6 +344,7 @@ def get_my_students(
         "teacher_students",
         current_teacher.id,
         lambda: service.get_my_students(current_teacher.id),
+        model_class=UserResponse,
         ttl=600  # 10 минут - студенты могут добавляться
     )
 
@@ -363,8 +391,9 @@ def get_teacher_detailed_result(
             "teacher_result_detail",
             current_teacher.id,
             lambda: service.get_detailed_result(result_id, current_teacher.id),
+            model_class=DetailedResultResponse,
             ttl=600,
-            result_id=result_id
+            entity_id=result_id
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -421,8 +450,9 @@ def get_test_assignments(
             "teacher_test_assignments",
             current_teacher.id,
             lambda: service.get_test_assignments(test_id, current_teacher.id, current_teacher.role),
+            model_class=TeacherAssignmentItemResponse,
             ttl=300,
-            test_id=test_id
+            entity_id=test_id
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -442,8 +472,9 @@ def get_student_assignments(
             "teacher_student_assignments",
             current_teacher.id,
             lambda: service.get_student_assignments(student_id, current_teacher.id, current_teacher.role),
+            model_class=TeacherAssignmentItemResponse,
             ttl=300,
-            student_id=student_id
+            entity_id=student_id
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -516,6 +547,7 @@ def get_my_groups(
         "teacher_groups",
         current_teacher.id,
         lambda: service.get_my_groups(current_teacher.id),
+        model_class=TeacherGroupResponse,
         ttl=600
     )
 

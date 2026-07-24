@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
 
 class AnswerSubmitRequest(BaseModel):
@@ -7,8 +7,7 @@ class AnswerSubmitRequest(BaseModel):
     test_id: int
     answer_text: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class AnswerResponse(BaseModel):
     id: int
@@ -19,5 +18,4 @@ class AnswerResponse(BaseModel):
     is_correct: bool
     attempt_number: int
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

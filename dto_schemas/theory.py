@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import Optional
 
 class TheoryBase(BaseModel):
@@ -6,8 +6,7 @@ class TheoryBase(BaseModel):
     section: str
     content: str
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TheoryCreate(TheoryBase):
     pass
@@ -17,11 +16,9 @@ class TheoryUpdate(BaseModel):
     section: Optional[str] = None
     content: Optional[str] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TheoryResponse(TheoryBase):
     id: int
     
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)

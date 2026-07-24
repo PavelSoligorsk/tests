@@ -3,7 +3,11 @@ from sqlalchemy.orm import Session
 from core.models import User
 from dto_schemas import (
     UserResponseWithStats, UserResponse, TestResponse,
-    UserUpdate, AITestRequest
+    UserUpdate, AITestRequest, TheoryResponse,
+    StudentHistoryItemResponse, DetailedResultResponse,
+    StudentAssignmentItemResponse, TheoryTopicSummaryResponse,
+    TheorySectionSummaryResponse, StudentAssignmentMetaItemResponse,
+    StudentAITestItemResponse, AvailableTestMetaResponse
 )
 from core import auth
 from core.database import get_db
@@ -29,6 +33,7 @@ def get_student_profile(
             "student_profile",
             current_user.id,
             lambda: service.get_profile(current_user.id),
+            model_class=UserResponseWithStats,
             ttl=300
         )
     except ValueError as e:
@@ -64,6 +69,7 @@ def get_student_tests(
         "available_tests",
         None,
         lambda: service.get_available_tests(),
+        model_class=TestResponse,
         ttl=600
     )
 
@@ -80,8 +86,9 @@ def get_test_for_passing(
             "test_details",
             None,
             lambda: service.get_test_for_passing(test_id),
+            model_class=TestResponse,
             ttl=300,
-            test_id=test_id
+            entity_id=test_id
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -105,7 +112,8 @@ def submit_test_results(
             "my_history",
             "my_assignments",
             "my_assignments_meta",
-            "my_ai_tests"
+            "my_ai_tests",
+            "detailed_result"
         )
         
         return result
@@ -123,6 +131,7 @@ def get_my_history(
         "my_history",
         current_user.id,
         lambda: service.get_history(current_user.id),
+        model_class=StudentHistoryItemResponse,
         ttl=120
     )
 
@@ -139,8 +148,9 @@ def get_detailed_result(
             "detailed_result",
             current_user.id,
             lambda: service.get_detailed_result(result_id, current_user.id),
+            model_class=DetailedResultResponse,
             ttl=600,
-            result_id=result_id
+            entity_id=result_id
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -156,6 +166,7 @@ def get_my_assignments(
         "my_assignments",
         current_user.id,
         lambda: service.get_assignments(current_user.id),
+        model_class=StudentAssignmentItemResponse,
         ttl=180
     )
 
@@ -227,6 +238,7 @@ def get_theory_topics(
         "theory_topics",
         None,
         lambda: service.get_theory_topics(),
+        model_class=TheoryTopicSummaryResponse,
         ttl=3600
     )
 
@@ -243,6 +255,7 @@ def get_theory_by_topic(
             "theory_by_topic",
             None,
             lambda: service.get_theory_by_topic(topic),
+            model_class=TheoryResponse,
             ttl=3600,
             topic=topic
         )
@@ -262,6 +275,7 @@ def get_theory_sections(
             "theory_sections",
             None,
             lambda: service.get_theory_sections(topic),
+            model_class=TheorySectionSummaryResponse,
             ttl=3600,
             topic=topic
         )
@@ -337,6 +351,7 @@ def get_student_tests_meta(
         "tests_meta",
         None,
         lambda: service.get_available_tests_meta(),
+        model_class=AvailableTestMetaResponse,
         ttl=600
     )
 
@@ -351,6 +366,7 @@ def get_my_assignments_meta(
         "my_assignments_meta",
         current_user.id,
         lambda: service.get_assignments_meta(current_user.id),
+        model_class=StudentAssignmentMetaItemResponse,
         ttl=180
     )
 
@@ -365,5 +381,6 @@ def get_my_ai_tests(
         "my_ai_tests",
         current_user.id,
         lambda: service.get_ai_tests(current_user.id),
+        model_class=StudentAITestItemResponse,
         ttl=120
     )

@@ -8,6 +8,36 @@ from dto_schemas.image import ImageUploadResponse
 from dto_schemas.assignment import TestAssignmentCreate, TestAssignmentResponse, StudentAssignmentResponse, TestGroupAssignment
 from dto_schemas.theory import TheoryBase, TheoryCreate, TheoryUpdate, TheoryResponse
 from dto_schemas.ai import AITestRequest
+from dto_schemas.cached import (
+    TaskShortResponse,
+    TestSummaryResponse,
+    StudentHistoryItemResponse,
+    DifficultyStatResponse,
+    ResultUserResponse,
+    DetailedResultDetailResponse,
+    DetailedResultResponse,
+    StudentAssignmentItemResponse,
+    StudentAssignmentMetaItemResponse,
+    StudentAITestItemResponse,
+    AvailableTestMetaResponse,
+    TheoryTopicSummaryResponse,
+    TheorySectionSummaryResponse,
+    TeacherGroupStudentResponse,
+    TeacherGroupResponse,
+    TeacherHistoryResultResponse,
+    TeacherHistoryItemResponse,
+    TeacherAssignmentItemResponse,
+    TaskGroupedResponse,
+    TaskClassTopicMetaResponse,
+    TopicSectionMetaResponse,
+    TeacherTaskMetaByTopicSectionResponse,
+    TeacherTaskMetaResponse,
+    TeacherTaskSectionResponse,
+    TeacherTasksByClassTopicResponse,
+    TeacherStudentProfileResponse,
+    TestCacheResponse,
+    UserCacheResponse,
+)
 
 __all__ = [
     "TaskBase", "TaskResponse", "TaskCreate", "TaskCreateRequest", "TaskUpdateRequest",
@@ -21,4 +51,13 @@ __all__ = [
     "TestAssignmentCreate", "TestAssignmentResponse", "StudentAssignmentResponse", "TestGroupAssignment",
     "TheoryBase", "TheoryCreate", "TheoryUpdate", "TheoryResponse",
     "AITestRequest",
+    "TaskShortResponse", "TestSummaryResponse", "StudentHistoryItemResponse",
+    "DifficultyStatResponse", "ResultUserResponse", "DetailedResultDetailResponse",
+    "DetailedResultResponse", "StudentAssignmentItemResponse", "StudentAssignmentMetaItemResponse",
+    "StudentAITestItemResponse", "AvailableTestMetaResponse", "TheoryTopicSummaryResponse", "TheorySectionSummaryResponse",
+    "TeacherGroupStudentResponse", "TeacherGroupResponse", "TeacherHistoryResultResponse",
+    "TeacherHistoryItemResponse", "TeacherAssignmentItemResponse", "TaskGroupedResponse",
+    "TaskClassTopicMetaResponse", "TopicSectionMetaResponse", "TeacherTaskMetaByTopicSectionResponse",
+    "TeacherTaskMetaResponse", "TeacherTaskSectionResponse", "TeacherTasksByClassTopicResponse",
+    "TeacherStudentProfileResponse", "TestCacheResponse", "UserCacheResponse",
 ]

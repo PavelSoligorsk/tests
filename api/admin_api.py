@@ -8,6 +8,7 @@ from dto_schemas import (
     TheoryCreate, TheoryUpdate, ImageUploadResponse
 )
 from core import auth
+from core.cache import invalidate_cache_pattern
 from core.database import get_db
 from services.admin_service import AdminService
 
@@ -16,6 +17,26 @@ router = APIRouter(prefix="/admin", tags=["Admin"])
 
 def get_admin_service(db: Session = Depends(get_db)) -> AdminService:
     return AdminService(db)
+
+
+def _invalidate_task_caches() -> None:
+    invalidate_cache_pattern("teacher_tasks*")
+    invalidate_cache_pattern("teacher_test_detail*")
+    invalidate_cache_pattern("teacher_test_tasks*")
+    invalidate_cache_pattern("teacher_tests*")
+    invalidate_cache_pattern("available_tests")
+    invalidate_cache_pattern("available_tests:*")
+    invalidate_cache_pattern("tests_meta")
+    invalidate_cache_pattern("tests_meta:*")
+    invalidate_cache_pattern("test_details")
+    invalidate_cache_pattern("test_details:*")
+
+
+def _invalidate_theory_caches() -> None:
+    invalidate_cache_pattern("theory_topics")
+    invalidate_cache_pattern("theory_topics:*")
+    invalidate_cache_pattern("theory_by_topic*")
+    invalidate_cache_pattern("theory_sections*")
 
 
 # ==================== ПОЛЬЗОВАТЕЛИ ====================
@@ -104,7 +125,9 @@ def create_task(
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
-    return service.create_task(payload.dict())
+    result = service.create_task(payload.model_dump())
+    _invalidate_task_caches()
+    return result
 
 
 @router.put("/tasks/{task_id}")
@@ -115,7 +138,9 @@ def update_task(
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.update_task(task_id, payload.dict())
+        result = service.update_task(task_id, payload.model_dump())
+        _invalidate_task_caches()
+        return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -127,7 +152,9 @@ def delete_task(
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.delete_task(task_id)
+        result = service.delete_task(task_id)
+        _invalidate_task_caches()
+        return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -213,7 +240,9 @@ def create_theory(
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.create_theory(payload.dict())
+        result = service.create_theory(payload.model_dump())
+        _invalidate_theory_caches()
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -246,7 +275,9 @@ def update_theory(
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.update_theory(theory_id, payload.dict(exclude_unset=True))
+        result = service.update_theory(theory_id, payload.model_dump(exclude_unset=True))
+        _invalidate_theory_caches()
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -258,7 +289,9 @@ def delete_theory(
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.delete_theory(theory_id)
+        result = service.delete_theory(theory_id)
+        _invalidate_theory_caches()
+        return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -303,7 +336,9 @@ def rebuild_all_static_tests(
 ):
     """Пересборка всех статических тестов"""
     try:
-        return service.rebuild_all_static_tests(current_admin.id)
+        result = service.rebuild_all_static_tests(current_admin.id)
+        _invalidate_task_caches()
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

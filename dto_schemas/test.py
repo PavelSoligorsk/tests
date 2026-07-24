@@ -1,4 +1,4 @@
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, ConfigDict, model_validator
 from typing import List, Optional
 from datetime import datetime
 from dto_schemas.task import TaskResponse
@@ -12,15 +12,13 @@ class TestCreate(BaseModel):
     task_ids: Optional[List[int]] = None
     is_active: bool = True
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TestCreateRequest(BaseModel):
     user_id: int
     task_ids: List[int]
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TestResponse(BaseModel):
     id: int
@@ -35,8 +33,7 @@ class TestResponse(BaseModel):
     total_score: Optional[int] = 0 
     answers: List[AnswerResponse] = [] 
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TestResultResponse(BaseModel):
     id: int
@@ -45,8 +42,7 @@ class TestResultResponse(BaseModel):
     completed_at: datetime
     test_title: Optional[str] = None 
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
     @model_validator(mode='before')
     @classmethod

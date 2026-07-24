@@ -1,4 +1,4 @@
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from datetime import datetime
 
@@ -7,8 +7,7 @@ class TestAssignmentCreate(BaseModel):
     user_ids: List[int]
     due_date: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TestAssignmentResponse(BaseModel):
     id: int
@@ -24,8 +23,7 @@ class TestAssignmentResponse(BaseModel):
     total_points: Optional[int] = None
     result_id: Optional[int] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class StudentAssignmentResponse(BaseModel):
     assignment_id: int
@@ -36,13 +34,11 @@ class StudentAssignmentResponse(BaseModel):
     is_completed: bool
     total_tasks: int = 0
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
 
 class TestGroupAssignment(BaseModel):
     test_id: int
     group_id: int
     due_date: Optional[datetime] = None
 
-    class Config:
-        from_attributes = True
+    model_config = ConfigDict(from_attributes=True)
