@@ -43,7 +43,7 @@ def update_student_profile(
 ):
     """Обновить профиль студента"""
     try:
-        update_data = obj_in.dict(exclude_unset=True)
+        update_data = obj_in.model_dump(exclude_unset=True)
         
         # Инвалидируем кеш профиля
         invalidate_user_cache(current_user.id, "student_profile")
