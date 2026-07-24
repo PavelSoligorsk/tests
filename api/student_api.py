@@ -9,6 +9,7 @@ from core import auth
 from core.database import get_db
 from typing import List
 from services.student_service import StudentService
+from core.cache import cache_result, invalidate_all_user_cache, invalidate_cache_pattern
 
 router = APIRouter(prefix="/student", tags=["Student API"])
 
@@ -23,7 +24,11 @@ def get_student_profile(
     current_user: User = Depends(auth.get_current_user)
 ):
     try:
-        return service.get_profile(current_user.id)
+        return cache_result(
+            "get_student_profile", current_user.id,
+            lambda: service.get_profile(current_user.id),
+            ttl=300
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -36,6 +41,7 @@ def update_student_profile(
 ):
     try:
         update_data = obj_in.dict(exclude_unset=True)
+        invalidate_all_user_cache(current_user.id)
         return service.update_profile(current_user.id, update_data)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
@@ -70,7 +76,9 @@ def submit_test_results(
     current_user: User = Depends(auth.get_current_user)
 ):
     try:
-        return service.submit_test(test_id, current_user.id, answers)
+        result = service.submit_test(test_id, current_user.id, answers)
+        invalidate_all_user_cache(current_user.id)
+        return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -80,7 +88,11 @@ def get_my_history(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
-    return service.get_history(current_user.id)
+    return cache_result(
+        "get_my_history", current_user.id,
+        lambda: service.get_history(current_user.id),
+        ttl=300
+    )
 
 
 @router.get("/results/{result_id}")
@@ -110,7 +122,9 @@ def start_assigned_test(
     current_user: User = Depends(auth.get_current_user)
 ):
     try:
-        return service.start_assigned_test(test_id, current_user.id)
+        result = service.start_assigned_test(test_id, current_user.id)
+        invalidate_all_user_cache(current_user.id)
+        return result
     except ValueError as e:
         raise HTTPException(status_code=400 if "Срок" in str(e) else 403, detail=str(e))
 
@@ -149,7 +163,11 @@ def get_theory_topics(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
-    return service.get_theory_topics()
+    return cache_result(
+        "get_theory_topics", None,
+        lambda: service.get_theory_topics(),
+        ttl=300
+    )
 
 
 @router.get("/theory/by-topic/{topic}")
@@ -213,12 +231,14 @@ def generate_ai_test(
     current_user: User = Depends(auth.get_current_user)
 ):
     try:
-        return service.generate_ai_test(
-            current_user.id, 
-            request.prompt, 
-            request.task_count, 
+        result = service.generate_ai_test(
+            current_user.id,
+            request.prompt,
+            request.task_count,
             request.difficulty
         )
+        invalidate_all_user_cache(current_user.id)
+        return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -229,7 +249,11 @@ def get_student_tests_meta(
     service: StudentService = Depends(get_student_service)
 ):
     """Получить только метаинформацию о тестах (без заданий)"""
-    return service.get_available_tests_meta()
+    return cache_result(
+        "get_student_tests_meta", None,
+        lambda: service.get_available_tests_meta(),
+        ttl=300
+    )
 
 @router.get("/my-assignments-meta")
 def get_my_assignments_meta(
@@ -237,7 +261,11 @@ def get_my_assignments_meta(
     current_user: User = Depends(auth.get_current_user)
 ):
     """Получить метаинформацию о назначенных тестах"""
-    return service.get_assignments_meta(current_user.id)
+    return cache_result(
+        "get_my_assignments_meta", current_user.id,
+        lambda: service.get_assignments_meta(current_user.id),
+        ttl=300
+    )
 
 @router.get("/ai-tests")
 def get_my_ai_tests(
@@ -245,4 +273,8 @@ def get_my_ai_tests(
     current_user: User = Depends(auth.get_current_user)
 ):
     """Получить AI-тесты студента (в том числе недопройденные)"""
-    return service.get_ai_tests(current_user.id)
+    return cache_result(
+        "get_my_ai_tests", current_user.id,
+        lambda: service.get_ai_tests(current_user.id),
+        ttl=300
+    )
