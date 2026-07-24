@@ -329,13 +329,7 @@ def get_student_profile(
 ):
     """Получить профиль ученика"""
     try:
-        return cache_result(
-    "teacher_student_profile",
-    current_teacher.id,  # user_id - учитель
-    lambda: ...,
-    ttl=600,
-    student_id=student_id  # дополнительный параметр
-)
+        return service.get_student_profile(user_id, current_teacher.id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except PermissionError as e:
