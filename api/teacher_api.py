@@ -344,13 +344,7 @@ def get_student_history(
 ):
     """Получить историю ученика"""
     try:
-        return cache_result(
-            "teacher_student_history",
-            current_teacher.id,
-            lambda: service.get_student_history(user_id, current_teacher.id),
-            ttl=300,
-            user_id=user_id
-        )
+        return service.get_student_history(user_id, current_teacher.id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except PermissionError as e:
