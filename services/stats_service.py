@@ -133,7 +133,7 @@ class StatsService:
         
         # Группировка по дням
         daily_stats = self._build_daily_stats(results, test_ids, test_max_points, best_answers, end_date)
-        streak = self._calculate_streak([d["date"] for d in daily_stats], end_date)
+        streak = self._calculate_streak([d.date for d in daily_stats], end_date)
         
         return PeriodStatsResponse(
             period=period,

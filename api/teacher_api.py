@@ -11,6 +11,7 @@ from dto_schemas import (
     GroupCreateRequest, GroupUpdateRequest, AddStudentsToGroupRequest,
     TeacherStudentProfileResponse, TeacherHistoryItemResponse,
     GroupAssignResponse, AddStudentsToGroupResponse, MessageResponse,
+    TeacherTaskMetaResponse, TeacherTaskMetaByTopicSectionResponse,
 )
 from core import auth
 from core.database import get_db
@@ -140,7 +141,7 @@ def get_tasks_meta(
         "teacher_tasks_meta",
         None,
         lambda: service.get_tasks_meta(),
-        model_class=TaskClassTopicMetaResponse,
+        model_class=TeacherTaskMetaResponse,
         ttl=7200  # 2 часа - структура меняется очень редко
     )
 
@@ -174,7 +175,7 @@ def get_tasks_meta_by_topic_section(
         "teacher_tasks_meta_by_topic_section",
         None,
         lambda: service.get_tasks_meta_by_topic_section(),
-        model_class=TopicSectionMetaResponse,
+        model_class=TeacherTaskMetaByTopicSectionResponse,
         ttl=7200
     )
 

@@ -11,6 +11,7 @@ from repositories.group_repository import GroupRepository
 from repositories.teacher_student_repository import TeacherStudentRepository
 
 from dto_schemas.user import MessageResponse, UserResponse
+from dto_schemas.task import TaskResponse
 from dto_schemas.stats import UserStats
 from dto_schemas.cached import (
     TaskGroupedResponse,
@@ -62,20 +63,20 @@ class TeacherService:
             if topic_num not in grouped[cls]:
                 grouped[cls][topic_num] = []
             
-            grouped[cls][topic_num].append({
-                "id": task.id,
-                "task_class": task.task_class,
-                "topic_number": task.topic_number,
-                "topic": task.topic,
-                "section": task.section,
-                "content": task.content,
-                "answer": task.answer,
-                "hint": task.hint,
-                "solution": task.solution,
-                "is_open_answer": task.is_open_answer,
-                "options": task.options,
-                "difficulty": task.difficulty
-            })
+            grouped[cls][topic_num].append(TaskResponse(
+                id=task.id,
+                task_class=task.task_class,
+                topic_number=task.topic_number,
+                topic=task.topic,
+                section=task.section,
+                content=task.content,
+                answer=task.answer,
+                hint=task.hint,
+                solution=task.solution,
+                is_open_answer=task.is_open_answer,
+                options=task.options,
+                difficulty=task.difficulty,
+            ))
         
         def sort_key(cls):
             if cls.isdigit():
@@ -366,7 +367,7 @@ class TeacherService:
                 result_id=result_id,
             ))
         
-        result.sort(key=lambda x: (x['is_completed'], x['student_name']))
+        result.sort(key=lambda x: (x.is_completed, x.student_name))
         return result
     
     def get_student_assignments(self, student_id: int, teacher_id: int, role: str):
