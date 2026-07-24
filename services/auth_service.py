@@ -48,7 +48,7 @@ class AuthService:
         user = self.user_repo.get_user_by_email(username)
         
         if not user or not auth.verify_password(password, user.hashed_password):
-            raise ValueError("Неверный логин или пароль")
+            raise ValueError("Неверный логин или пароль ")
         
         access_token = auth.create_access_token(
             data={"sub": user.username, "role": user.role}
