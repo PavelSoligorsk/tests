@@ -298,14 +298,7 @@ def get_theory_by_topic_section(
 ):
     """Получить теорию по теме и разделу"""
     try:
-        return cache_result(
-            "theory_section_content",
-            None,
-            lambda: service.get_theory_by_topic_section(topic, section),
-            ttl=3600,
-            topic=topic,
-            section=section
-        )
+        return service.get_theory_by_topic_section(topic, section)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
