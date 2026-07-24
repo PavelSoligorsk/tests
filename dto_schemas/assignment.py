@@ -2,6 +2,26 @@ from pydantic import BaseModel, ConfigDict
 from typing import List, Optional
 from datetime import datetime
 
+
+class GroupCreateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GroupUpdateRequest(BaseModel):
+    name: Optional[str] = None
+    description: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AddStudentsToGroupRequest(BaseModel):
+    student_ids: List[int]
+
+    model_config = ConfigDict(from_attributes=True)
+
 class TestAssignmentCreate(BaseModel):
     test_id: int
     user_ids: List[int]

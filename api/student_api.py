@@ -7,7 +7,8 @@ from dto_schemas import (
     StudentHistoryItemResponse, DetailedResultResponse,
     StudentAssignmentItemResponse, TheoryTopicSummaryResponse,
     TheorySectionSummaryResponse, StudentAssignmentMetaItemResponse,
-    StudentAITestItemResponse, AvailableTestMetaResponse
+    StudentAITestItemResponse, AvailableTestMetaResponse,
+    TheoryQuestionRequest, TestAnswerSubmission
 )
 from core import auth
 from core.database import get_db
@@ -97,13 +98,13 @@ def get_test_for_passing(
 @router.post("/tests/{test_id}/submit")
 def submit_test_results(
     test_id: int,
-    answers: List[dict],
+    answers: List[TestAnswerSubmission],
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Отправить результаты теста"""
     try:
-        result = service.submit_test(test_id, current_user.id, answers)
+        result = service.submit_test(test_id, current_user.id, [answer.model_dump() for answer in answers])
         
         # Инвалидируем все кеши пользователя
         invalidate_user_cache(
@@ -285,15 +286,15 @@ def get_theory_sections(
 
 @router.post("/theory/ask-ai")
 def ask_ai_about_theory(
-    request: dict,
+    request: TheoryQuestionRequest,
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Задать вопрос AI по теории"""
     try:
-        theory_id = request.get("theory_id")
-        question = request.get("question", "").strip()
-        theory_content = request.get("theory_content", "")
+        theory_id = request.theory_id
+        question = request.question.strip()
+        theory_content = request.theory_content
 
         # Не кешируем, т.к. вопросы уникальны
         return service.ask_ai_about_theory(question, theory_id, theory_content)

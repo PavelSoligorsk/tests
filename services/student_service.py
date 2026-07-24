@@ -9,6 +9,27 @@ from repositories.assignment_repository import AssignmentRepository
 from repositories.theory_repository import TheoryRepository
 from services.ai_service import AIService
 from dto_schemas import *
+from dto_schemas.cached import (
+    StudentHistoryItemResponse,
+    TestSummaryResponse,
+    DetailedResultResponse,
+    DetailedResultDetailResponse,
+    DifficultyStatResponse,
+    StudentAssignmentItemResponse,
+    TaskShortResponse,
+    StudentAITestItemResponse,
+    TheoryTopicSummaryResponse,
+    StartAssignedTestResponse,
+    StartTestTaskItem,
+    SubmitTestResponse,
+    AIHintResponse,
+    AIHintContext,
+    AISolutionResponse,
+    AISolutionContext,
+    AITheoryResponse,
+    AITheoryContext,
+)
+from dto_schemas.stats import UserStats
 from datetime import datetime  # Add this import
 
 class StudentService:
@@ -28,14 +49,12 @@ class StudentService:
         if not user:
             raise ValueError("Пользователь не найден")
         
-        stats = self.user_repo.get_user_stats(user_id)
-
-        user_dto = UserResponse.model_validate(user).model_dump()
+        stats_dict = self.user_repo.get_user_stats(user_id)
         
-        return {
-            "user": user_dto,
-            "stats": stats
-        }
+        return UserResponseWithStats(
+            user=UserResponse.model_validate(user),
+            stats=UserStats(**stats_dict),
+        )
     
     def update_profile(self, user_id: int, update_data: dict):
         """Обновить профиль студента"""
@@ -84,11 +103,11 @@ class StudentService:
         
         self.result_repo.update_result_points(result.id, total_points)
         
-        return {
-            "status": "success",
-            "score": total_points,
-            "max_score_possible": sum(2 if t.is_open_answer else 1 for t in test.tasks)
-        }
+        return SubmitTestResponse(
+            status="success",
+            score=total_points,
+            max_score_possible=sum(2 if t.is_open_answer else 1 for t in test.tasks),
+        )
     
     def get_history(self, user_id: int):
         """Получить историю попыток"""
@@ -96,18 +115,18 @@ class StudentService:
         
         history = []
         for r in results:
-            history.append({
-                "id": r.id,
-                "test_id": r.test_id if r.test_id else 0,
-                "user_id": r.user_id,
-                "total_points": r.total_points or 0,
-                "completed_at": r.completed_at,
-                "test_title": r.test.title if r.test else "Тест удалён",
-                "test": {
-                    "id": r.test.id,
-                    "title": r.test.title
-                } if r.test else None
-            })
+            history.append(StudentHistoryItemResponse(
+                id=r.id,
+                test_id=r.test_id if r.test_id else 0,
+                user_id=r.user_id,
+                total_points=r.total_points or 0,
+                completed_at=r.completed_at,
+                test_title=r.test.title if r.test else "Тест удалён",
+                test=TestSummaryResponse(
+                    id=r.test.id,
+                    title=r.test.title,
+                ) if r.test else None,
+            ))
         
         return history
     
@@ -118,14 +137,14 @@ class StudentService:
             raise ValueError("Результат не найден")
         
         if not result.test:
-            return {
-                "test_title": "Тест удалён",
-                "total_points": result.total_points or 0,
-                "max_points": 0,
-                "completed_at": result.completed_at,
-                "difficulty_stats": {},
-                "details": []
-            }
+            return DetailedResultResponse(
+                test_title="Тест удалён",
+                total_points=result.total_points or 0,
+                max_points=0,
+                completed_at=result.completed_at,
+                difficulty_stats={},
+                details=[],
+            )
         
         all_tasks = self.task_repo.get_tasks_by_test_id(result.test_id)
         user_answers = self.result_repo.get_user_answers_for_result(result_id)
@@ -133,7 +152,7 @@ class StudentService:
         
         details = []
         total_max_points = 0
-        stats = {str(i): {"total": 0, "correct": 0} for i in range(1, 6)}
+        stats: dict[str, DifficultyStatResponse] = {str(i): DifficultyStatResponse(total=0, correct=0) for i in range(1, 6)}
         
         for task in all_tasks:
             ua = answers_map.get(task.id)
@@ -142,29 +161,29 @@ class StudentService:
             
             diff = str(task.difficulty) if task.difficulty else "1"
             if diff in stats:
-                stats[diff]["total"] += 1
+                stats[diff].total += 1
                 if ua and ua.is_correct:
-                    stats[diff]["correct"] += 1
+                    stats[diff].correct += 1
             
-            details.append({
-                "task_id": task.id,
-                "content": task.content,
-                "options": task.options,
-                "correct_answer": task.answer,
-                "user_answer": ua.user_text_answer if ua else "Нет ответа",
-                "is_correct": ua.is_correct if ua else False,
-                "solution": task.solution,
-                "difficulty": task.difficulty
-            })
+            details.append(DetailedResultDetailResponse(
+                task_id=task.id,
+                content=task.content,
+                options=task.options,
+                correct_answer=task.answer,
+                user_answer=ua.user_text_answer if ua else "Нет ответа",
+                is_correct=ua.is_correct if ua else False,
+                solution=task.solution,
+                difficulty=task.difficulty,
+            ))
         
-        return {
-            "test_title": result.test.title,
-            "total_points": result.total_points or 0,
-            "max_points": total_max_points,
-            "completed_at": result.completed_at,
-            "difficulty_stats": stats,
-            "details": details
-        }
+        return DetailedResultResponse(
+            test_title=result.test.title,
+            total_points=result.total_points or 0,
+            max_points=total_max_points,
+            completed_at=result.completed_at,
+            difficulty_stats=stats,
+            details=details,
+        )
     
     def get_assignments(self, user_id: int):
         """Получить назначенные тесты"""
@@ -176,21 +195,21 @@ class StudentService:
             
             tasks_count = len(test.tasks) if test else 0
             
-            result.append({
-                "assignment_id": assignment.id,
-                "test_id": assignment.test_id,
-                "test_title": test.title if test else "Тест удалён",
-                "target_class": test.target_class if test else "",
-                "target_topic": test.target_topic if test else "",
-                "is_autocompile": test.is_autocompile if test else None,
-                "tasks": [{"id": t.id, "content": t.content} for t in (test.tasks if test else [])],
-                "assigned_at": assignment.assigned_at,
-                "due_date": assignment.due_date,
-                "is_completed": assignment.is_completed,
-                "completed_at": assignment.completed_at,
-                "total_tasks": tasks_count,
-                "time_left": str(assignment.due_date -datetime.utcnow()) if assignment.due_date else None
-            })
+            result.append(StudentAssignmentItemResponse(
+                assignment_id=assignment.id,
+                test_id=assignment.test_id,
+                test_title=test.title if test else "Тест удалён",
+                target_class=test.target_class if test else "",
+                target_topic=test.target_topic if test else "",
+                is_autocompile=test.is_autocompile if test else None,
+                tasks=[TaskShortResponse(id=t.id, content=t.content) for t in (test.tasks if test else [])],
+                assigned_at=assignment.assigned_at,
+                due_date=assignment.due_date,
+                is_completed=assignment.is_completed,
+                completed_at=assignment.completed_at,
+                total_tasks=tasks_count,
+                time_left=str(assignment.due_date - datetime.utcnow()) if assignment.due_date else None,
+            ))
         
         return result
     
@@ -211,20 +230,20 @@ class StudentService:
         
         tasks = []
         for task in test.tasks:
-            tasks.append({
-                "id": task.id,
-                "content": task.content,
-                "options": task.options,
-                "is_open_answer": task.is_open_answer,
-                "difficulty": task.difficulty,
-            })
+            tasks.append(StartTestTaskItem(
+                id=task.id,
+                content=task.content,
+                options=task.options,
+                is_open_answer=task.is_open_answer,
+                difficulty=task.difficulty,
+            ))
         
-        return {
-            "result_id": result.id,
-            "test_title": test.title,
-            "tasks": tasks,
-            "time_limit": None
-        }
+        return StartAssignedTestResponse(
+            result_id=result.id,
+            test_title=test.title,
+            tasks=tasks,
+            time_limit=None,
+        )
     
     def get_ai_hint(self, task_id: int, user_id: int):
         """Получить AI подсказку для задания"""
@@ -249,16 +268,16 @@ class StudentService:
         
         hint = self.ai_service.get_hint(task_dict, topic_mastery['percentage'])
         
-        return {
-            "task_id": task_id,
-            "hint": hint,
-            "context": {
-                "task_class": task.task_class,
-                "topic_number": task.topic_number,
-                "difficulty": task.difficulty,
-                "topic_mastery_percent": topic_mastery['percentage']
-            }
-        }
+        return AIHintResponse(
+            task_id=task_id,
+            hint=hint,
+            context=AIHintContext(
+                task_class=task.task_class,
+                topic_number=task.topic_number,
+                difficulty=task.difficulty,
+                topic_mastery_percent=topic_mastery['percentage'],
+            ),
+        )
     
     def get_ai_solution(self, task_id: int, user_id: int):
         """Получить AI решение задачи"""
@@ -288,32 +307,32 @@ class StudentService:
         match = re.search(answer_pattern, ai_solution, re.IGNORECASE)
         
         if not match:
-            return {
-                "task_id": task_id,
-                "success": False,
-                "message": "Решение ИИ не найдено (нет маркера '=== ОТВЕТ ===')",
-                "ai_solution": ai_solution,
-                "verified": False
-            }
+            return AISolutionResponse(
+                task_id=task_id,
+                success=False,
+                verified=False,
+                message="Решение ИИ не найдено (нет маркера '=== ОТВЕТ ===')",
+                ai_solution=ai_solution,
+            )
         
         ai_answer = match.group(1).strip()
         is_correct = self._verify_answer(ai_answer, task.answer)
         
-        return {
-            "task_id": task_id,
-            "success": True,
-            "verified": is_correct,
-            "message": "Решение найдено и проверено. Ответ совпадает." if is_correct else "Решение найдено, но ответ не совпадает с правильным.",
-            "ai_solution": ai_solution,
-            "ai_answer": ai_answer,
-            "correct_answer": task.answer,
-            "context": {
-                "task_class": task.task_class,
-                "topic_number": task.topic_number,
-                "difficulty": task.difficulty,
-                "topic_mastery_percent": topic_mastery['percentage']
-            }
-        }
+        return AISolutionResponse(
+            task_id=task_id,
+            success=True,
+            verified=is_correct,
+            message="Решение найдено и проверено. Ответ совпадает." if is_correct else "Решение найдено, но ответ не совпадает с правильным.",
+            ai_solution=ai_solution,
+            ai_answer=ai_answer,
+            correct_answer=task.answer,
+            context=AISolutionContext(
+                task_class=task.task_class,
+                topic_number=task.topic_number,
+                difficulty=task.difficulty,
+                topic_mastery_percent=topic_mastery['percentage'],
+            ),
+        )
     
     def get_theory_topics(self):
         """Получить все темы теории"""
@@ -330,11 +349,11 @@ class StudentService:
         result = []
         for topic in topics:
             if topic[0]:
-                result.append({
-                    "topic": topic[0],
-                    "label": MAIN_TOPICS.get(topic[0], topic[0]),
-                    "sections_count": self.theory_repo.get_theory_sections_count(topic[0])
-                })
+                result.append(TheoryTopicSummaryResponse(
+                    topic=topic[0],
+                    label=MAIN_TOPICS.get(topic[0], topic[0]),
+                    sections_count=self.theory_repo.get_theory_sections_count(topic[0]),
+                ))
         
         return result
     
@@ -367,15 +386,15 @@ class StudentService:
         
         answer = self.ai_service.get_theory_answer(question, theory_context, topic_name, section_name)
         
-        return {
-            "success": True,
-            "question": question,
-            "answer": answer,
-            "context": {
-                "topic": topic_name,
-                "section": section_name
-            }
-        }
+        return AITheoryResponse(
+            success=True,
+            question=question,
+            answer=answer,
+            context=AITheoryContext(
+                topic=topic_name,
+                section=section_name,
+            ),
+        )
     
     def generate_ai_test(self, user_id: int, prompt: str, task_count: int, difficulty: Optional[str] = None):
         """Сгенерировать тест с помощью AI"""
@@ -521,16 +540,16 @@ class StudentService:
         tests = self.test_repo.get_available_tests_meta()
         result = []
         for test in tests:
-            result.append({
-                "id": test.id,
-                "title": test.title,
-                "target_class": test.target_class,
-                "target_topic": test.target_topic,
-                "is_autocompile": test.is_autocompile,
-                "is_ai_generated": test.is_ai_generated,
-                "tasks_count": len(test.tasks) if test.tasks else 0,
-                "is_active": test.is_active
-            })
+            result.append(AvailableTestMetaResponse(
+                id=test.id,
+                title=test.title,
+                target_class=test.target_class,
+                target_topic=test.target_topic,
+                is_autocompile=test.is_autocompile,
+                is_ai_generated=test.is_ai_generated,
+                tasks_count=len(test.tasks) if test.tasks else 0,
+                is_active=test.is_active,
+            ))
         return result
     
     def get_assignments_meta(self, user_id: int):
@@ -542,18 +561,18 @@ class StudentService:
             test = self.test_repo.get_test_by_id(assignment.test_id)
             if not test:
                 continue
-            result.append({
-                "assignment_id": assignment.id,
-                "test_id": assignment.test_id,
-                "test_title": test.title,
-                "target_class": test.target_class,
-                "target_topic": test.target_topic,
-                "is_autocompile": test.is_autocompile,
-                "tasks_count": len(test.tasks) if test.tasks else 0,
-                "due_date": assignment.due_date,
-                "is_completed": assignment.is_completed,
-                "assigned_at": assignment.assigned_at
-            })
+            result.append(StudentAssignmentMetaItemResponse(
+                assignment_id=assignment.id,
+                test_id=assignment.test_id,
+                test_title=test.title,
+                target_class=test.target_class,
+                target_topic=test.target_topic,
+                is_autocompile=test.is_autocompile,
+                tasks_count=len(test.tasks) if test.tasks else 0,
+                due_date=assignment.due_date,
+                is_completed=assignment.is_completed,
+                assigned_at=assignment.assigned_at,
+            ))
         return result
     
     def get_ai_tests(self, user_id: int):
@@ -565,18 +584,18 @@ class StudentService:
             # Проверяем, есть ли незавершённые попытки
             has_incomplete = self.result_repo.has_incomplete_attempt(user_id, test.id)
             
-            result.append({
-                "id": test.id,
-                "title": test.title,
-                "target_class": test.target_class,
-                "target_topic": test.target_topic,
-                "is_ai_generated": True,
-                "tasks_count": len(test.tasks) if test.tasks else 0,
-                "is_active": test.is_active,
-                "is_completed": not has_incomplete,  # true если нет незавершённых
-                "has_incomplete_attempt": has_incomplete,  # можно продолжить
-                "created_at": test.created_at if hasattr(test, 'created_at') else None
-            })
+            result.append(StudentAITestItemResponse(
+                id=test.id,
+                title=test.title,
+                target_class=test.target_class,
+                target_topic=test.target_topic,
+                is_ai_generated=True,
+                tasks_count=len(test.tasks) if test.tasks else 0,
+                is_active=test.is_active,
+                is_completed=not has_incomplete,
+                has_incomplete_attempt=has_incomplete,
+                created_at=test.created_at if hasattr(test, 'created_at') else None,
+            ))
         
         return result
 

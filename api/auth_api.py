@@ -1,7 +1,10 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy.orm import Session
-from dto_schemas import UserRegister, ForgotPasswordRequest, ResetPasswordRequest
+from dto_schemas import (
+    UserRegister, ForgotPasswordRequest, ResetPasswordRequest,
+    LoginResponse, TokenVerifyResponse, MessageResponse,
+)
 from core.database import get_db
 from services.auth_service import AuthService, PermissionError
 
@@ -12,7 +15,7 @@ def get_auth_service(db: Session = Depends(get_db)) -> AuthService:
     return AuthService(db)
 
 
-@router.post("/register")
+@router.post("/register", response_model=MessageResponse)
 def register(
     user_data: UserRegister,
     service: AuthService = Depends(get_auth_service)
@@ -25,7 +28,7 @@ def register(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.post("/login")
+@router.post("/login", response_model=LoginResponse)
 def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     service: AuthService = Depends(get_auth_service)
@@ -40,7 +43,7 @@ def login(
         )
 
 
-@router.post("/forgot-password")
+@router.post("/forgot-password", response_model=MessageResponse)
 async def forgot_password(
     request: ForgotPasswordRequest,
     service: AuthService = Depends(get_auth_service)
@@ -48,7 +51,7 @@ async def forgot_password(
     return service.forgot_password(request.email)
 
 
-@router.post("/reset-password")
+@router.post("/reset-password", response_model=MessageResponse)
 async def reset_password(
     request: ResetPasswordRequest,
     service: AuthService = Depends(get_auth_service)
@@ -63,7 +66,7 @@ async def reset_password(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/verify-reset-token/{token}")
+@router.get("/verify-reset-token/{token}", response_model=TokenVerifyResponse)
 async def verify_reset_token(
     token: str,
     service: AuthService = Depends(get_auth_service)

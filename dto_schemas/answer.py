@@ -1,6 +1,13 @@
 from pydantic import BaseModel, ConfigDict
 from typing import Optional
 
+
+class TestAnswerSubmission(BaseModel):
+    task_id: int
+    user_answer: str | int | list[str] | list[int]
+
+    model_config = ConfigDict(from_attributes=True)
+
 class AnswerSubmitRequest(BaseModel):
     task_id: int
     user_id: int

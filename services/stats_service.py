@@ -3,6 +3,18 @@ from typing import List, Optional
 from sqlalchemy.orm import Session
 from repositories.stats_repository import StatsRepository
 
+from dto_schemas.stats import (
+    DailyStatsItem,
+    PeriodStatsResponse,
+    TopicSectionItem,
+    TopicSummaryItem,
+    TopicItem,
+    TopicsStatsResponse,
+    DifficultyItem,
+    DifficultyStatsResponse,
+    FullStatsResponse,
+)
+
 
 class StatsService:
     def __init__(self, db: Session):
@@ -87,7 +99,7 @@ class StatsService:
         
         return streak
     
-    def get_period_stats(self, user_id: int, period: str, current_user) -> dict:
+    def get_period_stats(self, user_id: int, period: str, current_user) -> PeriodStatsResponse:
         """Статистика по периоду"""
         user = self._check_access(user_id, current_user)
         start_date, end_date = self._get_period_dates(period)
@@ -123,23 +135,23 @@ class StatsService:
         daily_stats = self._build_daily_stats(results, test_ids, test_max_points, best_answers, end_date)
         streak = self._calculate_streak([d["date"] for d in daily_stats], end_date)
         
-        return {
-            "period": period,
-            "user_id": user_id,
-            "user_name": f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
-            "start_date": start_date.isoformat() if start_date else None,
-            "end_date": end_date.isoformat(),
-            "total_tests": len(results),
-            "total_tasks": unique_tasks_count,
-            "correct_tasks": correct_tasks,
-            "avg_score": avg_score,
-            "best_score": best_score,
-            "worst_score": worst_score,
-            "streak_days": streak,
-            "daily_stats": daily_stats
-        }
+        return PeriodStatsResponse(
+            period=period,
+            user_id=user_id,
+            user_name=f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
+            start_date=start_date.isoformat() if start_date else None,
+            end_date=end_date.isoformat(),
+            total_tests=len(results),
+            total_tasks=unique_tasks_count,
+            correct_tasks=correct_tasks,
+            avg_score=avg_score,
+            best_score=best_score,
+            worst_score=worst_score,
+            streak_days=streak,
+            daily_stats=daily_stats,
+        )
     
-    def get_topics_stats(self, user_id: int, period: str, current_user) -> dict:
+    def get_topics_stats(self, user_id: int, period: str, current_user) -> TopicsStatsResponse:
         """Статистика по темам с разделами"""
         user = self._check_access(user_id, current_user)
         start_date, end_date = self._get_period_dates(period)
@@ -167,7 +179,7 @@ class StatsService:
         
         return self._build_topics_response(total_tasks_query, correct_map, user_id, period, user)
     
-    def get_difficulty_stats(self, user_id: int, period: str, current_user) -> dict:
+    def get_difficulty_stats(self, user_id: int, period: str, current_user) -> DifficultyStatsResponse:
         """Статистика по сложности"""
         user = self._check_access(user_id, current_user)
         start_date, end_date = self._get_period_dates(period)
@@ -193,15 +205,15 @@ class StatsService:
         
         return self._build_difficulty_response(total_tasks_query, correct_map, user_id, period, user)
     
-    def get_full_stats(self, user_id: int, period: str, current_user) -> dict:
+    def get_full_stats(self, user_id: int, period: str, current_user) -> FullStatsResponse:
         """Полная статистика"""
         self._check_access(user_id, current_user)
         
-        return {
-            "period": self.get_period_stats(user_id, period, current_user),
-            "topics": self.get_topics_stats(user_id, period, current_user),
-            "difficulties": self.get_difficulty_stats(user_id, period, current_user)
-        }
+        return FullStatsResponse(
+            period=self.get_period_stats(user_id, period, current_user),
+            topics=self.get_topics_stats(user_id, period, current_user),
+            difficulties=self.get_difficulty_stats(user_id, period, current_user),
+        )
     
     # Вспомогательные методы сборки ответов
     def _build_daily_stats(self, results, test_ids, test_max_points, best_answers, end_date):
@@ -239,16 +251,20 @@ class StatsService:
         daily_stats = []
         for day_key in sorted(daily_map.keys()):
             day_data = daily_map[day_key]
-            day_data["avg_score"] = round(
+            avg = round(
                 sum(day_data["scores"]) / len(day_data["scores"]), 1
             ) if day_data["scores"] else 0.0
-            del day_data["scores"]
-            del day_data["seen_tasks"]
-            daily_stats.append(day_data)
+            daily_stats.append(DailyStatsItem(
+                date=day_data["date"],
+                tests_count=day_data["tests_count"],
+                total_tasks=day_data["total_tasks"],
+                correct_tasks=day_data["correct_tasks"],
+                avg_score=avg,
+            ))
         
         return daily_stats
     
-    def _build_topics_response(self, total_tasks_query, correct_map, user_id, period, user):
+    def _build_topics_response(self, total_tasks_query, correct_map, user_id, period, user) -> TopicsStatsResponse:
         topics_map = {}
         
         for topic, section, total in total_tasks_query:
@@ -260,7 +276,6 @@ class StatsService:
             
             if topic not in topics_map:
                 topics_map[topic] = {
-                    "topic": topic,
                     "total_tasks": 0,
                     "correct_tasks": 0,
                     "sections": {}
@@ -268,66 +283,68 @@ class StatsService:
             
             topics_map[topic]["total_tasks"] += total
             topics_map[topic]["correct_tasks"] += correct
-            topics_map[topic]["sections"][section or "Общее"] = {
-                "section": section or "Общее",
-                "total_tasks": total,
-                "correct_tasks": correct,
-                "mastery_percent": mastery
-            }
+            topics_map[topic]["sections"][section or "Общее"] = TopicSectionItem(
+                section=section or "Общее",
+                total_tasks=total,
+                correct_tasks=correct,
+                mastery_percent=mastery,
+            )
         
         topics = []
         strongest = None
         weakest = None
-        max_mastery = -1
-        min_mastery = 101
+        max_mastery = -1.0
+        min_mastery = 101.0
         
-        for topic_data in topics_map.values():
+        for topic_name, topic_data in topics_map.items():
             total = topic_data["total_tasks"]
             correct = topic_data["correct_tasks"]
             topic_mastery = round((correct / total) * 100, 1) if total > 0 else 0.0
             
-            sections_list = list(topic_data["sections"].values())
-            sections_list.sort(key=lambda x: x["mastery_percent"])
+            sections_list = sorted(
+                topic_data["sections"].values(),
+                key=lambda x: x.mastery_percent
+            )
             
-            topic_item = {
-                "topic": topic_data["topic"],
-                "total_tasks": total,
-                "correct_tasks": correct,
-                "mastery_percent": topic_mastery,
-                "sections": sections_list
-            }
+            topic_item = TopicItem(
+                topic=topic_name,
+                total_tasks=total,
+                correct_tasks=correct,
+                mastery_percent=topic_mastery,
+                sections=sections_list,
+            )
             topics.append(topic_item)
             
             if topic_mastery > max_mastery:
                 max_mastery = topic_mastery
-                strongest = {
-                    "topic": topic_data["topic"],
-                    "total_tasks": total,
-                    "correct_tasks": correct,
-                    "mastery_percent": topic_mastery
-                }
+                strongest = TopicSummaryItem(
+                    topic=topic_name,
+                    total_tasks=total,
+                    correct_tasks=correct,
+                    mastery_percent=topic_mastery,
+                )
             
             if topic_mastery < min_mastery and total >= 3:
                 min_mastery = topic_mastery
-                weakest = {
-                    "topic": topic_data["topic"],
-                    "total_tasks": total,
-                    "correct_tasks": correct,
-                    "mastery_percent": topic_mastery
-                }
+                weakest = TopicSummaryItem(
+                    topic=topic_name,
+                    total_tasks=total,
+                    correct_tasks=correct,
+                    mastery_percent=topic_mastery,
+                )
         
-        topics.sort(key=lambda x: x["mastery_percent"])
+        topics.sort(key=lambda x: x.mastery_percent)
         
-        return {
-            "period": period,
-            "user_id": user_id,
-            "user_name": f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
-            "topics": topics,
-            "strongest_topic": strongest,
-            "weakest_topic": weakest
-        }
+        return TopicsStatsResponse(
+            period=period,
+            user_id=user_id,
+            user_name=f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
+            topics=topics,
+            strongest_topic=strongest,
+            weakest_topic=weakest,
+        )
     
-    def _build_difficulty_response(self, total_tasks_query, correct_map, user_id, period, user):
+    def _build_difficulty_response(self, total_tasks_query, correct_map, user_id, period, user) -> DifficultyStatsResponse:
         total_map = {diff: total for diff, total in total_tasks_query if diff}
         
         difficulties = []
@@ -336,56 +353,56 @@ class StatsService:
             correct = correct_map.get(diff, 0)
             mastery = round((correct / total) * 100, 1) if total > 0 else 0.0
             
-            difficulties.append({
-                "difficulty": diff,
-                "total_tasks": total,
-                "correct_tasks": correct,
-                "mastery_percent": mastery
-            })
+            difficulties.append(DifficultyItem(
+                difficulty=diff,
+                total_tasks=total,
+                correct_tasks=correct,
+                mastery_percent=mastery,
+            ))
         
-        difficulties.sort(key=lambda x: x["difficulty"])
+        difficulties.sort(key=lambda x: x.difficulty)
         
-        return {
-            "period": period,
-            "user_id": user_id,
-            "user_name": f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
-            "difficulties": difficulties
-        }
+        return DifficultyStatsResponse(
+            period=period,
+            user_id=user_id,
+            user_name=f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
+            difficulties=difficulties,
+        )
     
-    def _empty_period_response(self, user_id, period, user, start_date, end_date):
-        return {
-            "period": period,
-            "user_id": user_id,
-            "user_name": f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
-            "start_date": start_date.isoformat() if start_date else None,
-            "end_date": end_date.isoformat(),
-            "total_tests": 0,
-            "total_tasks": 0,
-            "correct_tasks": 0,
-            "avg_score": 0.0,
-            "best_score": 0.0,
-            "worst_score": 0.0,
-            "streak_days": 0,
-            "daily_stats": []
-        }
+    def _empty_period_response(self, user_id, period, user, start_date, end_date) -> PeriodStatsResponse:
+        return PeriodStatsResponse(
+            period=period,
+            user_id=user_id,
+            user_name=f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
+            start_date=start_date.isoformat() if start_date else None,
+            end_date=end_date.isoformat(),
+            total_tests=0,
+            total_tasks=0,
+            correct_tasks=0,
+            avg_score=0.0,
+            best_score=0.0,
+            worst_score=0.0,
+            streak_days=0,
+            daily_stats=[],
+        )
     
-    def _empty_topics_response(self, user_id, period, user):
-        return {
-            "period": period,
-            "user_id": user_id,
-            "user_name": f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
-            "topics": [],
-            "strongest_topic": None,
-            "weakest_topic": None
-        }
+    def _empty_topics_response(self, user_id, period, user) -> TopicsStatsResponse:
+        return TopicsStatsResponse(
+            period=period,
+            user_id=user_id,
+            user_name=f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
+            topics=[],
+            strongest_topic=None,
+            weakest_topic=None,
+        )
     
-    def _empty_difficulty_response(self, user_id, period, user):
-        return {
-            "period": period,
-            "user_id": user_id,
-            "user_name": f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
-            "difficulties": []
-        }
+    def _empty_difficulty_response(self, user_id, period, user) -> DifficultyStatsResponse:
+        return DifficultyStatsResponse(
+            period=period,
+            user_id=user_id,
+            user_name=f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username,
+            difficulties=[],
+        )
 
 
 class PermissionError(Exception):

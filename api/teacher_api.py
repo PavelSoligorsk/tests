@@ -7,7 +7,10 @@ from dto_schemas import (
     TestAssignmentCreate, TestGroupAssignment,
     TaskGroupedResponse, TaskClassTopicMetaResponse,
     TopicSectionMetaResponse, TeacherAssignmentItemResponse,
-    TeacherGroupResponse, DetailedResultResponse, UserResponse
+    TeacherGroupResponse, DetailedResultResponse, UserResponse,
+    GroupCreateRequest, GroupUpdateRequest, AddStudentsToGroupRequest,
+    TeacherStudentProfileResponse, TeacherHistoryItemResponse,
+    GroupAssignResponse, AddStudentsToGroupResponse, MessageResponse,
 )
 from core import auth
 from core.database import get_db
@@ -54,7 +57,7 @@ def get_all_tasks(
     )
 
 
-@router.get("/tasks-grouped")
+@router.get("/tasks-grouped", response_model=TaskGroupedResponse)
 def get_tasks_grouped(
     service: TeacherService = Depends(get_teacher_service),
     current_teacher: User = Depends(check_teacher)
@@ -259,7 +262,7 @@ def update_test(
         raise HTTPException(status_code=403, detail=str(e))
 
 
-@router.delete("/tests/{test_id}")
+@router.delete("/tests/{test_id}", response_model=MessageResponse)
 def delete_test(
     test_id: int,
     service: TeacherService = Depends(get_teacher_service),
@@ -349,7 +352,7 @@ def get_my_students(
     )
 
 
-@router.get("/students-profile/{user_id}")
+@router.get("/students-profile/{user_id}", response_model=TeacherStudentProfileResponse)
 def get_student_profile(
     user_id: int,
     service: TeacherService = Depends(get_teacher_service),
@@ -364,7 +367,7 @@ def get_student_profile(
         raise HTTPException(status_code=403, detail=str(e))
 
 
-@router.get("/students-history/{user_id}")
+@router.get("/students-history/{user_id}", response_model=list[TeacherHistoryItemResponse])
 def get_student_history(
     user_id: int,
     service: TeacherService = Depends(get_teacher_service),
@@ -403,7 +406,7 @@ def get_teacher_detailed_result(
 
 # ==================== НАЗНАЧЕНИЕ ТЕСТОВ ====================
 
-@router.post("/assign-test")
+@router.post("/assign-test", response_model=list[TeacherAssignmentItemResponse])
 def assign_test_to_students(
     assignment: TestAssignmentCreate,
     service: TeacherService = Depends(get_teacher_service),
@@ -482,7 +485,7 @@ def get_student_assignments(
         raise HTTPException(status_code=403, detail=str(e))
 
 
-@router.delete("/assignments/{assignment_id}")
+@router.delete("/assignments/{assignment_id}", response_model=MessageResponse)
 def delete_assignment(
     assignment_id: int,
     service: TeacherService = Depends(get_teacher_service),
@@ -505,7 +508,7 @@ def delete_assignment(
         raise HTTPException(status_code=403, detail=str(e))
 
 
-@router.post("/assign-test-to-group")
+@router.post("/assign-test-to-group", response_model=GroupAssignResponse)
 def assign_test_to_group(
     assignment: TestGroupAssignment,
     service: TeacherService = Depends(get_teacher_service),
@@ -554,15 +557,17 @@ def get_my_groups(
 
 @router.post("/groups/")
 def create_group(
-    payload: dict,
+    payload: GroupCreateRequest,
     service: TeacherService = Depends(get_teacher_service),
     current_teacher: User = Depends(check_teacher)
 ):
     """Создать новую группу"""
     try:
+        if not payload.name or not payload.name.strip():
+            raise HTTPException(status_code=400, detail="Название группы обязательно")
         result = service.create_group(
-            name=payload.get("name", "").strip(),
-            description=payload.get("description"),
+            name=payload.name.strip(),
+            description=payload.description,
             teacher_id=current_teacher.id
         )
         
@@ -577,7 +582,7 @@ def create_group(
 @router.put("/groups/{group_id}")
 def update_group(
     group_id: int,
-    payload: dict,
+    payload: GroupUpdateRequest,
     service: TeacherService = Depends(get_teacher_service),
     current_teacher: User = Depends(check_teacher)
 ):
@@ -586,8 +591,8 @@ def update_group(
         result = service.update_group(
             group_id=group_id,
             teacher_id=current_teacher.id,
-            name=payload.get("name", "").strip(),
-            description=payload.get("description")
+            name=payload.name.strip() if payload.name and payload.name.strip() else None,
+            description=payload.description
         )
         
         # Инвалидируем кеш групп
@@ -600,7 +605,7 @@ def update_group(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.delete("/groups/{group_id}")
+@router.delete("/groups/{group_id}", response_model=MessageResponse)
 def delete_group(
     group_id: int,
     service: TeacherService = Depends(get_teacher_service),
@@ -618,10 +623,10 @@ def delete_group(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.post("/groups/{group_id}/students")
+@router.post("/groups/{group_id}/students", response_model=AddStudentsToGroupResponse)
 def add_students_to_group(
     group_id: int,
-    payload: dict,
+    payload: AddStudentsToGroupRequest,
     service: TeacherService = Depends(get_teacher_service),
     current_teacher: User = Depends(check_teacher)
 ):
@@ -630,7 +635,7 @@ def add_students_to_group(
         result = service.add_students_to_group(
             group_id=group_id,
             teacher_id=current_teacher.id,
-            student_ids=payload.get("student_ids", [])
+            student_ids=payload.student_ids
         )
         
         # Инвалидируем кеш

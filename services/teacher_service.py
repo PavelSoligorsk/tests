@@ -10,6 +10,27 @@ from repositories.assignment_repository import AssignmentRepository
 from repositories.group_repository import GroupRepository
 from repositories.teacher_student_repository import TeacherStudentRepository
 
+from dto_schemas.user import MessageResponse, UserResponse
+from dto_schemas.stats import UserStats
+from dto_schemas.cached import (
+    TaskGroupedResponse,
+    TeacherStudentProfileResponse,
+    TeacherHistoryItemResponse,
+    TeacherHistoryResultResponse,
+    DetailedResultResponse,
+    DetailedResultDetailResponse,
+    DifficultyStatResponse,
+    ResultUserResponse,
+    TeacherGroupResponse,
+    TeacherGroupStudentResponse,
+    TeacherAssignmentItemResponse,
+    TeacherTaskDetailResponse,
+    TeacherTaskMetaResponse,
+    TeacherTaskMetaByTopicSectionResponse,
+    GroupAssignResponse,
+    AddStudentsToGroupResponse,
+)
+
 
 class TeacherService:
     def __init__(self, db: Session):
@@ -134,7 +155,7 @@ class TeacherService:
         
         try:
             self.test_repo.delete_test_cascade(test_id)
-            return {"message": f"Тест #{test_id} и все связанные данные удалены"}
+            return MessageResponse(message=f"Тест #{test_id} и все связанные данные удалены")
         except Exception as e:
             raise Exception(f"Ошибка при удалении: {str(e)}")
     
@@ -167,18 +188,10 @@ class TeacherService:
         
         stats = self.user_repo.get_user_stats(student_id)
         
-        return {
-            "user": {
-                "id": user.id,
-                "username": user.username,
-                "first_name": user.first_name,
-                "last_name": user.last_name,
-                "role": user.role,
-                "phone": user.phone,
-                "tg_username": user.tg_username
-            },
-            "stats": stats
-        }
+        return TeacherStudentProfileResponse(
+            user=UserResponse.model_validate(user),
+            stats=UserStats(**stats),
+        )
     
     def get_student_history(self, student_id: int, teacher_id: int):
         """Получить историю тестов студента"""
@@ -192,14 +205,15 @@ class TeacherService:
         results = self.result_repo.get_user_history(student_id)
         
         return [
-            {
-                "test_title": r.test.title if r.test else "Тест удалён",
-                "result": {
-                    "id": r.id,
-                    "total_points": r.total_points or 0,
-                    "completed_at": r.completed_at
-                }
-            } for r in results
+            TeacherHistoryItemResponse(
+                test_title=r.test.title if r.test else "Тест удалён",
+                result=TeacherHistoryResultResponse(
+                    id=r.id,
+                    total_points=r.total_points or 0,
+                    completed_at=r.completed_at,
+                ),
+            )
+            for r in results
         ]
     
     def get_detailed_result(self, result_id: int, teacher_id: int):
@@ -293,17 +307,17 @@ class TeacherService:
         result = []
         for assignment in all_assignments:
             student = self.user_repo.get_user_by_id(assignment.user_id)
-            result.append({
-                "id": assignment.id if assignment.id else 0,
-                "test_id": assignment.test_id,
-                "test_title": test.title,
-                "user_id": assignment.user_id,
-                "student_name": f"{student.first_name} {student.last_name}" if student else "Неизвестный",
-                "assigned_at": assignment.assigned_at,
-                "due_date": assignment.due_date,
-                "is_completed": assignment.is_completed if assignment.is_completed is not None else False,
-                "completed_at": assignment.completed_at
-            })
+            result.append(TeacherAssignmentItemResponse(
+                id=assignment.id if assignment.id else 0,
+                test_id=assignment.test_id,
+                test_title=test.title,
+                user_id=assignment.user_id,
+                student_name=f"{student.first_name} {student.last_name}" if student else "Неизвестный",
+                assigned_at=assignment.assigned_at,
+                due_date=assignment.due_date,
+                is_completed=assignment.is_completed if assignment.is_completed is not None else False,
+                completed_at=assignment.completed_at,
+            ))
         
         return result
     
@@ -334,23 +348,23 @@ class TeacherService:
             
             percentage = round((total_points / max_points) * 100, 1) if (total_points is not None and max_points > 0) else None
             
-            result.append({
-                "id": assignment.id,
-                "test_id": assignment.test_id,
-                "test_title": test.title,
-                "user_id": assignment.user_id,
-                "student_name": f"{student.first_name} {student.last_name}" if student else "Неизвестный",
-                "student_username": student.username if student else None,
-                "assigned_at": assignment.assigned_at,
-                "due_date": assignment.due_date,
-                "is_completed": is_completed,
-                "completed_at": completed_at,
-                "total_tasks": len(test.tasks) if test.tasks else 0,
-                "total_points": total_points,
-                "max_points": max_points,
-                "percentage": percentage,
-                "result_id": result_id
-            })
+            result.append(TeacherAssignmentItemResponse(
+                id=assignment.id,
+                test_id=assignment.test_id,
+                test_title=test.title,
+                user_id=assignment.user_id,
+                student_name=f"{student.first_name} {student.last_name}" if student else "Неизвестный",
+                student_username=student.username if student else None,
+                assigned_at=assignment.assigned_at,
+                due_date=assignment.due_date,
+                is_completed=is_completed,
+                completed_at=completed_at,
+                total_tasks=len(test.tasks) if test.tasks else 0,
+                total_points=total_points,
+                max_points=max_points,
+                percentage=percentage,
+                result_id=result_id,
+            ))
         
         result.sort(key=lambda x: (x['is_completed'], x['student_name']))
         return result
@@ -384,23 +398,23 @@ class TeacherService:
             max_points = self.test_repo.calculate_test_max_points(test)
             percentage = round((total_points / max_points) * 100, 1) if (total_points is not None and max_points > 0) else None
             
-            response.append({
-                "id": assignment.id,
-                "test_id": assignment.test_id,
-                "test_title": test.title,
-                "user_id": assignment.user_id,
-                "student_name": f"{student.first_name} {student.last_name}",
-                "student_username": student.username,
-                "assigned_at": assignment.assigned_at,
-                "due_date": assignment.due_date,
-                "is_completed": is_completed,
-                "completed_at": completed_at,
-                "total_tasks": len(test.tasks) if test.tasks else 0,
-                "total_points": total_points,
-                "max_points": max_points,
-                "percentage": percentage,
-                "result_id": result_id
-            })
+            response.append(TeacherAssignmentItemResponse(
+                id=assignment.id,
+                test_id=assignment.test_id,
+                test_title=test.title,
+                user_id=assignment.user_id,
+                student_name=f"{student.first_name} {student.last_name}",
+                student_username=student.username,
+                assigned_at=assignment.assigned_at,
+                due_date=assignment.due_date,
+                is_completed=is_completed,
+                completed_at=completed_at,
+                total_tasks=len(test.tasks) if test.tasks else 0,
+                total_points=total_points,
+                max_points=max_points,
+                percentage=percentage,
+                result_id=result_id,
+            ))
         
         return response
     
@@ -419,7 +433,7 @@ class TeacherService:
         
         self.assignment_repo.delete_assignment_by_obj(assignment)
         
-        return {"message": "Назначение удалено"}
+        return MessageResponse(message="Назначение удалено")
     
     def assign_test_to_group(self, group_id: int, test_id: int, teacher_id: int,
                         due_date=None, role: str = "teacher"):
@@ -457,30 +471,30 @@ class TeacherService:
         if created > 0:
             self.assignment_repo.db.commit()
         
-        return {
-            "message": f"Тест назначен {created} студентам группы '{group.name}'",
-            "assigned_count": created,
-            "group_id": group.id,
-            "test_id": test_id
-        }
+        return GroupAssignResponse(
+            message=f"Тест назначен {created} студентам группы '{group.name}'",
+            assigned_count=created,
+            group_id=group.id,
+            test_id=test_id,
+        )
     
     # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
     
-    def _format_detailed_result(self, result) -> dict:
+    def _format_detailed_result(self, result) -> DetailedResultResponse:
         """Форматировать детальный результат"""
         if not result.test:
-            return {
-                "test_title": "Тест удалён",
-                "total_points": result.total_points or 0,
-                "max_points": 0,
-                "completed_at": result.completed_at,
-                "difficulty_stats": {},
-                "user": {
-                    "first_name": result.user.first_name if result.user else "Неизвестный",
-                    "last_name": result.user.last_name if result.user else ""
-                },
-                "details": []
-            }
+            return DetailedResultResponse(
+                test_title="Тест удалён",
+                total_points=result.total_points or 0,
+                max_points=0,
+                completed_at=result.completed_at,
+                difficulty_stats={},
+                user=ResultUserResponse(
+                    first_name=result.user.first_name if result.user else "Неизвестный",
+                    last_name=result.user.last_name if result.user else "",
+                ),
+                details=[],
+            )
         
         all_tasks = self.task_repo.get_tasks_by_test_id(result.test_id)
         user_answers = self.result_repo.get_user_answers_for_result(result.id)
@@ -488,7 +502,7 @@ class TeacherService:
         
         details = []
         total_max_points = 0
-        difficulty_stats = {}
+        difficulty_stats: dict[str, DifficultyStatResponse] = {}
         
         for task in all_tasks:
             ua = answers_map.get(task.id)
@@ -497,41 +511,41 @@ class TeacherService:
             diff_level = str(task.difficulty) if task.difficulty else "1"
             
             if diff_level not in difficulty_stats:
-                difficulty_stats[diff_level] = {"correct": 0, "total": 0}
+                difficulty_stats[diff_level] = DifficultyStatResponse(total=0, correct=0)
             
-            difficulty_stats[diff_level]["total"] += 1
+            difficulty_stats[diff_level].total += 1
             if is_correct:
-                difficulty_stats[diff_level]["correct"] += 1
+                difficulty_stats[diff_level].correct += 1
             
             max_task_points = 2 if task.is_open_answer else 1
             total_max_points += max_task_points
             
-            details.append({
-                "task_id": task.id,
-                "content": task.content,
-                "options": task.options,
-                "difficulty": diff_level,
-                "correct_answer": task.answer,
-                "user_answer": ua.user_text_answer if ua else "Нет ответа",
-                "is_correct": is_correct,
-                "points_earned": ua.points_earned if ua else 0,
-                "max_task_points": max_task_points,
-                "solution": task.solution,
-                "hint": task.hint
-            })
+            details.append(DetailedResultDetailResponse(
+                task_id=task.id,
+                content=task.content,
+                options=task.options,
+                difficulty=diff_level,
+                correct_answer=task.answer,
+                user_answer=ua.user_text_answer if ua else "Нет ответа",
+                is_correct=is_correct,
+                points_earned=ua.points_earned if ua else 0,
+                max_task_points=max_task_points,
+                solution=task.solution,
+                hint=task.hint,
+            ))
         
-        return {
-            "test_title": result.test.title,
-            "total_points": result.total_points or 0,
-            "max_points": total_max_points,
-            "completed_at": result.completed_at,
-            "difficulty_stats": difficulty_stats,
-            "user": {
-                "first_name": result.user.first_name if result.user else "Неизвестный",
-                "last_name": result.user.last_name if result.user else ""
-            },
-            "details": details
-        }
+        return DetailedResultResponse(
+            test_title=result.test.title,
+            total_points=result.total_points or 0,
+            max_points=total_max_points,
+            completed_at=result.completed_at,
+            difficulty_stats=difficulty_stats,
+            user=ResultUserResponse(
+                first_name=result.user.first_name if result.user else "Неизвестный",
+                last_name=result.user.last_name if result.user else "",
+            ),
+            details=details,
+        )
     
         # ==================== УПРАВЛЕНИЕ ГРУППАМИ ====================
     
@@ -541,23 +555,23 @@ class TeacherService:
         
         result = []
         for group in groups:
-            result.append({
-                "id": group.id,
-                "name": group.name,
-                "description": group.description,
-                "students_count": len(group.students),
-                "created_at": group.created_at,
-                "students": [
-                    {
-                        "id": s.id,
-                        "first_name": s.first_name,
-                        "last_name": s.last_name,
-                        "username": s.username,
-                        "tg_username": s.tg_username
-                    }
+            result.append(TeacherGroupResponse(
+                id=group.id,
+                name=group.name,
+                description=group.description,
+                students_count=len(group.students),
+                created_at=group.created_at,
+                students=[
+                    TeacherGroupStudentResponse(
+                        id=s.id,
+                        first_name=s.first_name,
+                        last_name=s.last_name,
+                        username=s.username,
+                        tg_username=s.tg_username,
+                    )
                     for s in group.students
-                ]
-            })
+                ],
+            ))
         
         return result
     
@@ -588,7 +602,7 @@ class TeacherService:
             raise ValueError("Группа не найдена")
         
         self.group_repo.delete_group(group)
-        return {"message": f"Группа '{group.name}' удалена"}
+        return MessageResponse(message=f"Группа '{group.name}' удалена")
     
     def add_students_to_group(self, group_id: int, teacher_id: int, student_ids: list):
         """Добавить студентов в группу"""
@@ -601,10 +615,10 @@ class TeacherService:
         
         added = self.group_repo.add_students(group, student_ids, teacher_id)
         
-        return {
-            "message": f"Добавлено {added} студентов в группу '{group.name}'",
-            "added": added
-        }
+        return AddStudentsToGroupResponse(
+            message=f"Добавлено {added} студентов в группу '{group.name}'",
+            added=added,
+        )
     
     def remove_student_from_group(self, group_id: int, student_id: int, teacher_id: int):
         """Удалить студента из группы"""
@@ -615,7 +629,7 @@ class TeacherService:
         if not self.group_repo.remove_student(group, student_id):
             raise ValueError("Студент не в группе")
         
-        return {"message": "Студент удалён из группы"}
+        return MessageResponse(message="Студент удалён из группы")
     
     def get_group_students(self, group_id: int, teacher_id: int):
         """Получить список студентов группы"""
@@ -624,13 +638,13 @@ class TeacherService:
             raise ValueError("Группа не найдена")
         
         return [
-            {
-                "id": s.id,
-                "first_name": s.first_name,
-                "last_name": s.last_name,
-                "username": s.username,
-                "tg_username": s.tg_username
-            }
+            TeacherGroupStudentResponse(
+                id=s.id,
+                first_name=s.first_name,
+                last_name=s.last_name,
+                username=s.username,
+                tg_username=s.tg_username,
+            )
             for s in group.students
         ]
     
@@ -648,20 +662,20 @@ class TeacherService:
         
         tasks = []
         for task in test.tasks:
-            tasks.append({
-                "id": task.id,
-                "content": task.content,
-                "options": task.options,
-                "answer": task.answer,
-                "hint": task.hint,
-                "solution": task.solution,
-                "is_open_answer": task.is_open_answer,
-                "difficulty": task.difficulty,
-                "topic": task.topic,
-                "section": task.section,
-                "topic_number": task.topic_number,
-                "task_class": task.task_class
-            })
+            tasks.append(TeacherTaskDetailResponse(
+                id=task.id,
+                content=task.content,
+                options=task.options,
+                answer=task.answer,
+                hint=task.hint,
+                solution=task.solution,
+                is_open_answer=task.is_open_answer,
+                difficulty=task.difficulty,
+                topic=task.topic,
+                section=task.section,
+                topic_number=task.topic_number,
+                task_class=task.task_class,
+            ))
         return tasks
     
     def get_tasks_meta(self):
@@ -679,8 +693,7 @@ class TeacherService:
             
             result[cls][topic_num] += 1
         
-        return result
-    
+        return TeacherTaskMetaResponse(result)
     def get_tasks_by_class_and_topic(self, task_class: str, topic_number: str):
         return self.task_repo.get_tasks_by_class_and_topic(task_class, topic_number)
     
@@ -700,8 +713,7 @@ class TeacherService:
             
             result[topic][section] += 1
         
-        return result
-    
+        return TeacherTaskMetaByTopicSectionResponse(result)
 
 
 

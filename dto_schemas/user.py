@@ -45,6 +45,27 @@ class TokenResponse(BaseModel):
     token_type: str = "bearer"
 
 
+class LoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    role: str
+    username: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TokenVerifyResponse(BaseModel):
+    valid: bool
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MessageResponse(BaseModel):
+    message: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 # ============ ПОЛЬЗОВАТЕЛИ ============
 
 class TeacherInfo(ORMBaseModel):

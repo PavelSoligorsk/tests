@@ -12,6 +12,8 @@ from repositories.user_repository import UserRepository
 from repositories.allowed_email_repository import AllowedEmailRepository
 from repositories.password_reset_repository import PasswordResetRepository
 
+from dto_schemas.user import LoginResponse, TokenVerifyResponse, MessageResponse
+
 
 class AuthService:
     def __init__(self, db: Session):
@@ -42,9 +44,9 @@ class AuthService:
             tg_username=user_data.tg_username
         )
         
-        return {"message": "Регистрация прошла успешно!"}
+        return MessageResponse(message="Регистрация прошла успешно!")
     
-    def login(self, username: str, password: str):
+    def login(self, username: str, password: str) -> LoginResponse:
         user = self.user_repo.get_user_by_email(username)
         
         if not user or not auth.verify_password(password, user.hashed_password):
@@ -54,18 +56,18 @@ class AuthService:
             data={"sub": user.username, "role": user.role}
         )
         
-        return {
-            "access_token": access_token,
-            "token_type": "bearer",
-            "role": user.role,
-            "username": user.username
-        }
+        return LoginResponse(
+            access_token=access_token,
+            token_type="bearer",
+            role=user.role,
+            username=user.username
+        )
     
     def forgot_password(self, email: str):
         user = self.user_repo.get_user_by_email(email)
         
         if not user:
-            return {"message": "Если такой email зарегистрирован, инструкция отправлена"}
+            return MessageResponse(message="Если такой email зарегистрирован, инструкция отправлена")
         
         # Удаляем старые токены
         self.password_reset_repo.delete_existing_tokens(email)
@@ -105,7 +107,7 @@ class AuthService:
         except Exception as e:
             print(f"Email error: {e}")
         
-        return {"message": "Если такой email зарегистрирован, инструкция отправлена"}
+        return MessageResponse(message="Если такой email зарегистрирован, инструкция отправлена")
     
     def reset_password(self, token: str, new_password: str, confirm_password: str):
         if new_password != confirm_password:
@@ -126,13 +128,13 @@ class AuthService:
         self.password_reset_repo.mark_token_used(reset_token)
         self.db.commit()
         
-        return {"message": "Пароль успешно изменен"}
+        return MessageResponse(message="Пароль успешно изменен")
     
-    def verify_reset_token(self, token: str):
+    def verify_reset_token(self, token: str) -> TokenVerifyResponse:
         reset_token = self.password_reset_repo.get_valid_token(token)
         if not reset_token:
             raise ValueError("Токен недействителен")
-        return {"valid": True}
+        return TokenVerifyResponse(valid=True)
 
 
 class PermissionError(Exception):

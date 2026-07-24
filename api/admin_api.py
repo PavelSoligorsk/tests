@@ -1,11 +1,15 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
-from typing import List
+from typing import List, Optional
 from core.models import User
 from dto_schemas import (
     UserResponse, UserResponseWithStats, TaskResponse, TaskCreate,
     AllowedEmailResponse, AssignStudentRequest, TheoryResponse,
-    TheoryCreate, TheoryUpdate, ImageUploadResponse
+    TheoryCreate, TheoryUpdate, ImageUploadResponse,
+    AllowedEmailCreate, ImageUploadRequest,
+    ChangeUserRoleRequest, SendTaskToTgRequest,
+    AllowedEmailItemResponse, RebuildTestsResponse, MessageResponse,
+    TeacherHistoryItemResponse, DetailedResultResponse,
 )
 from core import auth
 from core.cache import invalidate_cache_pattern
@@ -49,20 +53,24 @@ def get_users(
     return service.get_users()
 
 
-@router.patch("/users/{user_id}/role")
+@router.patch("/users/{user_id}/role", response_model=MessageResponse)
 def change_user_role(
     user_id: int,
-    new_role: str,
     service: AdminService = Depends(get_admin_service),
-    current_admin: User = Depends(auth.check_admin)
+    current_admin: User = Depends(auth.check_admin),
+    payload: ChangeUserRoleRequest | None = Body(default=None),
+    new_role: Optional[str] = Query(default=None)
 ):
     try:
-        return service.change_user_role(user_id, new_role, current_admin.id)
+        role = payload.new_role if payload is not None else new_role
+        if role is None:
+            raise HTTPException(status_code=422, detail="new_role is required")
+        return service.change_user_role(user_id, role, current_admin.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.delete("/users/{user_id}")
+@router.delete("/users/{user_id}", response_model=MessageResponse)
 def delete_user(
     user_id: int,
     service: AdminService = Depends(get_admin_service),
@@ -88,7 +96,7 @@ def get_user_profile(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.get("/users/{user_id}/history")
+@router.get("/users/{user_id}/history", response_model=list[TeacherHistoryItemResponse])
 def get_user_history(
     user_id: int,
     service: AdminService = Depends(get_admin_service),
@@ -145,7 +153,7 @@ def update_task(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.delete("/tasks/{task_id}")
+@router.delete("/tasks/{task_id}", response_model=MessageResponse)
 def delete_task(
     task_id: int,
     service: AdminService = Depends(get_admin_service),
@@ -159,7 +167,7 @@ def delete_task(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.get("/results/{result_id}")
+@router.get("/results/{result_id}", response_model=DetailedResultResponse)
 def get_admin_detailed_result(
     result_id: int,
     service: AdminService = Depends(get_admin_service),
@@ -173,7 +181,7 @@ def get_admin_detailed_result(
 
 # ==================== РАЗРЕШЁННЫЕ EMAIL ====================
 
-@router.get("/allowed/emails", response_model=list[AllowedEmailResponse])
+@router.get("/allowed/emails", response_model=list[AllowedEmailItemResponse])
 def get_allowed_emails(
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
@@ -183,12 +191,12 @@ def get_allowed_emails(
 
 @router.post("/allowed-emails")
 def add_allowed_email(
-    payload: dict,
+    payload: AllowedEmailCreate,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.add_allowed_email(payload.get("email"))
+        return service.add_allowed_email(payload.email)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -207,7 +215,7 @@ def delete_allowed_email(
 
 # ==================== НАЗНАЧЕНИЕ УЧИТЕЛЕЙ ====================
 
-@router.post("/assign-student-to-teacher")
+@router.post("/assign-student-to-teacher", response_model=MessageResponse)
 def assign_student_to_teacher(
     data: AssignStudentRequest,
     service: AdminService = Depends(get_admin_service),
@@ -219,7 +227,7 @@ def assign_student_to_teacher(
         raise HTTPException(status_code=404, detail=str(e))
 
 
-@router.delete("/remove-student-from-teacher/{student_id}")
+@router.delete("/remove-student-from-teacher/{student_id}", response_model=MessageResponse)
 def remove_student_from_teacher(
     student_id: int,
     service: AdminService = Depends(get_admin_service),
@@ -300,12 +308,12 @@ def delete_theory(
 
 @router.post("/upload-image", response_model=ImageUploadResponse)
 async def upload_to_r2(
-    payload: dict,
+    payload: ImageUploadRequest,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        image_data = payload.get("image") or payload.get("image_data", "")
+        image_data = payload.image or payload.image_data or ""
         return service.upload_image(image_data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
@@ -318,12 +326,16 @@ async def upload_to_r2(
 @router.post("/tasks/{task_id}/send-to-tg")
 async def send_task_to_tg(
     task_id: int,
-    chat_id: str,
     service: AdminService = Depends(get_admin_service),
-    current_admin: User = Depends(auth.check_admin)
+    current_admin: User = Depends(auth.check_admin),
+    payload: SendTaskToTgRequest | None = Body(default=None),
+    chat_id: Optional[str] = Query(default=None)
 ):
     try:
-        return await service.send_task_to_tg(task_id, chat_id)
+        target_chat_id = payload.chat_id if payload is not None else chat_id
+        if target_chat_id is None:
+            raise HTTPException(status_code=422, detail="chat_id is required")
+        return await service.send_task_to_tg(task_id, target_chat_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:

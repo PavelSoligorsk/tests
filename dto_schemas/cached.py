@@ -256,3 +256,122 @@ class TestCacheResponse(TestResponse):
 
 class UserCacheResponse(UserResponse):
     model_config = ConfigDict(from_attributes=True)
+
+
+# ============ TEACHER-SPECIFIC ============
+
+class GroupAssignResponse(BaseModel):
+    message: str
+    assigned_count: int
+    group_id: int
+    test_id: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AddStudentsToGroupResponse(BaseModel):
+    message: str
+    added: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class TeacherTaskDetailResponse(BaseModel):
+    id: int
+    content: str
+    options: Optional[list[str]] = None
+    answer: str
+    hint: Optional[str] = None
+    solution: Optional[str] = None
+    is_open_answer: bool = False
+    difficulty: Optional[int] = None
+    topic: Optional[str] = None
+    section: Optional[str] = None
+    topic_number: Optional[str] = None
+    task_class: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+# ============ STUDENT-SPECIFIC ============
+
+class StartTestTaskItem(BaseModel):
+    id: int
+    content: str
+    options: Optional[list[str]] = None
+    is_open_answer: bool = False
+    difficulty: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class StartAssignedTestResponse(BaseModel):
+    result_id: int
+    test_title: str
+    tasks: list[StartTestTaskItem] = Field(default_factory=list)
+    time_limit: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class SubmitTestResponse(BaseModel):
+    status: str
+    score: int
+    max_score_possible: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIHintContext(BaseModel):
+    task_class: Optional[str] = None
+    topic_number: Optional[str] = None
+    difficulty: Optional[int] = None
+    topic_mastery_percent: Optional[float] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AIHintResponse(BaseModel):
+    task_id: int
+    hint: str
+    context: AIHintContext
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AISolutionContext(BaseModel):
+    task_class: Optional[str] = None
+    topic_number: Optional[str] = None
+    difficulty: Optional[int] = None
+    topic_mastery_percent: Optional[float] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AISolutionResponse(BaseModel):
+    task_id: int
+    success: bool
+    verified: bool = False
+    message: str = ""
+    ai_solution: str = ""
+    ai_answer: str = ""
+    correct_answer: str = ""
+    context: AISolutionContext = Field(default_factory=AISolutionContext)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AITheoryContext(BaseModel):
+    topic: str = ""
+    section: str = ""
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AITheoryResponse(BaseModel):
+    success: bool
+    question: str
+    answer: str
+    context: AITheoryContext
+
+    model_config = ConfigDict(from_attributes=True)

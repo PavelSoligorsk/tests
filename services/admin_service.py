@@ -18,6 +18,19 @@ from repositories.allowed_email_repository import AllowedEmailRepository
 from repositories.theory_repository import TheoryRepository
 from core.models import Task, Test, TestResult, UserAnswer, TestAssignment, TestTaskAssociation, UserRole
 
+from dto_schemas.user import UserResponse, MessageResponse
+from dto_schemas.stats import UserResponseWithStats, UserStats
+from dto_schemas.image import ImageUploadResponse
+from dto_schemas.admin import AllowedEmailItemResponse, RebuildTestsResponse, RecomputeAnswersResponse
+from dto_schemas.cached import (
+    DetailedResultResponse,
+    DetailedResultDetailResponse,
+    DifficultyStatResponse,
+    ResultUserResponse,
+    TeacherHistoryItemResponse,
+    TeacherHistoryResultResponse,
+)
+
 
 
 
@@ -98,7 +111,7 @@ class AdminService:
             self.test_repo.delete_tests_by_ids(test_ids)
         
         self.user_repo.delete_user(user)
-        return {"message": "Пользователь и все связанные данные удалены"}
+        return MessageResponse(message="Пользователь и все связанные данные удалены")
     
     def get_user_profile(self, user_id: int):
         user = self.user_repo.get_user_by_id(user_id)
@@ -107,22 +120,26 @@ class AdminService:
         
         stats = self.user_repo.get_user_stats(user_id)
         
-        return {
-            "user": user,
-            "stats": stats
-        }
+        return UserResponseWithStats(
+            user=user,
+            stats=UserStats(
+                total_attempts=stats.get("total_attempts", 0),
+                avg_score=stats.get("avg_score", 0.0),
+            ),
+        )
     
     def get_user_history(self, user_id: int):
         results = self.result_repo.get_user_history(user_id)
         return [
-            {
-                "test_title": r.test.title if r.test else "Тест удален",
-                "result": {
-                    "id": r.id,
-                    "total_points": r.total_points,
-                    "completed_at": r.completed_at
-                }
-            } for r in results
+            TeacherHistoryItemResponse(
+                test_title=r.test.title if r.test else "Тест удален",
+                result=TeacherHistoryResultResponse(
+                    id=r.id,
+                    total_points=r.total_points,
+                    completed_at=r.completed_at,
+                ),
+            )
+            for r in results
         ]
     
     # ==================== ЗАДАНИЯ ====================
@@ -144,7 +161,7 @@ class AdminService:
             raise ValueError("Вы не можете снять роль админа с самого себя")
         
         self.user_repo.update_user_role(user, new_role)
-        return {"message": f"Роль пользователя {user.username} изменена на {new_role}"}
+        return MessageResponse(message=f"Роль пользователя {user.username} изменена на {new_role}")
     
     def update_task(self, task_id: int, update_data: dict):
         task = self.task_repo.get_task_by_id(task_id)
@@ -177,7 +194,7 @@ class AdminService:
         if not self.task_repo.get_task_by_id(task_id):
             raise ValueError("Задание не найдено")
         self.task_repo.delete_task(task_id)
-        return {"message": f"Задание с ID {task_id} и связанные данные успешно удалены"}
+        return MessageResponse(message=f"Задание с ID {task_id} и связанные данные успешно удалены")
     
     def get_detailed_result(self, result_id: int):
         result = self.result_repo.get_result_by_id(result_id)
@@ -190,7 +207,7 @@ class AdminService:
         
         details = []
         total_max_points = 0
-        difficulty_stats = {}
+        difficulty_stats: dict[str, DifficultyStatResponse] = {}
         
         for task in all_tasks:
             ua = answers_map.get(task.id)
@@ -199,41 +216,41 @@ class AdminService:
             diff_level = str(task.difficulty) if task.difficulty else "1"
             
             if diff_level not in difficulty_stats:
-                difficulty_stats[diff_level] = {"correct": 0, "total": 0}
+                difficulty_stats[diff_level] = DifficultyStatResponse(total=0, correct=0)
             
-            difficulty_stats[diff_level]["total"] += 1
+            difficulty_stats[diff_level].total += 1
             if is_correct:
-                difficulty_stats[diff_level]["correct"] += 1
+                difficulty_stats[diff_level].correct += 1
             
             max_task_points = 2 if task.is_open_answer else 1
             total_max_points += max_task_points
             
-            details.append({
-                "task_id": task.id,
-                "content": task.content,
-                "options": task.options,
-                "difficulty": diff_level,
-                "correct_answer": task.answer,
-                "user_answer": ua.user_text_answer if ua else "Нет ответа",
-                "is_correct": is_correct,
-                "points_earned": ua.points_earned if ua else 0,
-                "max_task_points": max_task_points,
-                "solution": task.solution,
-                "hint": task.hint
-            })
+            details.append(DetailedResultDetailResponse(
+                task_id=task.id,
+                content=task.content,
+                options=task.options,
+                difficulty=diff_level,
+                correct_answer=task.answer,
+                user_answer=ua.user_text_answer if ua else "Нет ответа",
+                is_correct=is_correct,
+                points_earned=ua.points_earned if ua else 0,
+                max_task_points=max_task_points,
+                solution=task.solution,
+                hint=task.hint,
+            ))
         
-        return {
-            "test_title": result.test.title,
-            "total_points": result.total_points,
-            "max_points": total_max_points,
-            "completed_at": result.completed_at,
-            "difficulty_stats": difficulty_stats,
-            "user": {
-                "first_name": result.user.first_name,
-                "last_name": result.user.last_name,
-            },
-            "details": details
-        }
+        return DetailedResultResponse(
+            test_title=result.test.title,
+            total_points=result.total_points,
+            max_points=total_max_points,
+            completed_at=result.completed_at,
+            difficulty_stats=difficulty_stats,
+            user=ResultUserResponse(
+                first_name=result.user.first_name,
+                last_name=result.user.last_name,
+            ),
+            details=details,
+        )
     
     # ==================== РАЗРЕШЁННЫЕ EMAIL ====================
     
@@ -244,12 +261,12 @@ class AdminService:
         for ae in allowed_emails:
             user = self.user_repo.get_user_by_email(ae.email)
             
-            result.append({
-                "email": ae.email,
-                "first_name": user.first_name if user else None,
-                "last_name": user.last_name if user else None,
-                "tg_username": user.tg_username if user else None,
-            })
+            result.append(AllowedEmailItemResponse(
+                email=ae.email,
+                first_name=user.first_name if user else None,
+                last_name=user.last_name if user else None,
+                tg_username=user.tg_username if user else None,
+            ))
         
         return result
     
@@ -285,14 +302,14 @@ class AdminService:
         self.teacher_student_repo.create_link(teacher_id, student_id)
         self.db.commit()
         
-        return {"message": f"Ученик {student.username} назначен учителю {teacher.username}"}
+        return MessageResponse(message=f"Ученик {student.username} назначен учителю {teacher.username}")
     
     def remove_student_from_teacher(self, student_id: int):
         if not self.teacher_student_repo.delete_link_by_student(student_id):
             raise ValueError("Связь не найдена")
         
         self.db.commit()
-        return {"message": "Связь удалена"}
+        return MessageResponse(message="Связь удалена")
     
     # ==================== ТЕОРИЯ ====================
     
@@ -328,7 +345,7 @@ class AdminService:
             raise ValueError("Теория не найдена")
         
         self.theory_repo.delete_theory(theory)
-        return {"message": f"Теория для темы '{theory.topic}' и раздела '{theory.section}' успешно удалена"}
+        return MessageResponse(message=f"Теория для темы '{theory.topic}' и раздела '{theory.section}' успешно удалена")
     
     # ==================== ЗАГРУЗКА ИЗОБРАЖЕНИЙ ====================
     
@@ -365,11 +382,11 @@ class AdminService:
         
         file_url = f"{os.getenv('R2_PUBLIC_URL')}/{filename}"
         
-        return {
-            "url": file_url,
-            "filename": filename,
-            "size": len(image_bytes)
-        }
+        return ImageUploadResponse(
+            url=file_url,
+            filename=filename,
+            size=len(image_bytes),
+        )
     
     # ==================== ОТПРАВКА В TELEGRAM ====================
     
@@ -437,7 +454,7 @@ class AdminService:
                 if response.status_code != 200:
                     raise Exception(f"Ошибка рендер-бота: {response.text}")
                 
-                return {"message": "Задача успешно отправлена в Telegram"}
+                return MessageResponse(message="Задача успешно отправлена в Telegram")
                 
             except httpx.RequestError as e:
                 raise Exception(f"Не удалось связаться с рендер-ботом: {str(e)}")
@@ -545,15 +562,15 @@ class AdminService:
 
             self.db.commit()
             
-            return {
-                "status": "success",
-                "message": (
+            return RebuildTestsResponse(
+                status="success",
+                message=(
                     f"Успешно синхронизировано {len(updated_test_ids)} тестов. "
                     f"Удалено устаревших автотестов: {deleted_count}."
                 ),
-                "updated_test_ids": updated_test_ids,
-                "deleted_count": deleted_count
-            }
+                updated_test_ids=updated_test_ids,
+                deleted_count=deleted_count,
+            )
 
         except Exception as e:
             self.db.rollback()
@@ -566,7 +583,7 @@ class AdminService:
         Возвращает статистику: сколько обновлено ответов и результатов.
         """
         if not task:
-            return {"answers_updated": 0, "results_updated": 0}
+            return RecomputeAnswersResponse(answers_updated=0, results_updated=0)
 
         # Получаем все ответы на это задание
         user_answers = self.db.query(UserAnswer).filter(
@@ -574,7 +591,7 @@ class AdminService:
         ).all()
 
         if not user_answers:
-            return {"answers_updated": 0, "results_updated": 0}
+            return RecomputeAnswersResponse(answers_updated=0, results_updated=0)
 
         result_ids = set()
         answers_updated = 0
@@ -615,5 +632,5 @@ class AdminService:
                     result.total_points = new_total
                     results_updated += 1
 
-        return {"answers_updated": answers_updated, "results_updated": results_updated}
+        return RecomputeAnswersResponse(answers_updated=answers_updated, results_updated=results_updated)
 
