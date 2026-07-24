@@ -7,6 +7,9 @@ class AnswerSubmitRequest(BaseModel):
     test_id: int
     answer_text: str
 
+    class Config:
+        from_attributes = True
+
 class AnswerResponse(BaseModel):
     id: int
     task_id: int

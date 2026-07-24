@@ -4,6 +4,9 @@ from typing import Optional
 class AllowedEmailBase(BaseModel):
     email: str
 
+    class Config:
+        from_attributes = True
+
 class AllowedEmailResponse(AllowedEmailBase):
     first_name: Optional[str] = None
     last_name: Optional[str] = None

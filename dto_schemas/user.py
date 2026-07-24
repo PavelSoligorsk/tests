@@ -9,9 +9,15 @@ class UserRegister(BaseModel):
     phone: Optional[str] = None
     tg_username: Optional[str] = None
 
+    class Config:
+        from_attributes = True
+
 class TeacherInfo(BaseModel):
     first_name: str
     last_name: str
+
+    class Config:
+        from_attributes = True
 
 class UserResponse(BaseModel):
     id: int
@@ -31,6 +37,9 @@ class UserUpdate(BaseModel):
     last_name: Optional[str]
     phone: Optional[str]
     tg_username: Optional[str]
+
+    class Config:
+        from_attributes = True
 
 class ForgotPasswordRequest(BaseModel):
     email: EmailStr

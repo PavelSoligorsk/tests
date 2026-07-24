@@ -14,6 +14,9 @@ class TaskBase(BaseModel):
     is_open_answer: bool = True
     difficulty: Optional[int] = None
 
+    class Config:
+        from_attributes = True
+
 class TaskResponse(TaskBase):
     id: int
     class Config:
@@ -41,3 +44,6 @@ class TaskUpdateRequest(BaseModel):
     solution: Optional[str] = None
     is_open_answer: Optional[bool] = None
     difficulty: Optional[int] = None
+
+    class Config:
+        from_attributes = True

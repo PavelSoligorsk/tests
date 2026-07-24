@@ -12,9 +12,15 @@ class TestCreate(BaseModel):
     task_ids: Optional[List[int]] = None
     is_active: bool = True
 
+    class Config:
+        from_attributes = True
+
 class TestCreateRequest(BaseModel):
     user_id: int
     task_ids: List[int]
+
+    class Config:
+        from_attributes = True
 
 class TestResponse(BaseModel):
     id: int
