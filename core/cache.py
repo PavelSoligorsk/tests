@@ -3,32 +3,26 @@ Redis-кеширование для эндпоинтов FastAPI с поддер
 
 Использование:
     from core.cache import cache_result, invalidate_user_cache
-    from pydantic import BaseModel
     
-    class UserResponse(BaseModel):
-        id: int
-        name: str
-    
-    # Кеширование с автоматической сериализацией Pydantic
-    @router.get("/me")
-    def get_profile(current_user: User = Depends(auth.get_current_user)):
+    # Кеширование с автоматической сериализацией
+    @router.get("/tests")
+    def get_tests():
         return cache_result(
-            "student_profile",
-            current_user.id,
-            lambda: service.get_profile(current_user.id),
-            ttl=300
+            "available_tests",
+            None,
+            lambda: service.get_available_tests(),
+            ttl=600
         )
 """
 
 import json
 import os
 import hashlib
-from typing import Optional, Callable, Any, TypeVar, Union, List, Dict
+from typing import Optional, Callable, Any, TypeVar, List
 from datetime import datetime, date, time, timedelta
 from decimal import Decimal
 from uuid import UUID
 from enum import Enum
-import pickle
 
 try:
     import redis as redis_lib
@@ -60,12 +54,7 @@ class CustomJSONEncoder(json.JSONEncoder):
     def default(self, obj):
         # Pydantic модели
         if PYDANTIC_AVAILABLE and isinstance(obj, BaseModel):
-            return obj.dict()
-        
-        # Pydantic модели в списке
-        if PYDANTIC_AVAILABLE and isinstance(obj, list) and obj:
-            if all(isinstance(item, BaseModel) for item in obj):
-                return [item.dict() for item in obj]
+            return obj.model_dump() if hasattr(obj, 'model_dump') else obj.dict()
         
         # SQLAlchemy модели
         if SQLALCHEMY_AVAILABLE:
@@ -99,10 +88,6 @@ class CustomJSONEncoder(json.JSONEncoder):
         # Наборы и кортежи
         if isinstance(obj, (set, tuple)):
             return list(obj)
-        
-        # Словари с нестандартными ключами
-        if isinstance(obj, dict):
-            return {str(k): v for k, v in obj.items()}
         
         # Объекты с __dict__
         if hasattr(obj, '__dict__'):
@@ -143,53 +128,40 @@ def _serialize_result(result: Any) -> str:
     Сериализация результата с поддержкой Pydantic, SQLAlchemy и других объектов
     """
     try:
-        # Pydantic модель
-        if PYDANTIC_AVAILABLE and isinstance(result, BaseModel):
-            return json.dumps(result.dict(), cls=CustomJSONEncoder, ensure_ascii=False)
+        # Если результат - список SQLAlchemy объектов
+        if SQLALCHEMY_AVAILABLE and isinstance(result, list) and result:
+            if all(hasattr(item, '__table__') for item in result):
+                return json.dumps(
+                    [CustomJSONEncoder()._sqlalchemy_to_dict(item) for item in result],
+                    cls=CustomJSONEncoder,
+                    ensure_ascii=False
+                )
         
-        # Список Pydantic моделей
+        # Если результат - список Pydantic моделей
         if PYDANTIC_AVAILABLE and isinstance(result, list) and result:
             if all(isinstance(item, BaseModel) for item in result):
-                return json.dumps([item.dict() for item in result], cls=CustomJSONEncoder, ensure_ascii=False)
-        
-        # Словарь с Pydantic моделями
-        if PYDANTIC_AVAILABLE and isinstance(result, dict):
-            serialized = {}
-            for key, value in result.items():
-                if isinstance(value, BaseModel):
-                    serialized[key] = value.dict()
-                elif isinstance(value, list) and all(isinstance(item, BaseModel) for item in value):
-                    serialized[key] = [item.dict() for item in value]
-                else:
-                    serialized[key] = value
-            return json.dumps(serialized, cls=CustomJSONEncoder, ensure_ascii=False)
+                return json.dumps(
+                    [item.model_dump() if hasattr(item, 'model_dump') else item.dict() for item in result],
+                    cls=CustomJSONEncoder,
+                    ensure_ascii=False
+                )
         
         # Стандартная сериализация
         return json.dumps(result, cls=CustomJSONEncoder, default=str, ensure_ascii=False)
     
     except Exception as e:
-        # Fallback на pickle если JSON не работает
-        try:
-            return pickle.dumps(result).hex()
-        except:
-            # Самый крайний случай
-            return json.dumps(str(result))
+        # Если JSON не работает, сохраняем как строку
+        return json.dumps(str(result))
 
 
 def _deserialize_result(data: str) -> Any:
     """
-    Десериализация результата с восстановлением Pydantic моделей
+    Десериализация результата
     """
     try:
-        # Пробуем JSON десериализацию
-        result = json.loads(data)
-        return result
+        return json.loads(data)
     except json.JSONDecodeError:
-        # Пробуем pickle
-        try:
-            return pickle.loads(bytes.fromhex(data))
-        except:
-            return data
+        return data
 
 
 def generate_cache_key(prefix: str, user_id: Optional[int] = None, 
@@ -212,7 +184,6 @@ def generate_cache_key(prefix: str, user_id: Optional[int] = None,
             params_hash = hashlib.md5(params_str.encode()).hexdigest()[:8]
             key_parts.append(params_hash)
         except:
-            # Если не удалось сериализовать, просто добавляем строковое представление
             key_parts.append(str(hash(str(args) + str(kwargs)))[:8])
     
     return ":".join(key_parts)
@@ -227,18 +198,7 @@ def cache_result(
     *args, **kwargs
 ) -> Any:
     """
-    Универсальная функция кеширования с поддержкой Pydantic.
-    
-    Args:
-        prefix: Префикс ключа
-        user_id: ID пользователя (или None для глобального кеша)
-        fetcher: Функция, которая возвращает данные
-        ttl: Время жизни в секундах
-        force_refresh: Принудительное обновление кеша
-        *args, **kwargs: Дополнительные параметры для ключа кеша
-
-    Returns:
-        Данные (из кеша или свежеполученные)
+    Универсальная функция кеширования с поддержкой Pydantic и SQLAlchemy.
     """
     redis_conn = get_redis()
     if redis_conn is None:
@@ -262,7 +222,6 @@ def cache_result(
         serialized = _serialize_result(result)
         redis_conn.setex(cache_key, ttl, serialized)
     except Exception as e:
-        # Логируем ошибку если нужно
         pass
     
     return result
@@ -322,11 +281,6 @@ def cached(prefix: str, ttl: int = 300, user_key: bool = True):
     """
     Декоратор для кеширования результатов функций.
     
-    Args:
-        prefix: Префикс ключа
-        ttl: Время жизни в секундах
-        user_key: Использовать user_id в ключе
-    
     Пример:
         @cached("my_profile", ttl=600)
         def get_profile(user_id: int):
@@ -334,16 +288,13 @@ def cached(prefix: str, ttl: int = 300, user_key: bool = True):
     """
     def decorator(func):
         def wrapper(*args, **kwargs):
-            # Ищем user_id в аргументах
             user_id = None
             if user_key:
-                # Проверяем в kwargs
                 if 'user_id' in kwargs:
                     user_id = kwargs['user_id']
                 elif 'current_user' in kwargs and hasattr(kwargs['current_user'], 'id'):
                     user_id = kwargs['current_user'].id
                 elif args:
-                    # Ищем в позиционных аргументах
                     for arg in args:
                         if hasattr(arg, 'id') and hasattr(arg, '__class__'):
                             user_id = arg.id
@@ -352,7 +303,6 @@ def cached(prefix: str, ttl: int = 300, user_key: bool = True):
                             user_id = arg
                             break
             
-            # Передаем все аргументы для генерации ключа
             return cache_result(
                 prefix,
                 user_id,
