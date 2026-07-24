@@ -8,6 +8,7 @@ from repositories.result_repository import ResultRepository
 from repositories.assignment_repository import AssignmentRepository
 from repositories.theory_repository import TheoryRepository
 from services.ai_service import AIService
+from dto_schemas import *
 from datetime import datetime  # Add this import
 
 class StudentService:
@@ -28,9 +29,11 @@ class StudentService:
             raise ValueError("Пользователь не найден")
         
         stats = self.user_repo.get_user_stats(user_id)
+
+        user_dto = UserResponse.model_validate(user).model_dump()
         
         return {
-            "user": user,
+            "user": user_dto,
             "stats": stats
         }
     
