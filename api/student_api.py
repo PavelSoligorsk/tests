@@ -24,11 +24,7 @@ def get_student_profile(
     current_user: User = Depends(auth.get_current_user)
 ):
     try:
-        return cache_result(
-            "get_student_profile", current_user.id,
-            lambda: service.get_profile(current_user.id),
-            ttl=300
-        )
+        return service.get_profile(current_user.id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
