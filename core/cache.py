@@ -11,6 +11,8 @@ from typing import Any, Callable, Optional, TypeVar
 try:
     import redis as redis_lib
     REDIS_AVAILABLE = False
+    if os.getenv("REDIS_URL"):
+        REDIS_AVAILABLE = True
 except ImportError:
     REDIS_AVAILABLE = False
 
