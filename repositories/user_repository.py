@@ -22,6 +22,11 @@ class UserRepository:
         result = await self.db.execute(select(User).where(User.id.in_(teacher_ids)))
         return result.scalars().all()
 
+    async def get_users_by_ids(self, user_ids: List[int]):
+        """Получить пользователей по списку ID"""
+        result = await self.db.execute(select(User).where(User.id.in_(user_ids)))
+        return result.scalars().all()
+
     async def get_user_by_email(self, email: str):
         result = await self.db.execute(select(User).where(User.username == email))
         return result.scalars().first()

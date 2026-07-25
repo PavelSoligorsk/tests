@@ -16,6 +16,15 @@ class AssignmentRepository:
             .order_by(TestAssignment.assigned_at.desc())
         )
         return r.scalars().all()
+
+    async def get_group_assignments(self, group_id: int):
+        """Получить все назначения для группы"""
+        r = await self.db.execute(
+            select(TestAssignment)
+            .where(TestAssignment.group_id == group_id)
+            .order_by(TestAssignment.assigned_at.desc())
+        )
+        return r.scalars().all()
     
     async def get_assignment(self, test_id: int, user_id: int):
         r = await self.db.execute(

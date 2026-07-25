@@ -618,6 +618,78 @@ class TeacherService:
             )
             for s in group.students
         ]
+
+    async def get_group_assignments(self, group_id: int, teacher_id: int, role: str):
+        """Получить все назначения группы"""
+        group = await self.group_repo.get_group_by_id(group_id, teacher_id if role == "teacher" else None)
+        if not group:
+            raise ValueError("Группа не найдена")
+
+        if role == "teacher" and group.teacher_id != teacher_id:
+            raise PermissionError("У вас нет доступа к этой группе")
+
+        assignments = await self.assignment_repo.get_group_assignments(group_id)
+
+        # Собираем все test_id и user_id для batch-запросов
+        test_ids = list({a.test_id for a in assignments})
+        user_ids = list({a.user_id for a in assignments})
+
+        # Загружаем тесты и студентов
+        tests_map = {}
+        for tid in test_ids:
+            test = await self.test_repo.get_test_by_id(tid)
+            if test:
+                tests_map[tid] = test
+
+        users_map = {}
+        if user_ids:
+            users = await self.user_repo.get_users_by_ids(user_ids)
+            users_map = {u.id: u for u in users}
+
+        # Результаты
+        all_results: dict = {}  # user_id -> {test_id -> result}
+        for uid in user_ids:
+            latest = await self.assignment_repo.get_latest_results_for_student(uid)
+            all_results[uid] = {r.test_id: r for r in latest}
+
+        result = []
+        for assignment in assignments:
+            test = tests_map.get(assignment.test_id)
+            if not test:
+                continue
+
+            student = users_map.get(assignment.user_id)
+
+            student_results = all_results.get(assignment.user_id, {})
+            latest_result = student_results.get(assignment.test_id)
+            is_completed = latest_result is not None
+            completed_at = latest_result.completed_at if latest_result else None
+            total_points = latest_result.total_points if latest_result else None
+            result_id = latest_result.id if latest_result else None
+
+            max_points = await self.test_repo.calculate_test_max_points(test)
+            percentage = round((total_points / max_points) * 100, 1) if (total_points is not None and max_points > 0) else None
+
+            result.append(TeacherAssignmentItemResponse(
+                id=assignment.id,
+                test_id=assignment.test_id,
+                test_title=test.title,
+                user_id=assignment.user_id,
+                student_name=f"{student.first_name} {student.last_name}" if student else "Неизвестный",
+                student_username=student.username if student else None,
+                assigned_at=assignment.assigned_at,
+                due_date=assignment.due_date,
+                is_completed=is_completed,
+                completed_at=completed_at,
+                total_tasks=len(test.tasks) if test.tasks else 0,
+                total_points=total_points,
+                max_points=max_points,
+                percentage=percentage,
+                result_id=result_id,
+            ))
+
+        result.sort(key=lambda x: (x.is_completed, x.student_name))
+        return result
     
     async def get_tasks_by_topic_section(self, topic: str, section: str):
         """Получить задания по теме и разделу"""

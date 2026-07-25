@@ -499,7 +499,8 @@ async def delete_assignment(
         # Инвалидируем кеш
         invalidate_user_cache(current_teacher.id,
             "teacher_test_assignments",
-            "teacher_student_assignments"
+            "teacher_student_assignments",
+            "teacher_group_assignments"
         )
         
         return result
@@ -529,7 +530,8 @@ async def assign_test_to_group(
         invalidate_user_cache(current_teacher.id,
             "teacher_test_assignments",
             "teacher_students",
-            "teacher_groups"
+            "teacher_groups",
+            "teacher_group_assignments"
         )
         
         return result
@@ -689,3 +691,25 @@ async def get_group_students(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e ))
+
+
+@router.get("/groups/{group_id}/assignments")
+async def get_group_assignments(
+    group_id: int,
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: User = Depends(check_teacher)
+):
+    """Получить все назначения группы"""
+    try:
+        return await async_cache_result(
+            "teacher_group_assignments",
+            current_teacher.id,
+            lambda: service.get_group_assignments(group_id, current_teacher.id, current_teacher.role),
+            model_class=TeacherAssignmentItemResponse,
+            ttl=300,
+            group_id=group_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
