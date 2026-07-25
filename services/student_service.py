@@ -219,7 +219,7 @@ class StudentService:
         if not assignment:
             raise ValueError("Тест не назначен вам или уже выполнен")
         
-        if not self.assignment_repo.check_deadline(assignment):
+        if not await self.assignment_repo.check_deadline(assignment):
             raise ValueError("Срок выполнения теста истёк")
         
         test = await self.test_repo.get_test_with_tasks(test_id)

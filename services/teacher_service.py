@@ -299,7 +299,7 @@ class TeacherService:
         if role == "teacher" and test.creator_id != teacher_id:
             raise PermissionError("Вы не можете просматривать назначения этого теста")
         
-        max_points = self.test_repo.calculate_test_max_points(test)
+        max_points = await self.test_repo.calculate_test_max_points(test)
         
         assignments = await self.assignment_repo.get_test_assignments(test_id)
         latest_results = await self.assignment_repo.get_latest_results_for_test(test_id)
@@ -364,7 +364,7 @@ class TeacherService:
             total_points = latest_result.total_points if latest_result else None
             result_id = latest_result.id if latest_result else None
             
-            max_points = self.test_repo.calculate_test_max_points(test)
+            max_points = await self.test_repo.calculate_test_max_points(test)
             percentage = round((total_points / max_points) * 100, 1) if (total_points is not None and max_points > 0) else None
             
             response.append(TeacherAssignmentItemResponse(
