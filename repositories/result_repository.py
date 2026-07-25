@@ -1,9 +1,10 @@
 from sqlalchemy import select, delete
 from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 
-from core.models import TestResult, UserAnswer, Task
+from core.models import TestResult, UserAnswer, Task, Test
 
 
 class ResultRepository:
@@ -39,9 +40,14 @@ class ResultRepository:
         return result
     
     async def get_result_by_id(self, result_id: int):
+        """Получить результат со всеми необходимыми связями"""
         r = await self.db.execute(
             select(TestResult)
-            .options(joinedload(TestResult.test))
+            .options(
+                selectinload(TestResult.test).selectinload(Test.tasks),  # Загружаем тест и его задачи
+                selectinload(TestResult.answers).selectinload(UserAnswer.task),  # Загружаем ответы и их задачи
+                selectinload(TestResult.user)  # Загружаем пользователя
+            )
             .where(TestResult.id == result_id)
         )
         return r.unique().scalars().first()
