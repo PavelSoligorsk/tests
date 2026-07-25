@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from core.models import User
 from dto_schemas import (
     UserResponseWithStats, UserResponse, TestResponse,
@@ -14,23 +14,23 @@ from core import auth
 from core.database import get_db
 from typing import List
 from services.student_service import StudentService
-from core.cache import cache_result, invalidate_user_cache
+from core.cache import async_cache_result, invalidate_user_cache
 
 router = APIRouter(prefix="/student", tags=["Student API"])
 
 
-def get_student_service(db: Session = Depends(get_db)) -> StudentService:
+def get_student_service(db: AsyncSession = Depends(get_db)) -> StudentService:
     return StudentService(db)
 
 
 @router.get("/me", response_model=UserResponseWithStats)
-def get_student_profile(
+async def get_student_profile(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Получить профиль студента с статистикой"""
     try:
-        return cache_result(
+        return await async_cache_result(
             "student_profile",
             current_user.id,
             lambda: service.get_profile(current_user.id),
@@ -42,7 +42,7 @@ def get_student_profile(
 
 
 @router.put("/me", response_model=UserResponse)
-def update_student_profile(
+async def update_student_profile(
     obj_in: UserUpdate,
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
@@ -54,7 +54,7 @@ def update_student_profile(
         # Инвалидируем кеш профиля
         invalidate_user_cache(current_user.id, "student_profile")
         
-        return service.update_profile(current_user.id, update_data)
+        return await service.update_profile(current_user.id, update_data)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -62,11 +62,11 @@ def update_student_profile(
 
 
 @router.get("/tests", response_model=List[TestResponse])
-def get_student_tests(
+async def get_student_tests(
     service: StudentService = Depends(get_student_service)
 ):
     """Получить все доступные тесты"""
-    return cache_result(
+    return await async_cache_result(
         "available_tests",
         None,
         lambda: service.get_available_tests(),
@@ -76,14 +76,14 @@ def get_student_tests(
 
 
 @router.get("/tests/{test_id}", response_model=TestResponse)
-def get_test_for_passing(
+async def get_test_for_passing(
     test_id: int,
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Получить тест для прохождения"""
     try:
-        return cache_result(
+        return await async_cache_result(
             "test_details",
             None,
             lambda: service.get_test_for_passing(test_id),
@@ -96,7 +96,7 @@ def get_test_for_passing(
 
 
 @router.post("/tests/{test_id}/submit")
-def submit_test_results(
+async def submit_test_results(
     test_id: int,
     answers: List[TestAnswerSubmission],
     service: StudentService = Depends(get_student_service),
@@ -104,7 +104,7 @@ def submit_test_results(
 ):
     """Отправить результаты теста"""
     try:
-        result = service.submit_test(test_id, current_user.id, [answer.model_dump() for answer in answers])
+        result = await service.submit_test(test_id, current_user.id, [answer.model_dump() for answer in answers])
         
         # Инвалидируем все кеши пользователя
         invalidate_user_cache(
@@ -123,12 +123,12 @@ def submit_test_results(
 
 
 @router.get("/history")
-def get_my_history(
+async def get_my_history(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Получить историю тестов студента"""
-    return cache_result(
+    return await async_cache_result(
         "my_history",
         current_user.id,
         lambda: service.get_history(current_user.id),
@@ -138,14 +138,14 @@ def get_my_history(
 
 
 @router.get("/results/{result_id}")
-def get_detailed_result(
+async def get_detailed_result(
     result_id: int,
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Получить детальный результат теста"""
     try:
-        return cache_result(
+        return await async_cache_result(
             "detailed_result",
             current_user.id,
             lambda: service.get_detailed_result(result_id, current_user.id),
@@ -158,12 +158,12 @@ def get_detailed_result(
 
 
 @router.get("/my-assignments")
-def get_my_assignments(
+async def get_my_assignments(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Получить назначенные тесты студента"""
-    return cache_result(
+    return await async_cache_result(
         "my_assignments",
         current_user.id,
         lambda: service.get_assignments(current_user.id),
@@ -173,14 +173,14 @@ def get_my_assignments(
 
 
 @router.post("/start-test/{test_id}")
-def start_assigned_test(
+async def start_assigned_test(
     test_id: int,
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Начать назначенный тест"""
     try:
-        result = service.start_assigned_test(test_id, current_user.id)
+        result = await service.start_assigned_test(test_id, current_user.id)
         
         # Инвалидируем кеш назначений
         invalidate_user_cache(
@@ -196,7 +196,7 @@ def start_assigned_test(
 
 
 @router.post("/tasks/{task_id}/hint")
-def get_ai_hint_while_solving(
+async def get_ai_hint_while_solving(
     task_id: int,
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
@@ -204,7 +204,7 @@ def get_ai_hint_while_solving(
     """Получить подсказку от AI для задачи"""
     try:
         # Не кешируем, т.к. подсказки могут быть разными
-        return service.get_ai_hint(task_id, current_user.id)
+        return await service.get_ai_hint(task_id, current_user.id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -212,7 +212,7 @@ def get_ai_hint_while_solving(
 
 
 @router.post("/tasks/{task_id}/ai-solve")
-def get_ai_solution(
+async def get_ai_solution(
     task_id: int,
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
@@ -220,7 +220,7 @@ def get_ai_solution(
     """Получить решение от AI для задачи"""
     try:
         # Не кешируем, т.к. решения индивидуальны
-        return service.get_ai_solution(task_id, current_user.id)
+        return await service.get_ai_solution(task_id, current_user.id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -230,12 +230,12 @@ def get_ai_solution(
 # ============= ТЕОРЕТИЧЕСКИЕ ЭНДПОИНТЫ =============
 
 @router.get("/theory/topics")
-def get_theory_topics(
+async def get_theory_topics(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Получить все темы теории"""
-    return cache_result(
+    return await async_cache_result(
         "theory_topics",
         None,
         lambda: service.get_theory_topics(),
@@ -245,14 +245,14 @@ def get_theory_topics(
 
 
 @router.get("/theory/by-topic/{topic}")
-def get_theory_by_topic(
+async def get_theory_by_topic(
     topic: str,
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Получить теорию по теме"""
     try:
-        return cache_result(
+        return await async_cache_result(
             "theory_by_topic",
             None,
             lambda: service.get_theory_by_topic(topic),
@@ -265,14 +265,14 @@ def get_theory_by_topic(
 
 
 @router.get("/theory/sections/{topic}")
-def get_theory_sections(
+async def get_theory_sections(
     topic: str,
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Получить все разделы по теме"""
     try:
-        return cache_result(
+        return await async_cache_result(
             "theory_sections",
             None,
             lambda: service.get_theory_sections(topic),
@@ -285,7 +285,7 @@ def get_theory_sections(
 
 
 @router.post("/theory/ask-ai")
-def ask_ai_about_theory(
+async def ask_ai_about_theory(
     request: TheoryQuestionRequest,
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
@@ -297,7 +297,7 @@ def ask_ai_about_theory(
         theory_content = request.theory_content
 
         # Не кешируем, т.к. вопросы уникальны
-        return service.ask_ai_about_theory(question, theory_id, theory_content)
+        return await service.ask_ai_about_theory(question, theory_id, theory_content)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -305,7 +305,7 @@ def ask_ai_about_theory(
 
 
 @router.get("/theory/by-topic/{topic}/section/{section}")
-def get_theory_by_topic_section(
+async def get_theory_by_topic_section(
     topic: str,
     section: str,
     service: StudentService = Depends(get_student_service),
@@ -313,20 +313,20 @@ def get_theory_by_topic_section(
 ):
     """Получить теорию по теме и разделу"""
     try:
-        return service.get_theory_by_topic_section(topic, section)
+        return await service.get_theory_by_topic_section(topic, section)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/generate-test")
-def generate_ai_test(
+async def generate_ai_test(
     request: AITestRequest,
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Сгенерировать AI-тест"""
     try:
-        result = service.generate_ai_test(
+        result = await service.generate_ai_test(
             current_user.id,
             request.prompt,
             request.task_count,
@@ -344,11 +344,11 @@ def generate_ai_test(
 
 
 @router.get("/tests-meta")
-def get_student_tests_meta(
+async def get_student_tests_meta(
     service: StudentService = Depends(get_student_service)
 ):
     """Получить только метаинформацию о тестах (без заданий)"""
-    return cache_result(
+    return await async_cache_result(
         "tests_meta",
         None,
         lambda: service.get_available_tests_meta(),
@@ -358,12 +358,12 @@ def get_student_tests_meta(
 
 
 @router.get("/my-assignments-meta")
-def get_my_assignments_meta(
+async def get_my_assignments_meta(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Получить метаинформацию о назначенных тестах"""
-    return cache_result(
+    return await async_cache_result(
         "my_assignments_meta",
         current_user.id,
         lambda: service.get_assignments_meta(current_user.id),
@@ -373,12 +373,12 @@ def get_my_assignments_meta(
 
 
 @router.get("/ai-tests")
-def get_my_ai_tests(
+async def get_my_ai_tests(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
     """Получить AI-тесты студента (в том числе недопройденные)"""
-    return cache_result(
+    return await async_cache_result(
         "my_ai_tests",
         current_user.id,
         lambda: service.get_ai_tests(current_user.id),

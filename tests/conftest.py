@@ -4,10 +4,11 @@
 """
 
 import pytest
+import pytest_asyncio
 import os
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
+from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker, AsyncSession
+from sqlalchemy import select
 from sqlalchemy.pool import StaticPool
 import sys
 
@@ -18,24 +19,33 @@ from main import app
 from core.database import Base, get_db
 import core.models as models
 
+# Отключаем Redis для тестов — иначе каждый тест тратит 2 сек на таймаут коннекта
+import core.cache
+core.cache.redis_client = "DISABLED"  # не None → get_redis() не пытается подключиться
+core.cache.get_redis = lambda: None
+
 # ==================== ТЕСТОВАЯ БД ====================
 
-SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
+ASYNC_DATABASE_URL = "sqlite+aiosqlite:///:memory:"
 
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
+async_engine = create_async_engine(
+    ASYNC_DATABASE_URL,
     connect_args={"check_same_thread": False},
     poolclass=StaticPool,
 )
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+TestingAsyncSessionLocal = async_sessionmaker(
+    async_engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
 
 
-def override_get_db():
-    try:
-        db = TestingSessionLocal()
-        yield db
-    finally:
-        db.close()
+async def override_get_db():
+    async with TestingAsyncSessionLocal() as db:
+        try:
+            yield db
+        finally:
+            await db.close()
 
 
 app.dependency_overrides[get_db] = override_get_db
@@ -43,12 +53,14 @@ app.dependency_overrides[get_db] = override_get_db
 
 # ==================== ФИКСТУРЫ ====================
 
-@pytest.fixture(autouse=True)
-def setup_database():
+@pytest_asyncio.fixture(autouse=True)
+async def setup_database():
     """Создаёт таблицы перед тестом, удаляет после"""
-    Base.metadata.create_all(bind=engine)
+    async with async_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
     yield
-    Base.metadata.drop_all(bind=engine)
+    async with async_engine.begin() as conn:
+        await conn.run_sync(Base.metadata.drop_all)
 
 
 @pytest.fixture
@@ -57,21 +69,18 @@ def client():
     return TestClient(app)
 
 
-@pytest.fixture
-def db():
+@pytest_asyncio.fixture
+async def db():
     """Сессия БД для прямого доступа"""
-    db_session = TestingSessionLocal()
-    try:
+    async with TestingAsyncSessionLocal() as db_session:
         yield db_session
-    finally:
-        db_session.close()
 
 
-def _register_user(client, db, email, password, first_name, last_name, role="student"):
+async def _register_user(client, db, email, password, first_name, last_name, role="student"):
     """Вспомогательная функция для создания пользователя + возврата токена"""
     allowed = models.AllowedEmail(email=email)
     db.add(allowed)
-    db.commit()
+    await db.commit()
 
     client.post("/register", json={
         "username": email,
@@ -80,10 +89,11 @@ def _register_user(client, db, email, password, first_name, last_name, role="stu
         "last_name": last_name
     })
 
-    user = db.query(models.User).filter(models.User.username == email).first()
+    r = await db.execute(select(models.User).where(models.User.username == email))
+    user = r.scalars().first()
     if role != "student":
         user.role = role
-        db.commit()
+        await db.commit()
 
     login = client.post("/login", data={"username": email, "password": password})
     token = login.json()["access_token"]
@@ -97,28 +107,28 @@ def _register_user(client, db, email, password, first_name, last_name, role="stu
     }
 
 
-@pytest.fixture
-def admin_user(client, db):
+@pytest_asyncio.fixture
+async def admin_user(client, db):
     """Создаёт и возвращает админа"""
-    return _register_user(client, db, "admin@test.com", "Admin123!", "Admin", "Test", role="admin")
+    return await _register_user(client, db, "admin@test.com", "Admin123!", "Admin", "Test", role="admin")
 
 
-@pytest.fixture
-def teacher_user(client, db):
+@pytest_asyncio.fixture
+async def teacher_user(client, db):
     """Создаёт и возвращает учителя"""
-    return _register_user(client, db, "teacher@test.com", "Teacher123!", "Ivan", "Petrov", role="teacher")
+    return await _register_user(client, db, "teacher@test.com", "Teacher123!", "Ivan", "Petrov", role="teacher")
 
 
-@pytest.fixture
-def student_user(client, db):
+@pytest_asyncio.fixture
+async def student_user(client, db):
     """Создаёт и возвращает студента"""
-    return _register_user(client, db, "student@test.com", "Student123!", "Anna", "Ivanova")
+    return await _register_user(client, db, "student@test.com", "Student123!", "Anna", "Ivanova")
 
 
-@pytest.fixture
-def student2_user(client, db):
+@pytest_asyncio.fixture
+async def student2_user(client, db):
     """Создаёт и возвращает второго студента"""
-    return _register_user(client, db, "student2@test.com", "Student123!", "Oleg", "Petrov")
+    return await _register_user(client, db, "student2@test.com", "Student123!", "Oleg", "Petrov")
 
 
 # ==================== ФИКСТУРЫ ЗАДАНИЙ ====================
@@ -204,20 +214,20 @@ def sample_teacher_test(client, teacher_user, sample_task):
     return response.json()
 
 
-@pytest.fixture
-def link_teacher_student(db, teacher_user, student_user):
+@pytest_asyncio.fixture
+async def link_teacher_student(db, teacher_user, student_user):
     """Привязывает студента к учителю"""
     link = models.TeacherStudent(
         teacher_id=teacher_user["id"],
         student_id=student_user["id"]
     )
     db.add(link)
-    db.commit()
+    await db.commit()
     return link
 
 
-@pytest.fixture
-def assigned_test(client, db, teacher_user, student_user, link_teacher_student, sample_task):
+@pytest_asyncio.fixture
+async def assigned_test(client, db, teacher_user, student_user, link_teacher_student, sample_task):
     """Создаёт и назначает тест студенту"""
     test_response = client.post(
         "/teacher/tests",

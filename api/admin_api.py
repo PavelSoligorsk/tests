@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 from core.models import User
 from dto_schemas import (
@@ -19,7 +19,7 @@ from services.admin_service import AdminService
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
 
-def get_admin_service(db: Session = Depends(get_db)) -> AdminService:
+def get_admin_service(db: AsyncSession = Depends(get_db)) -> AdminService:
     return AdminService(db)
 
 
@@ -46,15 +46,15 @@ def _invalidate_theory_caches() -> None:
 # ==================== ПОЛЬЗОВАТЕЛИ ====================
 
 @router.get("/users", response_model=List[UserResponse])
-def get_users(
+async def get_users(
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
-    return service.get_users()
+    return await service.get_users()
 
 
 @router.patch("/users/{user_id}/role", response_model=MessageResponse)
-def change_user_role(
+async def change_user_role(
     user_id: int,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin),
@@ -65,19 +65,19 @@ def change_user_role(
         role = payload.new_role if payload is not None else new_role
         if role is None:
             raise HTTPException(status_code=422, detail="new_role is required")
-        return service.change_user_role(user_id, role, current_admin.id)
+        return await service.change_user_role(user_id, role, current_admin.id)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.delete("/users/{user_id}", response_model=MessageResponse)
-def delete_user(
+async def delete_user(
     user_id: int,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.delete_user(user_id, current_admin.id)
+        return await service.delete_user(user_id, current_admin.id)
     except ValueError as e:
         raise HTTPException(status_code=400 if "Нельзя" in str(e) else 404, detail=str(e))
     except Exception as e:
@@ -85,68 +85,68 @@ def delete_user(
 
 
 @router.get("/users/{user_id}/profile", response_model=UserResponseWithStats)
-def get_user_profile(
+async def get_user_profile(
     user_id: int,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.get_user_profile(user_id)
+        return await service.get_user_profile(user_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/users/{user_id}/history", response_model=list[TeacherHistoryItemResponse])
-def get_user_history(
+async def get_user_history(
     user_id: int,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
-    return service.get_user_history(user_id)
+    return await service.get_user_history(user_id)
 
 
 # ==================== ЗАДАНИЯ ====================
 
 @router.get("/", response_model=List[TaskResponse])
-def get_tasks(
+async def get_tasks(
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
-    return service.get_tasks()
+    return await service.get_tasks()
 
 
 @router.get("/tasks/{task_id}", response_model=TaskResponse)
-def get_task(
+async def get_task(
     task_id: int,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.get_task(task_id)
+        return await service.get_task(task_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.post("/tasks", response_model=TaskResponse)
-def create_task(
+async def create_task(
     payload: TaskCreate,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
-    result = service.create_task(payload.model_dump())
+    result = await service.create_task(payload.model_dump())
     _invalidate_task_caches()
     return result
 
 
 @router.put("/tasks/{task_id}")
-def update_task(
+async def update_task(
     task_id: int,
     payload: TaskCreate,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        result = service.update_task(task_id, payload.model_dump())
+        result = await service.update_task(task_id, payload.model_dump())
         _invalidate_task_caches()
         return result
     except ValueError as e:
@@ -154,13 +154,13 @@ def update_task(
 
 
 @router.delete("/tasks/{task_id}", response_model=MessageResponse)
-def delete_task(
+async def delete_task(
     task_id: int,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        result = service.delete_task(task_id)
+        result = await service.delete_task(task_id)
         _invalidate_task_caches()
         return result
     except ValueError as e:
@@ -168,13 +168,13 @@ def delete_task(
 
 
 @router.get("/results/{result_id}", response_model=DetailedResultResponse)
-def get_admin_detailed_result(
+async def get_admin_detailed_result(
     result_id: int,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.get_detailed_result(result_id)
+        return await service.get_detailed_result(result_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -182,33 +182,33 @@ def get_admin_detailed_result(
 # ==================== РАЗРЕШЁННЫЕ EMAIL ====================
 
 @router.get("/allowed/emails", response_model=list[AllowedEmailItemResponse])
-def get_allowed_emails(
+async def get_allowed_emails(
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
-    return service.get_allowed_emails()
+    return await service.get_allowed_emails()
 
 
 @router.post("/allowed-emails")
-def add_allowed_email(
+async def add_allowed_email(
     payload: AllowedEmailCreate,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.add_allowed_email(payload.email)
+        return await service.add_allowed_email(payload.email)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.delete("/allowed-emails/{email}")
-def delete_allowed_email(
+async def delete_allowed_email(
     email: str,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.delete_allowed_email(email)
+        return await service.delete_allowed_email(email)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -216,25 +216,25 @@ def delete_allowed_email(
 # ==================== НАЗНАЧЕНИЕ УЧИТЕЛЕЙ ====================
 
 @router.post("/assign-student-to-teacher", response_model=MessageResponse)
-def assign_student_to_teacher(
+async def assign_student_to_teacher(
     data: AssignStudentRequest,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.assign_student_to_teacher(data.teacher_id, data.student_id)
+        return await service.assign_student_to_teacher(data.teacher_id, data.student_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.delete("/remove-student-from-teacher/{student_id}", response_model=MessageResponse)
-def remove_student_from_teacher(
+async def remove_student_from_teacher(
     student_id: int,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.remove_student_from_teacher(student_id)
+        return await service.remove_student_from_teacher(student_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -242,13 +242,13 @@ def remove_student_from_teacher(
 # ==================== ТЕОРИЯ ====================
 
 @router.post("/theory", response_model=TheoryResponse)
-def create_theory(
+async def create_theory(
     payload: TheoryCreate,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        result = service.create_theory(payload.model_dump())
+        result = await service.create_theory(payload.model_dump())
         _invalidate_theory_caches()
         return result
     except ValueError as e:
@@ -256,34 +256,34 @@ def create_theory(
 
 
 @router.get("/theory/getall", response_model=list[TheoryResponse])
-def get_all_theory(
+async def get_all_theory(
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
-    return service.get_all_theory()
+    return await service.get_all_theory()
 
 
 @router.get("/theory/{theory_id}", response_model=TheoryResponse)
-def get_theory_by_id(
+async def get_theory_by_id(
     theory_id: int,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return service.get_theory_by_id(theory_id)
+        return await service.get_theory_by_id(theory_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.put("/theory/{theory_id}", response_model=TheoryResponse)
-def update_theory(
+async def update_theory(
     theory_id: int,
     payload: TheoryUpdate,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        result = service.update_theory(theory_id, payload.model_dump(exclude_unset=True))
+        result = await service.update_theory(theory_id, payload.model_dump(exclude_unset=True))
         _invalidate_theory_caches()
         return result
     except ValueError as e:
@@ -291,13 +291,13 @@ def update_theory(
 
 
 @router.delete("/theory/{theory_id}")
-def delete_theory(
+async def delete_theory(
     theory_id: int,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        result = service.delete_theory(theory_id)
+        result = await service.delete_theory(theory_id)
         _invalidate_theory_caches()
         return result
     except ValueError as e:
@@ -314,7 +314,7 @@ async def upload_to_r2(
 ):
     try:
         image_data = payload.image or payload.image_data or ""
-        return service.upload_image(image_data)
+        return await service.upload_image(image_data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
     except Exception as e:
@@ -342,26 +342,26 @@ async def send_task_to_tg(
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/rebuild-all-static-tests")
-def rebuild_all_static_tests(
+async def rebuild_all_static_tests(
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     """Пересборка всех статических тестов"""
     try:
-        result = service.rebuild_all_static_tests(current_admin.id)
+        result = await service.rebuild_all_static_tests(current_admin.id)
         _invalidate_task_caches()
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/{task_id}", response_model=TaskResponse)
-def get_task_short(
+async def get_task_short(
     task_id: int,
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
     """Короткая ссылка на задание (для совместимости с админкой)"""
     try:
-        return service.get_task(task_id)
+        return await service.get_task(task_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail="Task not found")

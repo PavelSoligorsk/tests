@@ -1,38 +1,60 @@
-from sqlalchemy import create_engine
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
+﻿from __future__ import annotations
+
 import os
+from typing import AsyncGenerator
+
 from dotenv import load_dotenv
+from sqlalchemy.ext.asyncio import (
+    AsyncSession,
+    async_sessionmaker,
+    create_async_engine,
+)
+from sqlalchemy.orm import declarative_base
 
 load_dotenv()
 
-# Берём URL из переменной окружения (Railway, локальный PostgreSQL и т.д.)
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 if not DATABASE_URL:
     raise ValueError(
-        "DATABASE_URL не задан. Укажите PostgreSQL URL в переменной окружения.\n"
-        "Пример для локальной разработки:\n"
-        '  DATABASE_URL="postgresql://postgres:postgres@localhost:5432/education_platform"\n'
-        "Его можно указать в .env файле или через export/установку переменной."
+        "DATABASE_URL not set. Provide a PostgreSQL URL in the environment.\n"
+        'Example: DATABASE_URL="postgresql://user:pass@localhost:5432/education_platform"\n'
+        "You can set it in .env file or via export."
     )
 
-# Для PostgreSQL connect_args обычно пустые
-connect_args = {}
 
-# Создаем engine
-engine = create_engine(
-    DATABASE_URL,
-    connect_args=connect_args
+def _to_async_url(url: str) -> str:
+    """Convert a sync database URL to the async driver equivalent."""
+    if "+asyncpg" in url or "+aiosqlite" in url:
+        return url
+    if url.startswith("sqlite"):
+        return url.replace("sqlite://", "sqlite+aiosqlite://", 1)
+    if url.startswith("postgresql://"):
+        return url.replace("postgresql://", "postgresql+asyncpg://", 1)
+    return url
+
+
+ASYNC_DATABASE_URL = _to_async_url(DATABASE_URL)
+
+engine = create_async_engine(
+    ASYNC_DATABASE_URL,
+    echo=False,
+    future=True,
 )
 
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
+async_session_maker = async_sessionmaker(
+    engine,
+    class_=AsyncSession,
+    expire_on_commit=False,
+)
 
 Base = declarative_base()
 
-def get_db():
-    db = SessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
+
+async def get_db() -> AsyncGenerator[AsyncSession, None]:
+    """Async dependency that yields an SQLAlchemy AsyncSession."""
+    async with async_session_maker() as session:
+        try:
+            yield session
+        finally:
+            await session.close()

@@ -1,89 +1,117 @@
-from sqlalchemy.orm import Session
+from sqlalchemy import select, delete, or_
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 
 from core.models import User, TeacherStudent
 
 
 class TeacherStudentRepository:
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.db = db
     
-    def get_teacher_students(self, teacher_id: int) -> List[User]:
+    async def get_teacher_students(self, teacher_id: int) -> List[User]:
         """Получить всех студентов учителя"""
-        student_ids = self.db.query(TeacherStudent.student_id).filter(
-            TeacherStudent.teacher_id == teacher_id
-        ).subquery()
+        r = await self.db.execute(
+            select(TeacherStudent.student_id).where(TeacherStudent.teacher_id == teacher_id)
+        )
+        student_ids_sub = r.all()
+        student_ids = [s[0] for s in student_ids_sub]
         
-        return self.db.query(User).filter(
-            User.role == "student",
-            User.id.in_(student_ids)
-        ).all()
+        if not student_ids:
+            return []
+        
+        r2 = await self.db.execute(
+            select(User).where(
+                User.role == "student",
+                User.id.in_(student_ids)
+            )
+        )
+        return r2.scalars().all()
     
-    def check_student_belongs_to_teacher(self, student_id: int, teacher_id: int) -> bool:
+    async def check_student_belongs_to_teacher(self, student_id: int, teacher_id: int) -> bool:
         """Проверить, привязан ли студент к учителю"""
-        link = self.db.query(TeacherStudent).filter(
-            TeacherStudent.teacher_id == teacher_id,
-            TeacherStudent.student_id == student_id
-        ).first()
+        r = await self.db.execute(
+            select(TeacherStudent).where(
+                TeacherStudent.teacher_id == teacher_id,
+                TeacherStudent.student_id == student_id
+            )
+        )
+        link = r.scalars().first()
         return link is not None
     
-    def check_students_belong_to_teacher(self, student_ids: List[int], teacher_id: int) -> List[int]:
+    async def check_students_belong_to_teacher(self, student_ids: List[int], teacher_id: int) -> List[int]:
         """Проверить список студентов и вернуть тех, кто НЕ принадлежит учителю"""
-        assigned = self.db.query(TeacherStudent.student_id).filter(
-            TeacherStudent.teacher_id == teacher_id,
-            TeacherStudent.student_id.in_(student_ids)
-        ).all()
+        r = await self.db.execute(
+            select(TeacherStudent.student_id).where(
+                TeacherStudent.teacher_id == teacher_id,
+                TeacherStudent.student_id.in_(student_ids)
+            )
+        )
+        assigned = r.all()
         
         assigned_ids = {s[0] for s in assigned}
         return [uid for uid in student_ids if uid not in assigned_ids]
     
-    def get_students_by_ids(self, student_ids: List[int]) -> List[User]:
+    async def get_students_by_ids(self, student_ids: List[int]) -> List[User]:
         """Получить студентов по ID с проверкой роли"""
-        return self.db.query(User).filter(
-            User.id.in_(student_ids),
-            User.role == "student"
-        ).all()
+        r = await self.db.execute(
+            select(User).where(
+                User.id.in_(student_ids),
+                User.role == "student"
+            )
+        )
+        return r.scalars().all()
     
-    def get_student_by_id(self, student_id: int) -> User:
+    async def get_student_by_id(self, student_id: int) -> User:
         """Получить студента по ID"""
-        return self.db.query(User).filter(
-            User.id == student_id,
-            User.role == "student"
-        ).first()
+        r = await self.db.execute(
+            select(User).where(
+                User.id == student_id,
+                User.role == "student"
+            )
+        )
+        return r.scalars().first()
     
-    def get_all_links(self):
+    async def get_all_links(self):
         """Получить все связи учитель-ученик"""
-        return self.db.query(TeacherStudent).all()
+        r = await self.db.execute(select(TeacherStudent))
+        return r.scalars().all()
 
-    def get_links_by_student_ids(self, student_ids: List[int]):
+    async def get_links_by_student_ids(self, student_ids: List[int]):
         """Получить связи для списка студентов"""
-        return self.db.query(TeacherStudent).filter(
-            TeacherStudent.student_id.in_(student_ids)
-        ).all()
+        r = await self.db.execute(
+            select(TeacherStudent).where(TeacherStudent.student_id.in_(student_ids))
+        )
+        return r.scalars().all()
 
-    def delete_links_by_user(self, user_id: int):
+    async def delete_links_by_user(self, user_id: int):
         """Удалить все связи где пользователь учитель или ученик"""
-        self.db.query(TeacherStudent).filter(
-            (TeacherStudent.teacher_id == user_id) |
-            (TeacherStudent.student_id == user_id)
-        ).delete(synchronize_session=False)
+        await self.db.execute(
+            delete(TeacherStudent).where(
+                or_(
+                    TeacherStudent.teacher_id == user_id,
+                    TeacherStudent.student_id == user_id
+                )
+            )
+        )
 
-    def delete_link_by_student(self, student_id: int):
+    async def delete_link_by_student(self, student_id: int):
         """Удалить связь ученика с учителем"""
-        link = self.db.query(TeacherStudent).filter(
-            TeacherStudent.student_id == student_id
-        ).first()
+        r = await self.db.execute(
+            select(TeacherStudent).where(TeacherStudent.student_id == student_id)
+        )
+        link = r.scalars().first()
         if link:
-            self.db.delete(link)
+            await self.db.delete(link)
             return True
         return False
 
-    def create_link(self, teacher_id: int, student_id: int):
+    async def create_link(self, teacher_id: int, student_id: int):
         """Создать связь учитель-ученик"""
         # Удаляем старую связь
-        self.db.query(TeacherStudent).filter(
-            TeacherStudent.student_id == student_id
-        ).delete()
+        await self.db.execute(
+            delete(TeacherStudent).where(TeacherStudent.student_id == student_id)
+        )
         
         # Создаём новую
         new_link = TeacherStudent(

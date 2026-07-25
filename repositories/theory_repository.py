@@ -1,59 +1,68 @@
-from sqlalchemy.orm import Session
+from sqlalchemy import select, func
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from core.models import Theory
 
 
 class TheoryRepository:
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.db = db
 
-    def create_theory(self, theory_data: dict):
+    async def create_theory(self, theory_data: dict):
         new_theory = Theory(**theory_data)
         self.db.add(new_theory)
-        self.db.commit()
-        self.db.refresh(new_theory)
+        await self.db.commit()
+        await self.db.refresh(new_theory)
         return new_theory
 
-    def update_theory(self, theory: Theory, update_data: dict):
+    async def update_theory(self, theory: Theory, update_data: dict):
         for key, value in update_data.items():
             setattr(theory, key, value)
-        self.db.commit()
-        self.db.refresh(theory)
+        await self.db.commit()
+        await self.db.refresh(theory)
         return theory
 
-    def delete_theory(self, theory: Theory):
-        self.db.delete(theory)
-        self.db.commit()
+    async def delete_theory(self, theory: Theory):
+        await self.db.delete(theory)
+        await self.db.commit()
     
-    def get_all_topics(self):
-        return self.db.query(Theory.topic).distinct().all()
+    async def get_all_topics(self):
+        r = await self.db.execute(select(Theory.topic).distinct())
+        return r.all()
     
-    def get_all_theory(self):
+    async def get_all_theory(self):
         """Получить весь теоретический материал"""
-        return self.db.query(Theory).order_by(
-            Theory.topic, 
-            Theory.section
-        ).all()
+        r = await self.db.execute(
+            select(Theory).order_by(Theory.topic, Theory.section)
+        )
+        return r.scalars().all()
     
-    def get_theory_by_topic(self, topic: str):
-        return self.db.query(Theory)\
-            .filter(Theory.topic == topic)\
-            .order_by(Theory.section)\
-            .all()
+    async def get_theory_by_topic(self, topic: str):
+        r = await self.db.execute(
+            select(Theory)
+            .where(Theory.topic == topic)
+            .order_by(Theory.section)
+        )
+        return r.scalars().all()
     
-    def get_theory_by_topic_and_section(self, topic: str, section: str):
-        return self.db.query(Theory)\
-            .filter(
+    async def get_theory_by_topic_and_section(self, topic: str, section: str):
+        r = await self.db.execute(
+            select(Theory)
+            .where(
                 Theory.topic == topic,
                 Theory.section == section
-            ).first()
+            )
+        )
+        return r.scalars().first()
     
-    def get_theory_by_id(self, theory_id: int):
-        return self.db.query(Theory)\
-            .filter(Theory.id == theory_id)\
-            .first()
+    async def get_theory_by_id(self, theory_id: int):
+        r = await self.db.execute(
+            select(Theory).where(Theory.id == theory_id)
+        )
+        return r.scalars().first()
     
-    def get_theory_sections_count(self, topic: str):
-        return self.db.query(Theory)\
-            .filter(Theory.topic == topic)\
-            .count()
+    async def get_theory_sections_count(self, topic: str):
+        r = await self.db.execute(
+            select(func.count()).select_from(Theory).where(Theory.topic == topic)
+        )
+        return r.scalar()

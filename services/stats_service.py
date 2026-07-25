@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 from typing import List, Optional
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from repositories.stats_repository import StatsRepository
 
 from dto_schemas.stats import (
@@ -17,7 +17,7 @@ from dto_schemas.stats import (
 
 
 class StatsService:
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.stats_repo = StatsRepository(db)
         self.db = db
     
@@ -38,16 +38,16 @@ class StatsService:
         
         return period_map[period], now
     
-    def _check_access(self, user_id: int, current_user):
+    async def _check_access(self, user_id: int, current_user):
         """Проверяет доступ к статистике"""
         if current_user.role == "student" and current_user.id != user_id:
             raise PermissionError("Вы можете смотреть только свою статистику")
         
         if current_user.role == "teacher" and current_user.id != user_id:
-            if not self.stats_repo.check_teacher_student_link(current_user.id, user_id):
+            if not await self.stats_repo.check_teacher_student_link(current_user.id, user_id):
                 raise PermissionError("У вас нет доступа к этому ученику")
         
-        user = self.stats_repo.get_user_by_id(user_id)
+        user = await self.stats_repo.get_user_by_id(user_id)
         if not user:
             raise ValueError("Пользователь не найден")
         
@@ -99,12 +99,12 @@ class StatsService:
         
         return streak
     
-    def get_period_stats(self, user_id: int, period: str, current_user) -> PeriodStatsResponse:
+    async def get_period_stats(self, user_id: int, period: str, current_user) -> PeriodStatsResponse:
         """Статистика по периоду"""
-        user = self._check_access(user_id, current_user)
+        user = await self._check_access(user_id, current_user)
         start_date, end_date = self._get_period_dates(period)
         
-        results = self.stats_repo.get_user_results(user_id, start_date)
+        results = await self.stats_repo.get_user_results(user_id, start_date)
         
         if not results:
             return self._empty_period_response(user_id, period, user, start_date, end_date)
@@ -112,12 +112,12 @@ class StatsService:
         result_ids = [r.id for r in results]
         test_ids = list(set(r.test_id for r in results))
         
-        unique_tasks_count = self.stats_repo.get_unique_tasks_count(test_ids)
-        user_answers = self.stats_repo.get_user_answers_by_results(result_ids)
+        unique_tasks_count = await self.stats_repo.get_unique_tasks_count(test_ids)
+        user_answers = await self.stats_repo.get_user_answers_by_results(result_ids)
         best_answers = self._get_best_answers(user_answers)
         
         correct_tasks = sum(1 for a in best_answers.values() if self._is_valid_answer(a))
-        test_max_points = self.stats_repo.get_test_max_points(test_ids)
+        test_max_points = await self.stats_repo.get_test_max_points(test_ids)
         
         # Проценты по тестам
         percentages = []
@@ -132,7 +132,7 @@ class StatsService:
         worst_score = round(min(percentages), 1) if percentages else 0.0
         
         # Группировка по дням
-        daily_stats = self._build_daily_stats(results, test_ids, test_max_points, best_answers, end_date)
+        daily_stats = await self._build_daily_stats(results, test_ids, test_max_points, best_answers, end_date)
         streak = self._calculate_streak([d.date for d in daily_stats], end_date)
         
         return PeriodStatsResponse(
@@ -151,12 +151,12 @@ class StatsService:
             daily_stats=daily_stats,
         )
     
-    def get_topics_stats(self, user_id: int, period: str, current_user) -> TopicsStatsResponse:
+    async def get_topics_stats(self, user_id: int, period: str, current_user) -> TopicsStatsResponse:
         """Статистика по темам с разделами"""
-        user = self._check_access(user_id, current_user)
+        user = await self._check_access(user_id, current_user)
         start_date, end_date = self._get_period_dates(period)
         
-        results = self.stats_repo.get_user_results(user_id, start_date)
+        results = await self.stats_repo.get_user_results(user_id, start_date)
         
         if not results:
             return self._empty_topics_response(user_id, period, user)
@@ -164,27 +164,27 @@ class StatsService:
         result_ids = [r.id for r in results]
         test_ids = list(set(r.test_id for r in results))
         
-        total_tasks_query = self.stats_repo.get_topics_with_counts(test_ids)
-        user_answers = self.stats_repo.get_user_answers_by_results(result_ids)
+        total_tasks_query = await self.stats_repo.get_topics_with_counts(test_ids)
+        user_answers = await self.stats_repo.get_user_answers_by_results(result_ids)
         best_answers = self._get_best_answers(user_answers)
         
         # Считаем правильные по темам
         correct_map = {}
         for task_id, answer in best_answers.items():
             if self._is_valid_answer(answer):
-                task = self.stats_repo.get_task_by_id(task_id)
+                task = await self.stats_repo.get_task_by_id(task_id)
                 if task and task.topic:
                     key = (task.topic, task.section or "Общее")
                     correct_map[key] = correct_map.get(key, 0) + 1
         
         return self._build_topics_response(total_tasks_query, correct_map, user_id, period, user)
     
-    def get_difficulty_stats(self, user_id: int, period: str, current_user) -> DifficultyStatsResponse:
+    async def get_difficulty_stats(self, user_id: int, period: str, current_user) -> DifficultyStatsResponse:
         """Статистика по сложности"""
-        user = self._check_access(user_id, current_user)
+        user = await self._check_access(user_id, current_user)
         start_date, end_date = self._get_period_dates(period)
         
-        results = self.stats_repo.get_user_results(user_id, start_date)
+        results = await self.stats_repo.get_user_results(user_id, start_date)
         
         if not results:
             return self._empty_difficulty_response(user_id, period, user)
@@ -192,31 +192,31 @@ class StatsService:
         result_ids = [r.id for r in results]
         test_ids = list(set(r.test_id for r in results))
         
-        total_tasks_query = self.stats_repo.get_difficulty_counts(test_ids)
-        user_answers = self.stats_repo.get_user_answers_by_results(result_ids)
+        total_tasks_query = await self.stats_repo.get_difficulty_counts(test_ids)
+        user_answers = await self.stats_repo.get_user_answers_by_results(result_ids)
         best_answers = self._get_best_answers(user_answers)
         
         correct_map = {}
         for task_id, answer in best_answers.items():
             if self._is_valid_answer(answer):
-                task = self.stats_repo.get_task_by_id(task_id)
+                task = await self.stats_repo.get_task_by_id(task_id)
                 if task and task.difficulty:
                     correct_map[task.difficulty] = correct_map.get(task.difficulty, 0) + 1
         
         return self._build_difficulty_response(total_tasks_query, correct_map, user_id, period, user)
     
-    def get_full_stats(self, user_id: int, period: str, current_user) -> FullStatsResponse:
+    async def get_full_stats(self, user_id: int, period: str, current_user) -> FullStatsResponse:
         """Полная статистика"""
-        self._check_access(user_id, current_user)
+        await self._check_access(user_id, current_user)
         
         return FullStatsResponse(
-            period=self.get_period_stats(user_id, period, current_user),
-            topics=self.get_topics_stats(user_id, period, current_user),
-            difficulties=self.get_difficulty_stats(user_id, period, current_user),
+            period=await self.get_period_stats(user_id, period, current_user),
+            topics=await self.get_topics_stats(user_id, period, current_user),
+            difficulties=await self.get_difficulty_stats(user_id, period, current_user),
         )
     
     # Вспомогательные методы сборки ответов
-    def _build_daily_stats(self, results, test_ids, test_max_points, best_answers, end_date):
+    async def _build_daily_stats(self, results, test_ids, test_max_points, best_answers, end_date):
         daily_map = {}
         
         for r in results:
@@ -233,7 +233,7 @@ class StatsService:
             
             daily_map[day_key]["tests_count"] += 1
             
-            test_tasks = self.stats_repo.get_test_tasks(r.test_id)
+            test_tasks = await self.stats_repo.get_test_tasks(r.test_id)
             for task_id in test_tasks:
                 if task_id not in daily_map[day_key]["seen_tasks"]:
                     daily_map[day_key]["seen_tasks"].add(task_id)

@@ -3,10 +3,13 @@ import uuid
 import base64
 import re
 import httpx
+import asyncio
 import boto3
 from botocore.config import Config
 from typing import List
+from sqlalchemy import select, delete, update
 from sqlalchemy.orm import joinedload
+from sqlalchemy.ext.asyncio import AsyncSession
 from repositories.user_repository import UserRepository
 from repositories.task_repository import TaskRepository
 from repositories.test_repository import TestRepository
@@ -35,7 +38,7 @@ from dto_schemas.cached import (
 
 
 class AdminService:
-    def __init__(self, db):
+    def __init__(self, db: AsyncSession):
         self.user_repo = UserRepository(db)
         self.task_repo = TaskRepository(db)
         self.test_repo = TestRepository(db)
@@ -49,15 +52,15 @@ class AdminService:
     
     # ==================== ПОЛЬЗОВАТЕЛИ ====================
     
-    def get_users(self):
-        users = self.user_repo.get_all_users()
+    async def get_users(self):
+        users = await self.user_repo.get_all_users()
         student_ids = [u.id for u in users if u.role == "student"]
         
         teacher_links = {}
         if student_ids:
-            links = self.teacher_student_repo.get_links_by_student_ids(student_ids)
+            links = await self.teacher_student_repo.get_links_by_student_ids(student_ids)
             teacher_ids = [link.teacher_id for link in links]
-            teachers = self.user_repo.get_teachers_by_ids(teacher_ids)
+            teachers = await self.user_repo.get_teachers_by_ids(teacher_ids)
             teachers_dict = {t.id: t for t in teachers}
             
             for link in links:
@@ -84,8 +87,8 @@ class AdminService:
         
         return result
     
-    def delete_user(self, user_id: int, admin_id: int):
-        user = self.user_repo.get_user_by_id(user_id)
+    async def delete_user(self, user_id: int, admin_id: int):
+        user = await self.user_repo.get_user_by_id(user_id)
         if not user:
             raise ValueError("Пользователь не найден")
         
@@ -93,32 +96,33 @@ class AdminService:
             raise ValueError("Нельзя удалить самого себя")
         
         # Каскадное удаление через репозитории
-        self.teacher_student_repo.delete_links_by_user(user_id)
-        self.group_repo.delete_groups_by_teacher(user_id)
-        self.group_repo.delete_student_from_all_groups(user_id)
+        await self.teacher_student_repo.delete_links_by_user(user_id)
+        await self.group_repo.delete_groups_by_teacher(user_id)
+        await self.group_repo.delete_student_from_all_groups(user_id)
         
         # Удаление ответов и результатов
-        result_ids = self.result_repo.get_result_ids_by_user(user_id)
+        result_ids = await self.result_repo.get_result_ids_by_user(user_id)
         if result_ids:
-            self.result_repo.delete_answers_by_result_ids(result_ids)
-            self.result_repo.delete_results_by_user(user_id)
+            await self.result_repo.delete_answers_by_result_ids(result_ids)
+            await self.result_repo.delete_results_by_user(user_id)
         
-        self.assignment_repo.delete_assignments_by_user(user_id)
+        await self.assignment_repo.delete_assignments_by_user(user_id)
         
         # Удаление тестов учителя
-        test_ids = self.test_repo.get_test_ids_by_creator(user_id)
+        test_ids = await self.test_repo.get_test_ids_by_creator(user_id)
         if test_ids:
-            self.test_repo.delete_tests_by_ids(test_ids)
+            await self.test_repo.delete_tests_by_ids(test_ids)
         
-        self.user_repo.delete_user(user)
+        await self.user_repo.delete_user(user)
+        await self.db.commit()
         return MessageResponse(message="Пользователь и все связанные данные удалены")
     
-    def get_user_profile(self, user_id: int):
-        user = self.user_repo.get_user_by_id(user_id)
+    async def get_user_profile(self, user_id: int):
+        user = await self.user_repo.get_user_by_id(user_id)
         if not user:
             raise ValueError("Пользователь не найден")
         
-        stats = self.user_repo.get_user_stats(user_id)
+        stats = await self.user_repo.get_user_stats(user_id)
         
         return UserResponseWithStats(
             user=user,
@@ -128,8 +132,8 @@ class AdminService:
             ),
         )
     
-    def get_user_history(self, user_id: int):
-        results = self.result_repo.get_user_history(user_id)
+    async def get_user_history(self, user_id: int):
+        results = await self.result_repo.get_user_history(user_id)
         return [
             TeacherHistoryItemResponse(
                 test_title=r.test.title if r.test else "Тест удален",
@@ -144,65 +148,67 @@ class AdminService:
     
     # ==================== ЗАДАНИЯ ====================
     
-    def create_task(self, task_data: dict):
-        return self.task_repo.create_task(task_data)
+    async def create_task(self, task_data: dict):
+        return await self.task_repo.create_task(task_data)
     
-    def change_user_role(self, user_id: int, new_role: str, admin_id: int):
+    async def change_user_role(self, user_id: int, new_role: str, admin_id: int):
         try:
             UserRole(new_role)
         except ValueError:
             raise ValueError(f"Недопустимая роль: {new_role}. Допустимые: admin, teacher, student")
         
-        user = self.user_repo.get_user_by_id(user_id)
+        user = await self.user_repo.get_user_by_id(user_id)
         if not user:
             raise ValueError("Пользователь не найден")
         
         if user.id == admin_id and new_role != "admin":
             raise ValueError("Вы не можете снять роль админа с самого себя")
         
-        self.user_repo.update_user_role(user, new_role)
+        await self.user_repo.update_user_role(user, new_role)
+        await self.db.commit()
         return MessageResponse(message=f"Роль пользователя {user.username} изменена на {new_role}")
     
-    def update_task(self, task_id: int, update_data: dict):
-        task = self.task_repo.get_task_by_id(task_id)
+    async def update_task(self, task_id: int, update_data: dict):
+        task = await self.task_repo.get_task_by_id(task_id)
         if not task:
             raise ValueError("Задание не найдено")
 
-        # Обновляем атрибуты (без коммита)
+        # Обновляем атрибуты
         for key, value in update_data.items():
             setattr(task, key, value)
 
-        self.db.flush()  # сохраняем изменения в БД, но не коммитим
+        await self.db.flush()
 
         # Пересчитываем ответы и результаты для этого задания
-        recompute_stats = self._recompute_answers_for_task(task)
+        recompute_stats = await self._recompute_answers_for_task(task)
 
-        self.db.commit()
+        await self.db.commit()
 
         return task
     
-    def get_tasks(self):
-        return self.task_repo.get_all_tasks()
+    async def get_tasks(self):
+        return await self.task_repo.get_all_tasks()
     
-    def get_task(self, task_id: int):
-        task = self.task_repo.get_task_by_id(task_id)
+    async def get_task(self, task_id: int):
+        task = await self.task_repo.get_task_by_id(task_id)
         if not task:
             raise ValueError("Task not found")
         return task
     
-    def delete_task(self, task_id: int):
-        if not self.task_repo.get_task_by_id(task_id):
+    async def delete_task(self, task_id: int):
+        if not await self.task_repo.get_task_by_id(task_id):
             raise ValueError("Задание не найдено")
-        self.task_repo.delete_task(task_id)
+        await self.task_repo.delete_task(task_id)
+        await self.db.commit()
         return MessageResponse(message=f"Задание с ID {task_id} и связанные данные успешно удалены")
     
-    def get_detailed_result(self, result_id: int):
-        result = self.result_repo.get_result_by_id(result_id)
+    async def get_detailed_result(self, result_id: int):
+        result = await self.result_repo.get_result_by_id(result_id)
         if not result:
             raise ValueError("Результат не найден")
         
-        all_tasks = self.task_repo.get_tasks_by_test_id(result.test_id)
-        user_answers = self.result_repo.get_user_answers_for_result(result_id)
+        all_tasks = await self.task_repo.get_tasks_by_test_id(result.test_id)
+        user_answers = await self.result_repo.get_user_answers_for_result(result_id)
         answers_map = {ua.task_id: ua for ua in user_answers}
         
         details = []
@@ -254,12 +260,12 @@ class AdminService:
     
     # ==================== РАЗРЕШЁННЫЕ EMAIL ====================
     
-    def get_allowed_emails(self):
-        allowed_emails = self.allowed_email_repo.get_all()
+    async def get_allowed_emails(self):
+        allowed_emails = await self.allowed_email_repo.get_all()
         
         result = []
         for ae in allowed_emails:
-            user = self.user_repo.get_user_by_email(ae.email)
+            user = await self.user_repo.get_user_by_email(ae.email)
             
             result.append(AllowedEmailItemResponse(
                 email=ae.email,
@@ -270,97 +276,101 @@ class AdminService:
         
         return result
     
-    def add_allowed_email(self, email: str):
+    async def add_allowed_email(self, email: str):
         if not email:
             raise ValueError("Email is required")
         
-        exists = self.allowed_email_repo.get_by_email(email)
+        exists = await self.allowed_email_repo.get_by_email(email)
         if exists:
             raise ValueError("Email уже в списке")
         
-        return self.allowed_email_repo.create(email)
+        return await self.allowed_email_repo.create(email)
     
-    def delete_allowed_email(self, email: str):
-        allowed = self.allowed_email_repo.get_by_email(email)
+    async def delete_allowed_email(self, email: str):
+        allowed = await self.allowed_email_repo.get_by_email(email)
         if not allowed:
             raise ValueError("Email не найден")
         
-        self.allowed_email_repo.delete(allowed)
+        await self.allowed_email_repo.delete(allowed)
+        await self.db.commit()
         return {"status": "ok", "message": f"Доступ для {email} аннулирован"}
     
     # ==================== НАЗНАЧЕНИЕ УЧИТЕЛЕЙ ====================
     
-    def assign_student_to_teacher(self, teacher_id: int, student_id: int):
-        teacher = self.user_repo.get_user_by_id(teacher_id)
+    async def assign_student_to_teacher(self, teacher_id: int, student_id: int):
+        teacher = await self.user_repo.get_user_by_id(teacher_id)
         if not teacher or teacher.role not in ["teacher", "admin"]:
             raise ValueError("Учитель не найден")
         
-        student = self.user_repo.get_user_by_id(student_id)
+        student = await self.user_repo.get_user_by_id(student_id)
         if not student or student.role != "student":
             raise ValueError("Ученик не найден")
         
-        self.teacher_student_repo.create_link(teacher_id, student_id)
-        self.db.commit()
+        await self.teacher_student_repo.create_link(teacher_id, student_id)
+        await self.db.commit()
         
         return MessageResponse(message=f"Ученик {student.username} назначен учителю {teacher.username}")
     
-    def remove_student_from_teacher(self, student_id: int):
-        if not self.teacher_student_repo.delete_link_by_student(student_id):
+    async def remove_student_from_teacher(self, student_id: int):
+        if not await self.teacher_student_repo.delete_link_by_student(student_id):
             raise ValueError("Связь не найдена")
         
-        self.db.commit()
+        await self.db.commit()
         return MessageResponse(message="Связь удалена")
     
     # ==================== ТЕОРИЯ ====================
     
-    def create_theory(self, theory_data: dict):
+    async def create_theory(self, theory_data: dict):
         topic = theory_data.get("topic")
         section = theory_data.get("section")
         
-        existing = self.theory_repo.get_theory_by_topic_and_section(topic, section)
+        existing = await self.theory_repo.get_theory_by_topic_and_section(topic, section)
         if existing:
             raise ValueError(f"Теория для темы '{topic}' и раздела '{section}' уже существует")
         
-        return self.theory_repo.create_theory(theory_data)
+        return await self.theory_repo.create_theory(theory_data)
     
-    def get_all_theory(self):
-        return self.theory_repo.get_all_theory()
+    async def get_all_theory(self):
+        return await self.theory_repo.get_all_theory()
     
-    def get_theory_by_id(self, theory_id: int):
-        theory = self.theory_repo.get_theory_by_id(theory_id)
+    async def get_theory_by_id(self, theory_id: int):
+        theory = await self.theory_repo.get_theory_by_id(theory_id)
         if not theory:
             raise ValueError("Теория не найдена")
         return theory
     
-    def update_theory(self, theory_id: int, update_data: dict):
-        theory = self.theory_repo.get_theory_by_id(theory_id)
+    async def update_theory(self, theory_id: int, update_data: dict):
+        theory = await self.theory_repo.get_theory_by_id(theory_id)
         if not theory:
             raise ValueError("Теория не найдена")
         
-        return self.theory_repo.update_theory(theory, update_data)
+        return await self.theory_repo.update_theory(theory, update_data)
     
-    def delete_theory(self, theory_id: int):
-        theory = self.theory_repo.get_theory_by_id(theory_id)
+    async def delete_theory(self, theory_id: int):
+        theory = await self.theory_repo.get_theory_by_id(theory_id)
         if not theory:
             raise ValueError("Теория не найдена")
         
-        self.theory_repo.delete_theory(theory)
+        await self.theory_repo.delete_theory(theory)
+        await self.db.commit()
         return MessageResponse(message=f"Теория для темы '{theory.topic}' и раздела '{theory.section}' успешно удалена")
     
     # ==================== ЗАГРУЗКА ИЗОБРАЖЕНИЙ ====================
     
-    def upload_image(self, image_data: str):
+    async def upload_image(self, image_data: str):
         if not image_data:
             raise ValueError("Missing image data")
         
-        # Настройка R2
-        s3_client = boto3.client(
-            's3',
-            endpoint_url=os.getenv("R2_ENDPOINT_URL"),
-            aws_access_key_id=os.getenv("R2_ACCESS_KEY_ID"),
-            aws_secret_access_key=os.getenv("R2_SECRET_ACCESS_KEY"),
-            region_name='auto',
-            config=Config(signature_version='s3v4')
+        # Настройка R2 (boto3 sync, оборачиваем в поток)
+        s3_client = await asyncio.to_thread(
+            lambda: boto3.client(
+                's3',
+                endpoint_url=os.getenv("R2_ENDPOINT_URL"),
+                aws_access_key_id=os.getenv("R2_ACCESS_KEY_ID"),
+                aws_secret_access_key=os.getenv("R2_SECRET_ACCESS_KEY"),
+                region_name='auto',
+                config=Config(signature_version='s3v4')
+            )
         )
         
         if "," in image_data:
@@ -372,7 +382,8 @@ class AdminService:
         
         filename = f"tasks/{uuid.uuid4().hex}.png"
         
-        s3_client.put_object(
+        await asyncio.to_thread(
+            s3_client.put_object,
             Bucket=os.getenv("R2_BUCKET_NAME"),
             Key=filename,
             Body=image_bytes,
@@ -391,7 +402,7 @@ class AdminService:
     # ==================== ОТПРАВКА В TELEGRAM ====================
     
     async def send_task_to_tg(self, task_id: int, chat_id: str):
-        task = self.task_repo.get_task_by_id(task_id)
+        task = await self.task_repo.get_task_by_id(task_id)
         if not task:
             raise ValueError("Задание не найдено")
         
@@ -459,16 +470,16 @@ class AdminService:
             except httpx.RequestError as e:
                 raise Exception(f"Не удалось связаться с рендер-ботом: {str(e)}")
     
-    def rebuild_all_static_tests(self, admin_id: int):
+    async def rebuild_all_static_tests(self, admin_id: int):
         """
         🔄 Пересобрать статические (автособранные) тесты.
         """
         try:
             # ========== 1. Собираем актуальные категории из задач ==========
-            active_categories = self.db.query(
-                Task.task_class, 
-                Task.topic_number
-            ).distinct().all()
+            result = await self.db.execute(
+                select(Task.task_class, Task.topic_number).distinct()
+            )
+            active_categories = result.all()
             
             updated_test_ids = []
 
@@ -476,13 +487,16 @@ class AdminService:
                 t_class_str = str(t_class)
                 t_num_str = str(t_num)
                 
-                test = self.db.query(Test).filter(
-                    Test.target_class == t_class_str,
-                    Test.target_topic == t_num_str,
-                    Test.is_autocompile == True,
-                    Test.is_ai_generated == False,
-                    Test.creator_id == admin_id
-                ).first()
+                result = await self.db.execute(
+                    select(Test).filter(
+                        Test.target_class == t_class_str,
+                        Test.target_topic == t_num_str,
+                        Test.is_autocompile == True,
+                        Test.is_ai_generated == False,
+                        Test.creator_id == admin_id
+                    )
+                )
+                test = result.scalars().first()
 
                 if not test:
                     test = Test(
@@ -495,72 +509,90 @@ class AdminService:
                         is_active=True
                     )
                     self.db.add(test)
-                    self.db.flush()
+                    await self.db.flush()
 
-                relevant_tasks = self.db.query(Task).filter(
-                    Task.task_class == t_class,
-                    Task.topic_number == t_num
-                ).order_by(
-                    Task.is_open_answer.asc(),
-                    Task.difficulty.asc()
-                ).all()
+                result = await self.db.execute(
+                    select(Task).filter(
+                        Task.task_class == t_class,
+                        Task.topic_number == t_num
+                    ).order_by(
+                        Task.is_open_answer.asc(),
+                        Task.difficulty.asc()
+                    )
+                )
+                relevant_tasks = result.scalars().all()
 
                 test.tasks = relevant_tasks
                 updated_test_ids.append(test.id)
 
-            self.db.flush()
+            await self.db.flush()
 
             # ========== 2. Удаляем старые автотесты админа ==========
             deleted_count = 0
             if updated_test_ids:
-                bad_tests_query = self.db.query(Test.id).filter(
-                    Test.id.not_in(updated_test_ids),
-                    Test.is_autocompile == True,
-                    Test.is_ai_generated == False,
-                    Test.creator_id == admin_id
+                result = await self.db.execute(
+                    select(Test.id).filter(
+                        Test.id.not_in(updated_test_ids),
+                        Test.is_autocompile == True,
+                        Test.is_ai_generated == False,
+                        Test.creator_id == admin_id
+                    )
                 )
+                bad_test_ids = [row[0] for row in result.all()]
 
-                empty_tests = self.db.query(Test.id).filter(
-                    ~Test.tasks.any(),
-                    Test.id.not_in(updated_test_ids),
-                    Test.is_autocompile == True,
-                    Test.is_ai_generated == False,
-                    Test.creator_id == admin_id
-                ).all()
-
-                bad_test_ids = [t[0] for t in bad_tests_query.all()]
-                bad_test_ids.extend([t[0] for t in empty_tests])
+                result = await self.db.execute(
+                    select(Test.id).filter(
+                        ~Test.tasks.any(),
+                        Test.id.not_in(updated_test_ids),
+                        Test.is_autocompile == True,
+                        Test.is_ai_generated == False,
+                        Test.creator_id == admin_id
+                    )
+                )
+                bad_test_ids.extend([row[0] for row in result.all()])
                 bad_test_ids = list(set(bad_test_ids))
 
                 if bad_test_ids:
-                    bad_result_ids = [
-                        r[0] for r in self.db.query(TestResult.id)
-                        .filter(TestResult.test_id.in_(bad_test_ids))
-                        .all()
-                    ]
+                    result = await self.db.execute(
+                        select(TestResult.id).filter(
+                            TestResult.test_id.in_(bad_test_ids)
+                        )
+                    )
+                    bad_result_ids = [row[0] for row in result.all()]
 
                     if bad_result_ids:
-                        self.db.query(UserAnswer).filter(
-                            UserAnswer.result_id.in_(bad_result_ids)
-                        ).delete(synchronize_session=False)
+                        await self.db.execute(
+                            delete(UserAnswer).filter(
+                                UserAnswer.result_id.in_(bad_result_ids)
+                            )
+                        )
                         
-                        self.db.query(TestResult).filter(
-                            TestResult.id.in_(bad_result_ids)
-                        ).delete(synchronize_session=False)
+                        await self.db.execute(
+                            delete(TestResult).filter(
+                                TestResult.id.in_(bad_result_ids)
+                            )
+                        )
 
-                    self.db.query(TestTaskAssociation).filter(
-                        TestTaskAssociation.test_id.in_(bad_test_ids)
-                    ).delete(synchronize_session=False)
+                    await self.db.execute(
+                        delete(TestTaskAssociation).filter(
+                            TestTaskAssociation.test_id.in_(bad_test_ids)
+                        )
+                    )
 
-                    self.db.query(TestAssignment).filter(
-                        TestAssignment.test_id.in_(bad_test_ids)
-                    ).delete(synchronize_session=False)
+                    await self.db.execute(
+                        delete(TestAssignment).filter(
+                            TestAssignment.test_id.in_(bad_test_ids)
+                        )
+                    )
 
-                    deleted_count = self.db.query(Test).filter(
-                        Test.id.in_(bad_test_ids)
-                    ).delete(synchronize_session=False)
+                    result = await self.db.execute(
+                        delete(Test).filter(
+                            Test.id.in_(bad_test_ids)
+                        )
+                    )
+                    deleted_count = result.rowcount
 
-            self.db.commit()
+            await self.db.commit()
             
             return RebuildTestsResponse(
                 status="success",
@@ -573,10 +605,10 @@ class AdminService:
             )
 
         except Exception as e:
-            self.db.rollback()
+            await self.db.rollback()
             raise Exception(f"Database Error: {str(e)}")
         
-    def _recompute_answers_for_task(self, task: Task):
+    async def _recompute_answers_for_task(self, task: Task):
         """
         Пересчитывает правильность и баллы для всех UserAnswer, привязанных к task,
         и обновляет total_points в соответствующих TestResult.
@@ -586,9 +618,10 @@ class AdminService:
             return RecomputeAnswersResponse(answers_updated=0, results_updated=0)
 
         # Получаем все ответы на это задание
-        user_answers = self.db.query(UserAnswer).filter(
-            UserAnswer.task_id == task.id
-        ).all()
+        result = await self.db.execute(
+            select(UserAnswer).filter(UserAnswer.task_id == task.id)
+        )
+        user_answers = result.scalars().all()
 
         if not user_answers:
             return RecomputeAnswersResponse(answers_updated=0, results_updated=0)
@@ -621,15 +654,17 @@ class AdminService:
         # Обновляем total_points для всех затронутых результатов
         results_updated = 0
         if result_ids:
-            from sqlalchemy.orm import joinedload
-            results = self.db.query(TestResult).options(
-                joinedload(TestResult.answers)
-            ).filter(TestResult.id.in_(list(result_ids))).all()
+            result = await self.db.execute(
+                select(TestResult).options(
+                    joinedload(TestResult.answers)
+                ).filter(TestResult.id.in_(list(result_ids)))
+            )
+            results_list = result.unique().scalars().all()
 
-            for result in results:
-                new_total = sum(ans.points_earned for ans in result.answers)
-                if result.total_points != new_total:
-                    result.total_points = new_total
+            for r in results_list:
+                new_total = sum(ans.points_earned for ans in r.answers)
+                if r.total_points != new_total:
+                    r.total_points = new_total
                     results_updated += 1
 
         return RecomputeAnswersResponse(answers_updated=answers_updated, results_updated=results_updated)

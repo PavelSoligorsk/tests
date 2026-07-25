@@ -5,6 +5,7 @@
 """
 
 import pytest
+import pytest_asyncio
 import core.models as models
 
 
@@ -28,12 +29,12 @@ def sample_task2(client, admin_user):
     return response.json()["id"]
 
 
-@pytest.fixture
-def completed_test(client, db, admin_user, teacher_user, student_user, sample_task, sample_task2):
+@pytest_asyncio.fixture
+async def completed_test(client, db, admin_user, teacher_user, student_user, sample_task, sample_task2):
     """Создаёт тест, который студент уже прошёл"""
     link = models.TeacherStudent(teacher_id=teacher_user["id"], student_id=student_user["id"])
     db.add(link)
-    db.commit()
+    await db.commit()
 
     test_response = client.post(
         "/teacher/tests",

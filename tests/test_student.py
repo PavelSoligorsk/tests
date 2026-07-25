@@ -4,6 +4,7 @@
 """
 
 import pytest
+import pytest_asyncio
 import core.models as models
 
 
@@ -93,7 +94,7 @@ class TestStudentSubmit:
         assert response.status_code == 200
         assert response.json()["score"] == 0
 
-    def test_submit_open_task(self, client, admin_user, student_user, teacher_user, sample_open_task, db):
+    async def test_submit_open_task(self, client, admin_user, student_user, teacher_user, sample_open_task, db):
         """✅ Прохождение теста с открытым ответом"""
         # Создаём тест с открытым заданием
         test = client.post("/teacher/tests", json={
@@ -104,7 +105,7 @@ class TestStudentSubmit:
         # Привязываем студента
         link = models.TeacherStudent(teacher_id=teacher_user["id"], student_id=student_user["id"])
         db.add(link)
-        db.commit()
+        await db.commit()
 
         # Назначаем
         client.post("/teacher/assign-test", json={"test_id": test["id"], "user_ids": [student_user["id"]]},

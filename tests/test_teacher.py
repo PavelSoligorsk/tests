@@ -4,6 +4,8 @@ CRUD тестов, заданий, групп, студентов, назнач�
 """
 
 import pytest
+import pytest_asyncio
+from sqlalchemy import select
 import core.models as models
 
 
@@ -77,20 +79,20 @@ class TestTeacherTests:
         assert response.status_code == 200
         assert len(response.json()) == 1
 
-    def test_cant_see_other_teachers_tests(self, client, db, teacher_user, sample_task):
+    async def test_cant_see_other_teachers_tests(self, client, db, teacher_user, sample_task):
         """🛡️ Учитель не видит чужие тесты"""
         # Создаём другого учителя
         allowed2 = models.AllowedEmail(email="teacher2@test.com")
         db.add(allowed2)
-        db.commit()
+        await db.commit()
 
         client.post("/register", json={
             "username": "teacher2@test.com", "password": "Teacher123!",
             "first_name": "Teacher", "last_name": "Two"
         })
-        teacher2 = db.query(models.User).filter(models.User.username == "teacher2@test.com").first()
+        teacher2 = (await db.execute(select(models.User).where(models.User.username == "teacher2@test.com"))).scalars().first()
         teacher2.role = "teacher"
-        db.commit()
+        await db.commit()
 
         login2 = client.post("/login", data={"username": "teacher2@test.com", "password": "Teacher123!"})
         teacher2_token = login2.json()["access_token"]
@@ -143,19 +145,19 @@ class TestTeacherTests:
         )
         assert get_resp.status_code == 404
 
-    def test_cant_delete_others_test(self, client, db, teacher_user, sample_task):
+    async def test_cant_delete_others_test(self, client, db, teacher_user, sample_task):
         """🛡️ Нельзя удалить чужой тест"""
         allowed2 = models.AllowedEmail(email="teacher3@test.com")
         db.add(allowed2)
-        db.commit()
+        await db.commit()
 
         client.post("/register", json={
             "username": "teacher3@test.com", "password": "Teacher123!",
             "first_name": "T3", "last_name": "Test"
         })
-        teacher2 = db.query(models.User).filter(models.User.username == "teacher3@test.com").first()
+        teacher2 = (await db.execute(select(models.User).where(models.User.username == "teacher3@test.com"))).scalars().first()
         teacher2.role = "teacher"
-        db.commit()
+        await db.commit()
 
         login2 = client.post("/login", data={"username": "teacher3@test.com", "password": "Teacher123!"})
         teacher2_token = login2.json()["access_token"]
@@ -306,19 +308,19 @@ class TestTeacherGroups:
                                 headers={"Authorization": f"Bearer {teacher_user['token']}"})
         assert response.status_code == 200
 
-    def test_cant_see_other_teacher_groups(self, client, db, teacher_user):
+    async def test_cant_see_other_teacher_groups(self, client, db, teacher_user):
         """🛡️ Не видит чужие группы"""
         allowed2 = models.AllowedEmail(email="teachergrp@test.com")
         db.add(allowed2)
-        db.commit()
+        await db.commit()
 
         client.post("/register", json={
             "username": "teachergrp@test.com", "password": "Teacher123!",
             "first_name": "T", "last_name": "Grp"
         })
-        teacher2 = db.query(models.User).filter(models.User.username == "teachergrp@test.com").first()
+        teacher2 = (await db.execute(select(models.User).where(models.User.username == "teachergrp@test.com"))).scalars().first()
         teacher2.role = "teacher"
-        db.commit()
+        await db.commit()
 
         login2 = client.post("/login", data={"username": "teachergrp@test.com", "password": "Teacher123!"})
         teacher2_token = login2.json()["access_token"]

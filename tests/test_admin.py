@@ -5,7 +5,9 @@ CRUD тасок, rebuild all static tests, управление пользова
 """
 
 import pytest
+import pytest_asyncio
 import time
+from sqlalchemy import select
 import core.models as models
 
 
@@ -214,7 +216,7 @@ class TestAdminRebuild:
         assert get_test.status_code == 200
         assert get_test.json()["id"] == teacher_test_id
 
-    def test_rebuild_does_not_delete_ai_tests(self, client, admin_user, db, student_user):
+    async def test_rebuild_does_not_delete_ai_tests(self, client, admin_user, db, student_user):
         """🛡️ Rebuild НЕ удаляет AI-тесты"""
         ai_test = models.Test(
             title="AI тест", target_class=None, target_topic="test",
@@ -222,7 +224,7 @@ class TestAdminRebuild:
             creator_id=student_user["id"], is_active=True
         )
         db.add(ai_test)
-        db.commit()
+        await db.commit()
         ai_test_id = ai_test.id
 
         client.post(
@@ -230,11 +232,11 @@ class TestAdminRebuild:
             headers={"Authorization": f"Bearer {admin_user['token']}"}
         )
 
-        get_test = db.query(models.Test).filter(models.Test.id == ai_test_id).first()
+        get_test = (await db.execute(select(models.Test).where(models.Test.id == ai_test_id))).scalars().first()
         assert get_test is not None, "AI-тест был удалён!"
         assert get_test.is_ai_generated is True
 
-    def test_rebuild_deletes_old_admin_auto_tests(self, client, admin_user, teacher_user, student_user, db):
+    async def test_rebuild_deletes_old_admin_auto_tests(self, client, admin_user, teacher_user, student_user, db):
         """✅ Rebuild удаляет старые авто-тесты и пересчитывает ответы"""
         # Создаём задания с неправильными ответами
         closed = client.post("/admin/tasks", json={
@@ -254,7 +256,7 @@ class TestAdminRebuild:
         # Создаём ручной тест
         link = models.TeacherStudent(teacher_id=teacher_user["id"], student_id=student_user["id"])
         db.add(link)
-        db.commit()
+        await db.commit()
 
         test_resp = client.post("/teacher/tests", json={
             "title": "Ручной тест", "target_class": "20", "target_topic": "1",
@@ -298,14 +300,13 @@ class TestAdminRebuild:
         db.expire_all()
 
         # Берём последний result
-        last_result = db.query(models.TestResult).filter(
-            models.TestResult.test_id == test_id
-        ).order_by(models.TestResult.completed_at.desc()).first()
+        last_result = (await db.execute(select(models.TestResult).where(models.TestResult.test_id == test_id
+        ).order_by(models.TestResult.completed_at.desc()))).scalars().first()
 
         if last_result:
-            user_answers = db.query(models.UserAnswer).filter(
+            user_answers = (await db.execute(select(models.UserAnswer).where(
                 models.UserAnswer.result_id == last_result.id
-            ).all()
+            ))).scalars().all()
             total = sum(ua.points_earned for ua in user_answers)
             # Закрытое задание: ответ "2" (правильно) = 1 балл
             # Открытое задание: ответ "10", правильный "a^3" — не совпадает = 0 баллов
@@ -327,18 +328,18 @@ class TestAdminUsers:
         assert isinstance(response.json(), list)
         assert len(response.json()) >= 1
 
-    def test_change_user_role(self, client, admin_user, db):
+    async def test_change_user_role(self, client, admin_user, db):
         """✅ Смена роли пользователя"""
         allowed = models.AllowedEmail(email="roleuser@test.com")
         db.add(allowed)
-        db.commit()
+        await db.commit()
 
         client.post("/register", json={
             "username": "roleuser@test.com", "password": "Pass123!",
             "first_name": "Role", "last_name": "User"
         })
 
-        user = db.query(models.User).filter(models.User.username == "roleuser@test.com").first()
+        user = (await db.execute(select(models.User).where(models.User.username == "roleuser@test.com"))).scalars().first()
 
         response = client.patch(
             f"/admin/users/{user.id}/role",
@@ -348,21 +349,21 @@ class TestAdminUsers:
         assert response.status_code == 200
         assert "изменена на teacher" in response.json()["message"]
 
-        db.refresh(user)
+        await db.refresh(user)
         assert user.role == "teacher"
 
-    def test_change_role_invalid(self, client, admin_user, db):
+    async def test_change_role_invalid(self, client, admin_user, db):
         """❌ Неверная роль"""
         allowed = models.AllowedEmail(email="badrole@test.com")
         db.add(allowed)
-        db.commit()
+        await db.commit()
 
         client.post("/register", json={
             "username": "badrole@test.com", "password": "Pass123!",
             "first_name": "Bad", "last_name": "Role"
         })
 
-        user = db.query(models.User).filter(models.User.username == "badrole@test.com").first()
+        user = (await db.execute(select(models.User).where(models.User.username == "badrole@test.com"))).scalars().first()
 
         response = client.patch(
             f"/admin/users/{user.id}/role",
@@ -371,18 +372,18 @@ class TestAdminUsers:
         )
         assert response.status_code == 400
 
-    def test_delete_user(self, client, admin_user, db):
+    async def test_delete_user(self, client, admin_user, db):
         """✅ Удаление пользователя"""
         allowed = models.AllowedEmail(email="deleteuser@test.com")
         db.add(allowed)
-        db.commit()
+        await db.commit()
 
         client.post("/register", json={
             "username": "deleteuser@test.com", "password": "Pass123!",
             "first_name": "Delete", "last_name": "User"
         })
 
-        user = db.query(models.User).filter(models.User.username == "deleteuser@test.com").first()
+        user = (await db.execute(select(models.User).where(models.User.username == "deleteuser@test.com"))).scalars().first()
 
         response = client.delete(
             f"/admin/users/{user.id}",
@@ -390,7 +391,7 @@ class TestAdminUsers:
         )
         assert response.status_code == 200
 
-        deleted = db.query(models.User).filter(models.User.id == user.id).first()
+        deleted = (await db.execute(select(models.User).where(models.User.id == user.id))).scalars().first()
         assert deleted is None
 
     def test_cant_delete_last_admin(self, client, admin_user):
@@ -427,11 +428,11 @@ class TestAdminTheory:
         assert response.status_code == 200
         assert response.json()["topic"] == "algebra"
 
-    def test_create_theory_duplicate(self, client, admin_user, db):
+    async def test_create_theory_duplicate(self, client, admin_user, db):
         """❌ Дубликат теории"""
         theory = models.Theory(topic="algebra", section="equations", content="Содержание")
         db.add(theory)
-        db.commit()
+        await db.commit()
 
         response = client.post(
             "/admin/theory",
@@ -441,11 +442,11 @@ class TestAdminTheory:
         assert response.status_code == 400
         assert "уже существует" in response.json()["detail"]
 
-    def test_get_all_theory(self, client, admin_user, db):
+    async def test_get_all_theory(self, client, admin_user, db):
         """✅ Получение всей теории"""
         theory = models.Theory(topic="algebra", section="equations", content="Содержание")
         db.add(theory)
-        db.commit()
+        await db.commit()
 
         response = client.get(
             "/admin/theory/getall",
@@ -455,11 +456,11 @@ class TestAdminTheory:
         assert isinstance(response.json(), list)
         assert len(response.json()) >= 1
 
-    def test_update_theory(self, client, admin_user, db):
+    async def test_update_theory(self, client, admin_user, db):
         """✅ Обновление теории"""
         theory = models.Theory(topic="algebra", section="equations", content="Старое")
         db.add(theory)
-        db.commit()
+        await db.commit()
 
         response = client.put(
             f"/admin/theory/{theory.id}",
@@ -469,11 +470,11 @@ class TestAdminTheory:
         assert response.status_code == 200
         assert response.json()["content"] == "Новое содержание"
 
-    def test_delete_theory(self, client, admin_user, db):
+    async def test_delete_theory(self, client, admin_user, db):
         """✅ Удаление теории"""
         theory = models.Theory(topic="algebra", section="equations", content="Содержание")
         db.add(theory)
-        db.commit()
+        await db.commit()
 
         response = client.delete(
             f"/admin/theory/{theory.id}",

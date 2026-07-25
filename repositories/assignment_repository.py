@@ -1,55 +1,66 @@
-from sqlalchemy.orm import Session
+from sqlalchemy import select, func, and_, delete
+from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
-from sqlalchemy import func
 
 from core.models import TestAssignment, TestResult
 
 
 class AssignmentRepository:
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.db = db
     
-    def get_user_assignments(self, user_id: int):
-        return self.db.query(TestAssignment)\
-            .filter(TestAssignment.user_id == user_id)\
-            .order_by(TestAssignment.assigned_at.desc())\
-            .all()
+    async def get_user_assignments(self, user_id: int):
+        r = await self.db.execute(
+            select(TestAssignment)
+            .where(TestAssignment.user_id == user_id)
+            .order_by(TestAssignment.assigned_at.desc())
+        )
+        return r.scalars().all()
     
-    def get_assignment(self, test_id: int, user_id: int):
-        return self.db.query(TestAssignment)\
-            .filter(
+    async def get_assignment(self, test_id: int, user_id: int):
+        r = await self.db.execute(
+            select(TestAssignment)
+            .where(
                 TestAssignment.test_id == test_id,
                 TestAssignment.user_id == user_id,
                 TestAssignment.is_completed == False
-            ).first()
+            )
+        )
+        return r.scalars().first()
     
-    def check_deadline(self, assignment) -> bool:
+    async def check_deadline(self, assignment) -> bool:
         if assignment.due_date and assignment.due_date < datetime.utcnow():
             return False
         return True
     
-    def get_test_assignments(self, test_id: int):
+    async def get_test_assignments(self, test_id: int):
         """Получить все назначения для теста"""
-        return self.db.query(TestAssignment)\
-            .filter(TestAssignment.test_id == test_id)\
-            .order_by(TestAssignment.assigned_at.desc())\
-            .all()
+        r = await self.db.execute(
+            select(TestAssignment)
+            .where(TestAssignment.test_id == test_id)
+            .order_by(TestAssignment.assigned_at.desc())
+        )
+        return r.scalars().all()
 
-    def get_assignment_by_id(self, assignment_id: int):
+    async def get_assignment_by_id(self, assignment_id: int):
         """Получить назначение по ID"""
-        return self.db.query(TestAssignment)\
-            .filter(TestAssignment.id == assignment_id)\
-            .first()
+        r = await self.db.execute(
+            select(TestAssignment).where(TestAssignment.id == assignment_id)
+        )
+        return r.scalars().first()
 
-    def check_existing_assignment(self, test_id: int, user_id: int):
+    async def check_existing_assignment(self, test_id: int, user_id: int):
         """Проверить дубликат назначения"""
-        return self.db.query(TestAssignment)\
-            .filter(
+        r = await self.db.execute(
+            select(TestAssignment)
+            .where(
                 TestAssignment.test_id == test_id,
                 TestAssignment.user_id == user_id
-            ).first()
+            )
+        )
+        return r.scalars().first()
 
-    def create_assignment(self, test_id: int, user_id: int, 
+    async def create_assignment(self, test_id: int, user_id: int, 
                         due_date=None, group_id=None):
         """Создать одно назначение"""
         assignment = TestAssignment(
@@ -62,41 +73,59 @@ class AssignmentRepository:
         self.db.add(assignment)
         return assignment
 
-    def delete_assignment_by_obj(self, assignment):
+    async def delete_assignment_by_obj(self, assignment):
         """Удалить назначение"""
-        self.db.delete(assignment)
-        self.db.commit()
+        await self.db.delete(assignment)
+        await self.db.commit()
 
-    def get_latest_results_for_test(self, test_id: int):
+    async def get_latest_results_for_test(self, test_id: int):
         """Последние результаты всех студентов по тесту"""
-        subq = self.db.query(
-            TestResult.user_id,
-            func.max(TestResult.completed_at).label('max_completed_at')
-        ).filter(TestResult.test_id == test_id)\
-        .group_by(TestResult.user_id).subquery()
+        subq = (
+            select(
+                TestResult.user_id,
+                func.max(TestResult.completed_at).label('max_completed_at')
+            )
+            .where(TestResult.test_id == test_id)
+            .group_by(TestResult.user_id)
+            .subquery()
+        )
         
-        return self.db.query(TestResult).join(
-            subq,
-            (TestResult.user_id == subq.c.user_id) &
-            (TestResult.completed_at == subq.c.max_completed_at)
-        ).all()
+        r = await self.db.execute(
+            select(TestResult).join(
+                subq,
+                and_(
+                    TestResult.user_id == subq.c.user_id,
+                    TestResult.completed_at == subq.c.max_completed_at
+                )
+            )
+        )
+        return r.scalars().all()
 
-    def get_latest_results_for_student(self, student_id: int):
+    async def get_latest_results_for_student(self, student_id: int):
         """Последние результаты студента по всем тестам"""
-        subq = self.db.query(
-            TestResult.test_id,
-            func.max(TestResult.completed_at).label('max_completed_at')
-        ).filter(TestResult.user_id == student_id)\
-        .group_by(TestResult.test_id).subquery()
+        subq = (
+            select(
+                TestResult.test_id,
+                func.max(TestResult.completed_at).label('max_completed_at')
+            )
+            .where(TestResult.user_id == student_id)
+            .group_by(TestResult.test_id)
+            .subquery()
+        )
         
-        return self.db.query(TestResult).join(
-            subq,
-            (TestResult.test_id == subq.c.test_id) &
-            (TestResult.completed_at == subq.c.max_completed_at)
-        ).all()
+        r = await self.db.execute(
+            select(TestResult).join(
+                subq,
+                and_(
+                    TestResult.test_id == subq.c.test_id,
+                    TestResult.completed_at == subq.c.max_completed_at
+                )
+            )
+        )
+        return r.scalars().all()
 
-    def delete_assignments_by_user(self, user_id: int):
+    async def delete_assignments_by_user(self, user_id: int):
         """Удалить все назначения пользователя"""
-        self.db.query(TestAssignment).filter(
-            TestAssignment.user_id == user_id
-        ).delete(synchronize_session=False)
+        await self.db.execute(
+            delete(TestAssignment).where(TestAssignment.user_id == user_id)
+        )

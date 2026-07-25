@@ -1,24 +1,26 @@
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy import select, delete
+from sqlalchemy.orm import joinedload
+from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
 
 from core.models import TestResult, UserAnswer, Task
 
 
 class ResultRepository:
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.db = db
     
-    def create_result(self, test_id: int, user_id: int, total_points: int = 0):
+    async def create_result(self, test_id: int, user_id: int, total_points: int = 0):
         new_result = TestResult(
             test_id=test_id,
             user_id=user_id,
             total_points=total_points
         )
         self.db.add(new_result)
-        self.db.flush()
+        await self.db.flush()
         return new_result
     
-    def save_answer(self, result_id: int, task_id: int, user_answer: str, is_correct: bool, points: int):
+    async def save_answer(self, result_id: int, task_id: int, user_answer: str, is_correct: bool, points: int):
         answer = UserAnswer(
             result_id=result_id,
             task_id=task_id,
@@ -29,70 +31,83 @@ class ResultRepository:
         self.db.add(answer)
         return answer
     
-    def update_result_points(self, result_id: int, total_points: int):
-        result = self.get_result_by_id(result_id)
+    async def update_result_points(self, result_id: int, total_points: int):
+        result = await self.get_result_by_id(result_id)
         if result:
             result.total_points = total_points
-            self.db.commit()
+            await self.db.commit()
         return result
     
-    def get_result_by_id(self, result_id: int):
-        return self.db.query(TestResult)\
-            .options(joinedload(TestResult.test))\
-            .filter(TestResult.id == result_id)\
-            .first()
+    async def get_result_by_id(self, result_id: int):
+        r = await self.db.execute(
+            select(TestResult)
+            .options(joinedload(TestResult.test))
+            .where(TestResult.id == result_id)
+        )
+        return r.unique().scalars().first()
     
-    def get_user_history(self, user_id: int):
-        return self.db.query(TestResult)\
-            .options(joinedload(TestResult.test))\
-            .filter(TestResult.user_id == user_id)\
-            .order_by(TestResult.completed_at.desc())\
-            .all()
+    async def get_user_history(self, user_id: int):
+        r = await self.db.execute(
+            select(TestResult)
+            .options(joinedload(TestResult.test))
+            .where(TestResult.user_id == user_id)
+            .order_by(TestResult.completed_at.desc())
+        )
+        return r.unique().scalars().all()
     
-    def get_user_answers_for_result(self, result_id: int):
-        return self.db.query(UserAnswer)\
-            .filter(UserAnswer.result_id == result_id)\
-            .all()
+    async def get_user_answers_for_result(self, result_id: int):
+        r = await self.db.execute(
+            select(UserAnswer).where(UserAnswer.result_id == result_id)
+        )
+        return r.scalars().all()
     
-    def get_user_results_for_topic(self, user_id: int, topic_number: int):
-        results = self.db.query(TestResult)\
-            .filter(TestResult.user_id == user_id)\
-            .all()
+    async def get_user_results_for_topic(self, user_id: int, topic_number: int):
+        r = await self.db.execute(
+            select(TestResult).where(TestResult.user_id == user_id)
+        )
+        results = r.scalars().all()
         
-        result_ids = [r.id for r in results]
+        result_ids = [r_.id for r_ in results]
         
         if result_ids:
-            return self.db.query(UserAnswer)\
-                .join(Task)\
-                .filter(
+            r2 = await self.db.execute(
+                select(UserAnswer)
+                .join(Task)
+                .where(
                     UserAnswer.result_id.in_(result_ids),
                     Task.topic_number == topic_number
-                ).all()
+                )
+            )
+            return r2.scalars().all()
         return []
     
-    def has_incomplete_attempt(self, user_id: int, test_id: int) -> bool:
+    async def has_incomplete_attempt(self, user_id: int, test_id: int) -> bool:
         """Проверить, есть ли незавершённая попытка (result без completed_at)"""
-        result = self.db.query(TestResult).filter(
-            TestResult.user_id == user_id,
-            TestResult.test_id == test_id,
-            TestResult.completed_at == None
-        ).first()
+        r = await self.db.execute(
+            select(TestResult).where(
+                TestResult.user_id == user_id,
+                TestResult.test_id == test_id,
+                TestResult.completed_at == None
+            )
+        )
+        result = r.scalars().first()
         return result is not None
 
-    def get_result_ids_by_user(self, user_id: int) -> List[int]:
+    async def get_result_ids_by_user(self, user_id: int) -> List[int]:
         """Получить IDs всех результатов пользователя"""
-        return [r[0] for r in self.db.query(TestResult.id).filter(
-            TestResult.user_id == user_id
-        ).all()]
+        r = await self.db.execute(
+            select(TestResult.id).where(TestResult.user_id == user_id)
+        )
+        return [row[0] for row in r.all()]
 
-    def delete_answers_by_result_ids(self, result_ids: List[int]):
+    async def delete_answers_by_result_ids(self, result_ids: List[int]):
         """Удалить ответы по IDs результатов"""
-        self.db.query(UserAnswer).filter(
-            UserAnswer.result_id.in_(result_ids)
-        ).delete(synchronize_session=False)
+        await self.db.execute(
+            delete(UserAnswer).where(UserAnswer.result_id.in_(result_ids))
+        )
 
-    def delete_results_by_user(self, user_id: int):
+    async def delete_results_by_user(self, user_id: int):
         """Удалить все результаты пользователя"""
-        self.db.query(TestResult).filter(
-            TestResult.user_id == user_id
-        ).delete(synchronize_session=False)
+        await self.db.execute(
+            delete(TestResult).where(TestResult.user_id == user_id)
+        )

@@ -152,6 +152,67 @@ def cache_result(
         return result
 
 
+async def async_cache_result(
+    prefix: str,
+    user_id: Optional[int],
+    fetcher: Callable[[], Any],
+    model_class: type[T] | None = None,
+    ttl: int = 300,
+    force_refresh: bool = False,
+    entity_id: Optional[int] = None,
+    *args: Any,
+    **kwargs: Any,
+) -> Any:
+    """Async version of cache_result — fetch, convert ORM → DTO, and cache."""
+    redis_conn = get_redis()
+    if redis_conn is None:
+        logger.debug("Redis unavailable, fetching data directly")
+        result = await fetcher()
+        if model_class is None:
+            return result
+        return _materialize_model(result, model_class)
+
+    cache_key = generate_cache_key(prefix, user_id, entity_id, *args, **kwargs)
+
+    if not force_refresh:
+        try:
+            cached = redis_conn.get(cache_key)
+            if cached is not None:
+                logger.debug("Cache HIT: %s", cache_key)
+                if model_class is None:
+                    return json.loads(cached)
+                return _deserialize_pydantic(cached, model_class)
+            logger.debug("Cache MISS: %s", cache_key)
+        except Exception as exc:
+            logger.warning("Redis read failed for %s: %s. Fetching from DB.", cache_key, exc)
+
+    try:
+        result = await fetcher()
+    except Exception:
+        logger.exception("Fetcher failed for %s", cache_key)
+        raise
+
+    try:
+        if model_class is not None:
+            dto_result = _materialize_model(result, model_class)
+        elif isinstance(result, BaseModel):
+            dto_result = result
+        elif isinstance(result, list) and result and isinstance(result[0], BaseModel):
+            dto_result = result
+        else:
+            logger.warning("Result is not a Pydantic DTO, skipping cache for %s", cache_key)
+            return result
+
+        redis_conn.setex(cache_key, ttl, _serialize_pydantic(dto_result))
+        logger.debug("Cache SET: %s (TTL: %ss)", cache_key, ttl)
+        return dto_result
+    except Exception as exc:
+        logger.warning("Redis write failed for %s: %s. Data returned without caching.", cache_key, exc)
+        if model_class is not None:
+            return _materialize_model(result, model_class)
+        return result
+
+
 def invalidate_user_cache(user_id: int, *prefixes: str) -> None:
     """Invalidate all keys for a user without using Redis KEYS."""
     redis_conn = get_redis()

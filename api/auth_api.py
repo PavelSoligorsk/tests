@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.security import OAuth2PasswordRequestForm
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 from dto_schemas import (
     UserRegister, ForgotPasswordRequest, ResetPasswordRequest,
     LoginResponse, TokenVerifyResponse, MessageResponse,
@@ -11,17 +11,17 @@ from services.auth_service import AuthService, PermissionError
 router = APIRouter(tags=["Authentication"])
 
 
-def get_auth_service(db: Session = Depends(get_db)) -> AuthService:
+def get_auth_service(db: AsyncSession = Depends(get_db)) -> AuthService:
     return AuthService(db)
 
 
 @router.post("/register", response_model=MessageResponse)
-def register(
+async def register(
     user_data: UserRegister,
     service: AuthService = Depends(get_auth_service)
 ):
     try:
-        return service.register(user_data)
+        return await service.register(user_data)
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except ValueError as e:
@@ -29,12 +29,12 @@ def register(
 
 
 @router.post("/login", response_model=LoginResponse)
-def login(
+async def login(
     form_data: OAuth2PasswordRequestForm = Depends(),
     service: AuthService = Depends(get_auth_service)
 ):
     try:
-        return service.login(form_data.username, form_data.password)
+        return await service.login(form_data.username, form_data.password)
     except ValueError as e:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -48,7 +48,7 @@ async def forgot_password(
     request: ForgotPasswordRequest,
     service: AuthService = Depends(get_auth_service)
 ):
-    return service.forgot_password(request.email)
+    return await service.forgot_password(request.email)
 
 
 @router.post("/reset-password", response_model=MessageResponse)
@@ -57,7 +57,7 @@ async def reset_password(
     service: AuthService = Depends(get_auth_service)
 ):
     try:
-        return service.reset_password(
+        return await service.reset_password(
             request.token,
             request.new_password,
             request.confirm_password
@@ -72,6 +72,6 @@ async def verify_reset_token(
     service: AuthService = Depends(get_auth_service)
 ):
     try:
-        return service.verify_reset_token(token)
+        return await service.verify_reset_token(token)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

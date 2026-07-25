@@ -1,3 +1,4 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI, Response
 from core.models import Base
 from core.database import engine
@@ -8,13 +9,18 @@ from api.teacher_api import router as teacher_router
 from api.student_api import router as student_router
 from api.stats_api import router as stats_router
 
-from fastapi.middleware.cors import CORSMiddleware # 1. Обязательный импорт
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordRequestForm
 
-# Создание таблиц в базе данных SQLite
-Base.metadata.create_all(bind=engine)
 
-app = FastAPI(title="Education Platform API (SQLite)")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    yield
+
+
+app = FastAPI(title="Education Platform API", lifespan=lifespan)
 
 # Настраиваем список разрешенных адресов
 origins = [

@@ -1,6 +1,7 @@
 import json
 import re
 import os
+import asyncio
 from mistralai.client import Mistral
 from typing import List, Dict, Optional
 
@@ -9,10 +10,11 @@ class AIService:
         self.client = Mistral(api_key=os.getenv("MISTRAL_TOKEN"))
         self.model = "ministral-14b-2512"
     
-    def _chat_completion(self, system_prompt: str, user_prompt: str, temperature: float = 0.7, max_tokens: int = 800) -> str:
-        """Базовый метод для отправки запросов в Mistral"""
+    async def _chat_completion(self, system_prompt: str, user_prompt: str, temperature: float = 0.7, max_tokens: int = 800) -> str:
+        """Базовый метод для отправки запросов в Mistral (обёрнуто в asyncio.to_thread)"""
         try:
-            response = self.client.chat.complete(
+            response = await asyncio.to_thread(
+                self.client.chat.complete,
                 model=self.model,
                 messages=[
                     {"role": "system", "content": system_prompt},
@@ -25,46 +27,46 @@ class AIService:
         except Exception as e:
             raise Exception(f"AI Error: {str(e)}")
     
-    def get_hint(self, task: dict, topic_mastery: Optional[float] = None) -> str:
+    async def get_hint(self, task: dict, topic_mastery: Optional[float] = None) -> str:
         """Получить подсказку для задания"""
         prompt = self._build_hint_prompt(task, topic_mastery)
         
-        return self._chat_completion(
+        return await self._chat_completion(
             system_prompt="Ты — терпеливый ИИ-репетитор. Помогаешь понять, а не решаешь за студента. ВСЕ математические формулы и выражения ОБЯЗАТЕЛЬНО оформляй в $...$ (строчные) или $$...$$ (вынесенные).",
             user_prompt=prompt,
             temperature=0.7,
             max_tokens=800
         )
     
-    def get_solution(self, task: dict, topic_mastery: Optional[float] = None) -> str:
+    async def get_solution(self, task: dict, topic_mastery: Optional[float] = None) -> str:
         """Получить полное решение задачи"""
         prompt = self._build_solution_prompt(task, topic_mastery)
         
-        return self._chat_completion(
+        return await self._chat_completion(
             system_prompt="Ты — математический эксперт. Решай задачи подробно, показывай все шаги. В конце обязательно укажи ответ в формате '=== ОТВЕТ === ...'",
             user_prompt=prompt,
             temperature=0.3,
             max_tokens=2000
         )
     
-    def get_theory_answer(self, question: str, theory_context: str, topic_name: str = "", section_name: str = "") -> str:
+    async def get_theory_answer(self, question: str, theory_context: str, topic_name: str = "", section_name: str = "") -> str:
         """Ответить на вопрос по теории"""
         prompt = self._build_theory_prompt(question, theory_context, topic_name, section_name)
         
-        return self._chat_completion(
+        return await self._chat_completion(
             system_prompt="Ты — терпеливый ИИ-репетитор по математике. Объясняешь теорию, отвечаешь на вопросы, помогаешь понять материал. ВСЕ математические формулы и выражения ОБЯЗАТЕЛЬНО оформляй в $...$ (строчные) или $$...$$ (вынесенные). НИКОГДА не используй \\(...\\) или \\[...\\].",
             user_prompt=prompt,
             temperature=0.7,
             max_tokens=3000
         )
     
-    def classify_topics(self, user_prompt: str, topics_structure: Dict[str, set]) -> List[Dict]:
+    async def classify_topics(self, user_prompt: str, topics_structure: Dict[str, set]) -> List[Dict]:
         """Классифицировать запрос студента по темам и разделам"""
         hierarchy_context = self._build_hierarchy_context(topics_structure)
         
         prompt = self._build_classification_prompt(user_prompt, hierarchy_context)
         
-        response = self._chat_completion(
+        response = await self._chat_completion(
             system_prompt="Ты — строгий классификатор. Отвечаешь только валидным JSON без разметки markdown.",
             user_prompt=prompt,
             temperature=0.1,
@@ -73,13 +75,13 @@ class AIService:
         
         return self._parse_classification_response(response)
     
-    def select_tasks(self, user_prompt: str, available_tasks: List[Dict], task_count: int, 
+    async def select_tasks(self, user_prompt: str, available_tasks: List[Dict], task_count: int, 
                      difficulty_text: str, topics_count: int, topic_stats: Dict[str, int]) -> List[int]:
         """Выбрать лучшие задания из доступных"""
         prompt = self._build_selection_prompt(user_prompt, available_tasks, task_count, 
                                               difficulty_text, topics_count, topic_stats)
         
-        response = self._chat_completion(
+        response = await self._chat_completion(
             system_prompt='Ты — эксперт. Отвечай ТОЛЬКО JSON: {"task_ids": [1,2,3]}',
             user_prompt=prompt,
             temperature=0.3,

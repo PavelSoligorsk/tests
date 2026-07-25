@@ -43,49 +43,49 @@ class StudentService:
         self.ai_service = AIService()
         self.db = db
     
-    def get_profile(self, user_id: int):
+    async def get_profile(self, user_id: int):
         """Получить профиль студента со статистикой"""
-        user = self.user_repo.get_user_by_id(user_id)
+        user = await self.user_repo.get_user_by_id(user_id)
         if not user:
             raise ValueError("Пользователь не найден")
         
-        stats_dict = self.user_repo.get_user_stats(user_id)
+        stats_dict = await self.user_repo.get_user_stats(user_id)
         
         return UserResponseWithStats(
             user=UserResponse.model_validate(user),
             stats=UserStats(**stats_dict),
         )
     
-    def update_profile(self, user_id: int, update_data: dict):
+    async def update_profile(self, user_id: int, update_data: dict):
         """Обновить профиль студента"""
-        user = self.user_repo.get_user_by_id(user_id)
+        user = await self.user_repo.get_user_by_id(user_id)
         if not user:
             raise ValueError("Пользователь не найден")
         
-        return self.user_repo.update_user(user, update_data)
+        return await self.user_repo.update_user(user, update_data)
     
-    def get_available_tests(self):
+    async def get_available_tests(self):
         """Получить доступные тесты"""
-        return self.test_repo.get_available_tests()
+        return await self.test_repo.get_available_tests()
     
-    def get_test_for_passing(self, test_id: int):
+    async def get_test_for_passing(self, test_id: int):
         """Получить тест для прохождения"""
-        test = self.test_repo.get_test_by_id(test_id)
+        test = await self.test_repo.get_test_by_id(test_id)
         if not test:
             raise ValueError("Тест не найден")
         return test
     
-    def submit_test(self, test_id: int, user_id: int, answers: List[dict]):
+    async def submit_test(self, test_id: int, user_id: int, answers: List[dict]):
         """Отправить ответы на тест"""
-        test = self.test_repo.get_test_with_tasks(test_id)
+        test = await self.test_repo.get_test_with_tasks(test_id)
         if not test:
             raise ValueError("Тест не найден")
         
         total_points = 0
-        result = self.result_repo.create_result(test_id, user_id)
+        result = await self.result_repo.create_result(test_id, user_id)
         
         for ans in answers:
-            task = self.task_repo.get_task_by_id(ans['task_id'])
+            task = await self.task_repo.get_task_by_id(ans['task_id'])
             if not task:
                 continue
             
@@ -93,15 +93,15 @@ class StudentService:
             current_points = 2 if (is_correct and task.is_open_answer) else (1 if is_correct else 0)
             total_points += current_points
             
-            self.result_repo.save_answer(
+            await self.result_repo.save_answer(
                 result.id, task.id, str(ans['user_answer']), is_correct, current_points
             )
         
         # Деактивируем AI-тест после прохождения
         if test.is_ai_generated:
-            self.test_repo.deactivate_test(test_id)
+            await self.test_repo.deactivate_test(test_id)
         
-        self.result_repo.update_result_points(result.id, total_points)
+        await self.result_repo.update_result_points(result.id, total_points)
         
         return SubmitTestResponse(
             status="success",
@@ -109,9 +109,9 @@ class StudentService:
             max_score_possible=sum(2 if t.is_open_answer else 1 for t in test.tasks),
         )
     
-    def get_history(self, user_id: int):
+    async def get_history(self, user_id: int):
         """Получить историю попыток"""
-        results = self.result_repo.get_user_history(user_id)
+        results = await self.result_repo.get_user_history(user_id)
         
         history = []
         for r in results:
@@ -130,9 +130,9 @@ class StudentService:
         
         return history
     
-    def get_detailed_result(self, result_id: int, user_id: int):
+    async def get_detailed_result(self, result_id: int, user_id: int):
         """Получить детальный результат теста"""
-        result = self.result_repo.get_result_by_id(result_id)
+        result = await self.result_repo.get_result_by_id(result_id)
         if not result or result.user_id != user_id:
             raise ValueError("Результат не найден")
         
@@ -146,8 +146,8 @@ class StudentService:
                 details=[],
             )
         
-        all_tasks = self.task_repo.get_tasks_by_test_id(result.test_id)
-        user_answers = self.result_repo.get_user_answers_for_result(result_id)
+        all_tasks = await self.task_repo.get_tasks_by_test_id(result.test_id)
+        user_answers = await self.result_repo.get_user_answers_for_result(result_id)
         answers_map = {ua.task_id: ua for ua in user_answers}
         
         details = []
@@ -185,13 +185,13 @@ class StudentService:
             details=details,
         )
     
-    def get_assignments(self, user_id: int):
+    async def get_assignments(self, user_id: int):
         """Получить назначенные тесты"""
-        assignments = self.assignment_repo.get_user_assignments(user_id)
+        assignments = await self.assignment_repo.get_user_assignments(user_id)
         
         result = []
         for assignment in assignments:
-            test = self.test_repo.get_test_with_tasks(assignment.test_id)
+            test = await self.test_repo.get_test_with_tasks(assignment.test_id)
             
             tasks_count = len(test.tasks) if test else 0
             
@@ -213,20 +213,20 @@ class StudentService:
         
         return result
     
-    def start_assigned_test(self, test_id: int, user_id: int):
+    async def start_assigned_test(self, test_id: int, user_id: int):
         """Начать выполнение назначенного теста"""
-        assignment = self.assignment_repo.get_assignment(test_id, user_id)
+        assignment = await self.assignment_repo.get_assignment(test_id, user_id)
         if not assignment:
             raise ValueError("Тест не назначен вам или уже выполнен")
         
         if not self.assignment_repo.check_deadline(assignment):
             raise ValueError("Срок выполнения теста истёк")
         
-        test = self.test_repo.get_test_with_tasks(test_id)
+        test = await self.test_repo.get_test_with_tasks(test_id)
         if not test or not test.tasks:
             raise ValueError("Тест не содержит заданий")
         
-        result = self.result_repo.create_result(test_id, user_id)
+        result = await self.result_repo.create_result(test_id, user_id)
         
         tasks = []
         for task in test.tasks:
@@ -245,13 +245,13 @@ class StudentService:
             time_limit=None,
         )
     
-    def get_ai_hint(self, task_id: int, user_id: int):
+    async def get_ai_hint(self, task_id: int, user_id: int):
         """Получить AI подсказку для задания"""
-        task = self.task_repo.get_task_by_id(task_id)
+        task = await self.task_repo.get_task_by_id(task_id)
         if not task:
             raise ValueError("Задание не найдено")
         
-        topic_mastery = self._calculate_topic_mastery(user_id, task.topic_number)
+        topic_mastery = await self._calculate_topic_mastery(user_id, task.topic_number)
         
         task_dict = {
             'task_class': task.task_class,
@@ -266,7 +266,7 @@ class StudentService:
             'same_topic_correct': topic_mastery['correct']
         }
         
-        hint = self.ai_service.get_hint(task_dict, topic_mastery['percentage'])
+        hint = await self.ai_service.get_hint(task_dict, topic_mastery['percentage'])
         
         return AIHintResponse(
             task_id=task_id,
@@ -279,13 +279,13 @@ class StudentService:
             ),
         )
     
-    def get_ai_solution(self, task_id: int, user_id: int):
+    async def get_ai_solution(self, task_id: int, user_id: int):
         """Получить AI решение задачи"""
-        task = self.task_repo.get_task_by_id(task_id)
+        task = await self.task_repo.get_task_by_id(task_id)
         if not task:
             raise ValueError("Задание не найдено")
         
-        topic_mastery = self._calculate_topic_mastery(user_id, task.topic_number)
+        topic_mastery = await self._calculate_topic_mastery(user_id, task.topic_number)
         
         task_dict = {
             'task_class': task.task_class,
@@ -300,7 +300,7 @@ class StudentService:
             'same_topic_correct': topic_mastery['correct']
         }
         
-        ai_solution = self.ai_service.get_solution(task_dict, topic_mastery['percentage'])
+        ai_solution = await self.ai_service.get_solution(task_dict, topic_mastery['percentage'])
         
         # Извлечение ответа ИИ
         answer_pattern = r'=== ОТВЕТ ===\s*(.+?)(?:\n|$)'
@@ -334,9 +334,9 @@ class StudentService:
             ),
         )
     
-    def get_theory_topics(self):
+    async def get_theory_topics(self):
         """Получить все темы теории"""
-        topics = self.theory_repo.get_all_topics()
+        topics = await self.theory_repo.get_all_topics()
         
         MAIN_TOPICS = {
             'numbers': 'Числа и вычисления',
@@ -352,19 +352,19 @@ class StudentService:
                 result.append(TheoryTopicSummaryResponse(
                     topic=topic[0],
                     label=MAIN_TOPICS.get(topic[0], topic[0]),
-                    sections_count=self.theory_repo.get_theory_sections_count(topic[0]),
+                    sections_count=await self.theory_repo.get_theory_sections_count(topic[0]),
                 ))
         
         return result
     
-    def get_theory_by_topic(self, topic: str):
+    async def get_theory_by_topic(self, topic: str):
         """Получить теорию по теме"""
-        theories = self.theory_repo.get_theory_by_topic(topic)
+        theories = await self.theory_repo.get_theory_by_topic(topic)
         if not theories:
             raise ValueError(f"Теория для темы '{topic}' не найдена")
         return theories
     
-    def ask_ai_about_theory(self, question: str, theory_id: Optional[int] = None, theory_content: str = ""):
+    async def ask_ai_about_theory(self, question: str, theory_id: Optional[int] = None, theory_content: str = ""):
         """Задать вопрос ИИ по теории"""
         if not question:
             raise ValueError("Вопрос не может быть пустым")
@@ -374,7 +374,7 @@ class StudentService:
         section_name = ""
         
         if theory_id:
-            theory = self.theory_repo.get_theory_by_id(theory_id)
+            theory = await self.theory_repo.get_theory_by_id(theory_id)
             if theory:
                 theory_context = theory.content or ""
                 topic_name = theory.topic or ""
@@ -384,7 +384,7 @@ class StudentService:
         else:
             raise ValueError("Не указан theory_id или theory_content")
         
-        answer = self.ai_service.get_theory_answer(question, theory_context, topic_name, section_name)
+        answer = await self.ai_service.get_theory_answer(question, theory_context, topic_name, section_name)
         
         return AITheoryResponse(
             success=True,
@@ -396,11 +396,11 @@ class StudentService:
             ),
         )
     
-    def generate_ai_test(self, user_id: int, prompt: str, task_count: int, difficulty: Optional[str] = None):
+    async def generate_ai_test(self, user_id: int, prompt: str, task_count: int, difficulty: Optional[str] = None):
         """Сгенерировать тест с помощью AI"""
         
         # Шаг 1: AI определяет темы и разделы
-        structure_data = self.task_repo.get_tasks_structure()
+        structure_data = await self.task_repo.get_tasks_structure()
         
         topics_structure = {}
         for topic, section in structure_data:
@@ -409,11 +409,11 @@ class StudentService:
             if section:
                 topics_structure[topic].add(section)
         
-        detected_topics = self.ai_service.classify_topics(prompt, topics_structure)
+        detected_topics = await self.ai_service.classify_topics(prompt, topics_structure)
         
         # Если AI ничего не определил - случайный тест
         if not detected_topics:
-            return self._generate_random_test(user_id, prompt, task_count, difficulty)
+            return await self._generate_random_test(user_id, prompt, task_count, difficulty)
         
         # Шаг 2: Фильтрация заданий
         difficulty_map = {
@@ -437,19 +437,19 @@ class StudentService:
         
         # Фильтруем задания
         if len(topic_names) >= 3:
-            filtered_tasks = self._get_tasks_with_distribution(topic_names, sections_map, target_difficulties, task_count)
+            filtered_tasks = await self._get_tasks_with_distribution(topic_names, sections_map, target_difficulties, task_count)
         else:
-            filtered_tasks = self.task_repo.get_tasks_by_topics(topic_names, sections_map, target_difficulties)
+            filtered_tasks = await self.task_repo.get_tasks_by_topics(topic_names, sections_map, target_difficulties)
         
         # Fallback: поиск по ключевым словам
         if not filtered_tasks:
             keywords = [w for w in re.sub(r'[^\w\s]', '', prompt).split() if len(w) > 3]
             if keywords:
-                filtered_tasks = self.task_repo.get_tasks_by_keywords(keywords, target_difficulties)
+                filtered_tasks = await self.task_repo.get_tasks_by_keywords(keywords, target_difficulties)
         
         # Финальный fallback
         if not filtered_tasks:
-            filtered_tasks = self.task_repo.get_random_tasks(300, None, target_difficulties)
+            filtered_tasks = await self.task_repo.get_random_tasks(300, None, target_difficulties)
         
         if not filtered_tasks:
             raise ValueError("Нет доступных заданий")
@@ -468,7 +468,7 @@ class StudentService:
             t = task.topic or "Н/Д"
             topic_stats[t] = topic_stats.get(t, 0) + 1
         
-        selected_ids = self.ai_service.select_tasks(
+        selected_ids = await self.ai_service.select_tasks(
             prompt, tasks_for_ai, task_count, 
             difficulty or "Любая (Рататуй 🍲)", 
             len(topic_names), topic_stats
@@ -476,7 +476,7 @@ class StudentService:
         
         # Шаг 4: Загружаем выбранные задания
         if selected_ids:
-            selected_tasks = self.task_repo.get_tasks_by_ids(selected_ids)
+            selected_tasks = await self.task_repo.get_tasks_by_ids(selected_ids)
             
             # Добираем если нужно
             if len(selected_tasks) < task_count:
@@ -485,7 +485,7 @@ class StudentService:
                     needed = task_count - len(selected_tasks)
                     extra_ids = self._distribute_remaining_tasks(filtered_tasks, remaining_ids, needed)
                     if extra_ids:
-                        extra_tasks = self.task_repo.get_tasks_by_ids(extra_ids)
+                        extra_tasks = await self.task_repo.get_tasks_by_ids(extra_ids)
                         selected_tasks.extend(extra_tasks)
         else:
             selected_tasks = random.sample(filtered_tasks, min(task_count, len(filtered_tasks)))
@@ -511,11 +511,11 @@ class StudentService:
             "is_active": True
         }
         
-        return self.test_repo.create_test(test_data, sorted_tasks)
+        return await self.test_repo.create_test(test_data, sorted_tasks)
     
-    def get_theory_sections(self, topic: str):
+    async def get_theory_sections(self, topic: str):
         """Получить все разделы по теме"""
-        theories = self.theory_repo.get_theory_by_topic(topic)
+        theories = await self.theory_repo.get_theory_by_topic(topic)
         if not theories:
             raise ValueError(f"Теория для темы '{topic}' не найдена")
         
@@ -528,16 +528,16 @@ class StudentService:
         
         return result
 
-    def get_theory_by_topic_section(self, topic: str, section: str):
+    async def get_theory_by_topic_section(self, topic: str, section: str):
         """Получить теорию по теме и разделу"""
-        theory = self.theory_repo.get_theory_by_topic_and_section(topic, section)
+        theory = await self.theory_repo.get_theory_by_topic_and_section(topic, section)
         if not theory:
             raise ValueError(f"Теория для темы '{topic}' и раздела '{section}' не найдена")
         return theory
     
-    def get_available_tests_meta(self):
+    async def get_available_tests_meta(self):
         """Получить метаинформацию о тестах без заданий"""
-        tests = self.test_repo.get_available_tests_meta()
+        tests = await self.test_repo.get_available_tests_meta()
         result = []
         for test in tests:
             result.append(AvailableTestMetaResponse(
@@ -552,13 +552,12 @@ class StudentService:
             ))
         return result
     
-    def get_assignments_meta(self, user_id: int):
-        
+    async def get_assignments_meta(self, user_id: int):
         """Получить метаинформацию о назначенных тестах"""
-        assignments = self.assignment_repo.get_user_assignments(user_id)
+        assignments = await self.assignment_repo.get_user_assignments(user_id)
         result = []
         for assignment in assignments:
-            test = self.test_repo.get_test_by_id(assignment.test_id)
+            test = await self.test_repo.get_test_by_id(assignment.test_id)
             if not test:
                 continue
             result.append(StudentAssignmentMetaItemResponse(
@@ -575,14 +574,14 @@ class StudentService:
             ))
         return result
     
-    def get_ai_tests(self, user_id: int):
+    async def get_ai_tests(self, user_id: int):
         """Получить AI-тесты студента (созданные им и недопройденные)"""
-        tests = self.test_repo.get_ai_tests_by_user(user_id)
+        tests = await self.test_repo.get_ai_tests_by_user(user_id)
         
         result = []
         for test in tests:
             # Проверяем, есть ли незавершённые попытки
-            has_incomplete = self.result_repo.has_incomplete_attempt(user_id, test.id)
+            has_incomplete = await self.result_repo.has_incomplete_attempt(user_id, test.id)
             
             result.append(StudentAITestItemResponse(
                 id=test.id,
@@ -608,9 +607,9 @@ class StudentService:
         else:
             return str(user_answer).strip().lower() == str(task.answer).strip().lower()
     
-    def _calculate_topic_mastery(self, user_id: int, topic_number: int) -> dict:
+    async def _calculate_topic_mastery(self, user_id: int, topic_number: int) -> dict:
         """Рассчитать уровень освоения темы"""
-        answers = self.result_repo.get_user_results_for_topic(user_id, topic_number)
+        answers = await self.result_repo.get_user_results_for_topic(user_id, topic_number)
         
         total = len(answers)
         correct = sum(1 for a in answers if a.is_correct)
@@ -640,7 +639,7 @@ class StudentService:
         
         return normalize(ai_answer) == normalize(correct_answer)
     
-    def _generate_random_test(self, user_id: int, prompt: str, task_count: int, difficulty: Optional[str]):
+    async def _generate_random_test(self, user_id: int, prompt: str, task_count: int, difficulty: Optional[str]):
         """Сгенерировать случайный тест"""
         total_tasks = task_count
         open_count = random.randint(0, total_tasks)
@@ -654,15 +653,15 @@ class StudentService:
         
         target_difficulties = difficulty_map.get(difficulty, [1, 2, 3, 4, 5]) if difficulty else [1, 2, 3, 4, 5]
         
-        open_tasks = self.task_repo.get_random_tasks(open_count, True, target_difficulties) if open_count > 0 else []
-        closed_tasks = self.task_repo.get_random_tasks(closed_count, False, target_difficulties) if closed_count > 0 else []
+        open_tasks = await self.task_repo.get_random_tasks(open_count, True, target_difficulties) if open_count > 0 else []
+        closed_tasks = await self.task_repo.get_random_tasks(closed_count, False, target_difficulties) if closed_count > 0 else []
         
         selected_tasks = closed_tasks + open_tasks
         
         if len(selected_tasks) < total_tasks:
             remaining = total_tasks - len(selected_tasks)
             existing_ids = [t.id for t in selected_tasks]
-            extra_tasks = self.task_repo.get_random_tasks(remaining, None, target_difficulties)
+            extra_tasks = await self.task_repo.get_random_tasks(remaining, None, target_difficulties)
             extra_tasks = [t for t in extra_tasks if t.id not in existing_ids]
             selected_tasks.extend(extra_tasks)
         
@@ -678,9 +677,9 @@ class StudentService:
             "is_active": True
         }
         
-        return self.test_repo.create_test(test_data, sorted_tasks)
+        return await self.test_repo.create_test(test_data, sorted_tasks)
     
-    def _get_tasks_with_distribution(self, topics: List[str], sections_map: dict, 
+    async def _get_tasks_with_distribution(self, topics: List[str], sections_map: dict, 
                                     difficulties: List[int], task_count: int):
         """Получить задания с распределением по темам"""
         MAX_PER_TOPIC = 100
@@ -693,7 +692,7 @@ class StudentService:
         all_task_ids = set()
         
         for topic, sections in sections_map.items():
-            topic_tasks = self.task_repo.get_tasks_by_topics([topic], {topic: sections}, difficulties, per_topic_quota)
+            topic_tasks = await self.task_repo.get_tasks_by_topics([topic], {topic: sections}, difficulties, per_topic_quota)
             
             for task in topic_tasks:
                 if task.id not in all_task_ids:

@@ -1,33 +1,36 @@
-from sqlalchemy.orm import Session
+from sqlalchemy import select
+from sqlalchemy.ext.asyncio import AsyncSession
 from core.models import AllowedEmail
 
 
 class AllowedEmailRepository:
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.db = db
     
-    def get_all(self):
-        return self.db.query(AllowedEmail).all()
+    async def get_all(self):
+        r = await self.db.execute(select(AllowedEmail))
+        return r.scalars().all()
     
-    def get_by_email(self, email: str):
-        return self.db.query(AllowedEmail).filter(
-            AllowedEmail.email == email
-        ).first()
+    async def get_by_email(self, email: str):
+        r = await self.db.execute(
+            select(AllowedEmail).where(AllowedEmail.email == email)
+        )
+        return r.scalars().first()
     
-    def create(self, email: str):
+    async def create(self, email: str):
         new_email = AllowedEmail(email=email)
         self.db.add(new_email)
-        self.db.commit()
-        self.db.refresh(new_email)
+        await self.db.commit()
+        await self.db.refresh(new_email)
         return new_email
     
-    def delete(self, allowed_email):
-        self.db.delete(allowed_email)
-        self.db.commit()
+    async def delete(self, allowed_email):
+        await self.db.delete(allowed_email)
+        await self.db.commit()
 
-    def is_email_allowed(self, email: str) -> bool:
+    async def is_email_allowed(self, email: str) -> bool:
         """Проверить, разрешен ли email"""
         if email == "admin@gmail.com":
             return True
-        allowed = self.get_by_email(email)
+        allowed = await self.get_by_email(email)
         return allowed is not None

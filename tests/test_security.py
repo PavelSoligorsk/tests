@@ -4,6 +4,8 @@ SQL-инъекции, XSS, массовые атаки, защита ролей.
 """
 
 import pytest
+import pytest_asyncio
+from sqlalchemy import select
 import core.models as models
 
 
@@ -17,11 +19,11 @@ class TestSQLInjection:
         "admin'--",
         "1; DROP TABLE tasks; --",
     ])
-    def test_login_sql_injection(self, client, db, injection):
+    async def test_login_sql_injection(self, client, db, injection):
         """❌ SQL-инъекция в логин"""
         allowed = models.AllowedEmail(email="safe@test.com")
         db.add(allowed)
-        db.commit()
+        await db.commit()
 
         client.post("/register", json={
             "username": "safe@test.com", "password": "Safe123!",
@@ -122,13 +124,13 @@ class TestXSSTasks:
 class TestMassRequests:
     """Тесты на массовые/нагрузочные запросы"""
 
-    def test_rapid_registrations(self, client, db):
+    async def test_rapid_registrations(self, client, db):
         """✅ Множественная регистрация"""
         for i in range(5):
             email = f"mass{i}@test.com"
             allowed = models.AllowedEmail(email=email)
             db.add(allowed)
-            db.commit()
+            await db.commit()
 
             response = client.post("/register", json={
                 "username": email, "password": f"Pass{i}123!",
@@ -136,11 +138,11 @@ class TestMassRequests:
             })
             assert response.status_code == 200
 
-    def test_rapid_login(self, client, db):
+    async def test_rapid_login(self, client, db):
         """✅ Множественный логин"""
         allowed = models.AllowedEmail(email="rapid@test.com")
         db.add(allowed)
-        db.commit()
+        await db.commit()
 
         client.post("/register", json={
             "username": "rapid@test.com", "password": "Rapid123!",
@@ -203,7 +205,7 @@ class TestRoleBasedAccess:
 class TestDataIntegrity:
     """Тесты целостности данных"""
 
-    def test_cascade_delete_teacher(self, client, db, admin_user, teacher_user, student_user,
+    async def test_cascade_delete_teacher(self, client, db, admin_user, teacher_user, student_user,
                                      link_teacher_student, sample_task):
         """✅ При удалении учителя удаляются его группы и тесты"""
         # Создаём группу
@@ -226,10 +228,10 @@ class TestDataIntegrity:
         )
 
         # Проверяем, что группа и тест удалены
-        assert db.query(models.Group).filter(models.Group.id == group_id).first() is None
-        assert db.query(models.Test).filter(models.Test.id == test_id).first() is None
+        assert (await db.execute(select(models.Group).where(models.Group.id == group_id))).scalars().first() is None
+        assert (await db.execute(select(models.Test).where(models.Test.id == test_id))).scalars().first() is None
 
-    def test_cascade_delete_student(self, client, db, admin_user, teacher_user, student_user,
+    async def test_cascade_delete_student(self, client, db, admin_user, teacher_user, student_user,
                                      link_teacher_student, assigned_test):
         """✅ При удалении студента удаляются его результаты"""
         student_id = student_user["id"]
@@ -240,11 +242,11 @@ class TestDataIntegrity:
         )
 
         # Проверяем, что результаты удалены
-        results = db.query(models.TestResult).filter(models.TestResult.user_id == student_id).all()
+        results = (await db.execute(select(models.TestResult).where(models.TestResult.user_id == student_id))).scalars().all()
         assert len(results) == 0
 
         # Проверяем, что назначения удалены
-        assignments = db.query(models.TestAssignment).filter(
+        assignments = (await db.execute(select(models.TestAssignment).where(
             models.TestAssignment.user_id == student_id
-        ).all()
+        ))).scalars().all()
         assert len(assignments) == 0

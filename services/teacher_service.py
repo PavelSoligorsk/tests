@@ -1,6 +1,6 @@
 import datetime
 from typing import List, Optional
-from sqlalchemy.orm import Session
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from repositories.user_repository import UserRepository
 from repositories.test_repository import TestRepository
@@ -34,7 +34,7 @@ from dto_schemas.cached import (
 
 
 class TeacherService:
-    def __init__(self, db: Session):
+    def __init__(self, db: AsyncSession):
         self.user_repo = UserRepository(db)
         self.test_repo = TestRepository(db)
         self.task_repo = TaskRepository(db)
@@ -42,16 +42,17 @@ class TeacherService:
         self.assignment_repo = AssignmentRepository(db)
         self.group_repo = GroupRepository(db)
         self.teacher_student_repo = TeacherStudentRepository(db)
+        self.db = db
     
     # ==================== БАНК ЗАДАНИЙ ====================
     
-    def get_tasks(self, task_class=None, topic=None, topic_number=None, section=None):
+    async def get_tasks(self, task_class=None, topic=None, topic_number=None, section=None):
         """Получить задания с фильтрацией"""
-        return self.task_repo.get_filtered_tasks(task_class, topic, topic_number, section)
+        return await self.task_repo.get_filtered_tasks(task_class, topic, topic_number, section)
     
-    def get_tasks_grouped(self):
+    async def get_tasks_grouped(self):
         """Получить задания сгруппированные по классам и темам"""
-        tasks = self.task_repo.get_all_tasks_ordered()
+        tasks = await self.task_repo.get_all_tasks_ordered()
         
         grouped = {}
         for task in tasks:
@@ -90,20 +91,20 @@ class TeacherService:
             "available_classes": sorted(grouped.keys(), key=sort_key)
         }
     
-    def get_task_by_id(self, task_id: int):
+    async def get_task_by_id(self, task_id: int):
         """Получить задание по ID"""
-        task = self.task_repo.get_task_by_id(task_id)
+        task = await self.task_repo.get_task_by_id(task_id)
         if not task:
             raise ValueError("Задание не найдено")
         return task
     
     # ==================== КОНСТРУКТОР ТЕСТОВ ====================
     
-    def get_tests(self, teacher_id: int, role: str):
+    async def get_tests(self, teacher_id: int, role: str):
         """Получить тесты учителя (или все для админа)"""
-        return self.test_repo.get_teacher_tests(teacher_id, role)
+        return await self.test_repo.get_teacher_tests(teacher_id, role)
     
-    def create_test(self, title: str, creator_id: int, target_class=None,
+    async def create_test(self, title: str, creator_id: int, target_class=None,
                     target_topic=None, is_autocompile: bool = False,
                     task_ids=None):
         """Создать новый тест"""
@@ -116,19 +117,19 @@ class TeacherService:
             "is_active": True
         }
         
-        tasks = []
+        tasks = None
         if task_ids:
-            tasks = self.task_repo.get_tasks_by_ids(task_ids)
+            tasks = await self.task_repo.get_tasks_by_ids(task_ids)
         
-        return self.test_repo.create_test(test_data, tasks)
+        return await self.test_repo.create_test(test_data, tasks)
     
-    def update_test(self, test_id: int, teacher_id: int, title: str,
+    async def update_test(self, test_id: int, teacher_id: int, title: str,
                     target_class=None, target_topic=None,
                     is_autocompile: bool = False, task_ids=None):
         """Обновить тест"""
-        test = self.test_repo.check_test_owner(test_id, teacher_id)
+        test = await self.test_repo.check_test_owner(test_id, teacher_id)
         if not test:
-            if not self.test_repo.get_test_by_id(test_id):
+            if not await self.test_repo.get_test_by_id(test_id):
                 raise ValueError("Тест не найден")
             raise PermissionError("У вас нет доступа к этому тесту")
         
@@ -141,28 +142,29 @@ class TeacherService:
         
         tasks = None
         if task_ids is not None:
-            tasks = self.task_repo.get_tasks_by_ids(task_ids)
+            tasks = await self.task_repo.get_tasks_by_ids(task_ids)
         
-        return self.test_repo.update_test(test, update_data, tasks)
+        return await self.test_repo.update_test(test, update_data, tasks)
     
-    def delete_test(self, test_id: int, teacher_id: int, role: str):
+    async def delete_test(self, test_id: int, teacher_id: int, role: str):
         """Удалить тест со всеми связанными данными"""
         if role == "teacher":
-            test = self.test_repo.check_test_owner(test_id, teacher_id)
+            test = await self.test_repo.check_test_owner(test_id, teacher_id)
             if not test:
-                if not self.test_repo.get_test_by_id(test_id):
+                if not await self.test_repo.get_test_by_id(test_id):
                     raise ValueError("Тест не найден")
                 raise PermissionError("Вы не можете удалить этот тест")
         
         try:
-            self.test_repo.delete_test_cascade(test_id)
+            await self.test_repo.delete_test_cascade(test_id)
+            await self.db.commit()
             return MessageResponse(message=f"Тест #{test_id} и все связанные данные удалены")
         except Exception as e:
             raise Exception(f"Ошибка при удалении: {str(e)}")
     
-    def get_test_detail(self, test_id: int, teacher_id: int, role: str):
+    async def get_test_detail(self, test_id: int, teacher_id: int, role: str):
         """Получить детальную информацию о тесте"""
-        test = self.test_repo.get_test_with_tasks(test_id)
+        test = await self.test_repo.get_test_with_tasks(test_id)
         
         if not test:
             raise ValueError("Тест не найден")
@@ -174,36 +176,36 @@ class TeacherService:
     
     # ==================== РЕЗУЛЬТАТЫ УЧЕНИКОВ ====================
     
-    def get_my_students(self, teacher_id: int):
+    async def get_my_students(self, teacher_id: int):
         """Получить список студентов учителя"""
-        return self.teacher_student_repo.get_teacher_students(teacher_id)
+        return await self.teacher_student_repo.get_teacher_students(teacher_id)
     
-    def get_student_profile(self, student_id: int, teacher_id: int):
+    async def get_student_profile(self, student_id: int, teacher_id: int):
         """Получить профиль студента"""
-        if not self.teacher_student_repo.check_student_belongs_to_teacher(student_id, teacher_id):
+        if not await self.teacher_student_repo.check_student_belongs_to_teacher(student_id, teacher_id):
             raise PermissionError("У вас нет доступа к этому ученику")
         
-        user = self.user_repo.get_user_by_id(student_id)
+        user = await self.user_repo.get_user_by_id(student_id)
         if not user or user.role != "student":
             raise ValueError("Ученик не найден")
         
-        stats = self.user_repo.get_user_stats(student_id)
+        stats = await self.user_repo.get_user_stats(student_id)
         
         return TeacherStudentProfileResponse(
             user=UserResponse.model_validate(user),
             stats=UserStats(**stats),
         )
     
-    def get_student_history(self, student_id: int, teacher_id: int):
+    async def get_student_history(self, student_id: int, teacher_id: int):
         """Получить историю тестов студента"""
-        if not self.teacher_student_repo.check_student_belongs_to_teacher(student_id, teacher_id):
+        if not await self.teacher_student_repo.check_student_belongs_to_teacher(student_id, teacher_id):
             raise PermissionError("У вас нет доступа к этому ученику")
         
-        user = self.user_repo.get_user_by_id(student_id)
+        user = await self.user_repo.get_user_by_id(student_id)
         if not user or user.role != "student":
             raise ValueError("Ученик не найден")
         
-        results = self.result_repo.get_user_history(student_id)
+        results = await self.result_repo.get_user_history(student_id)
         
         return [
             TeacherHistoryItemResponse(
@@ -217,81 +219,47 @@ class TeacherService:
             for r in results
         ]
     
-    def get_detailed_result(self, result_id: int, teacher_id: int):
+    async def get_detailed_result(self, result_id: int, teacher_id: int):
         """Получить детальный результат теста (для учителя)"""
-        result = self.result_repo.get_result_by_id(result_id)
+        result = await self.result_repo.get_result_by_id(result_id)
         
         if not result:
             raise ValueError("Результат не найден")
         
-        if not self.teacher_student_repo.check_student_belongs_to_teacher(result.user_id, teacher_id):
+        if not await self.teacher_student_repo.check_student_belongs_to_teacher(result.user_id, teacher_id):
             raise PermissionError("У вас нет доступа к этому ученику")
         
-        return self._format_detailed_result(result)
+        return await self._format_detailed_result(result)
 
     # ==================== НАЗНАЧЕНИЕ ТЕСТОВ ====================
     
-    def assign_test(self, test_id: int, teacher_id: int, user_ids: List[int],
+    async def assign_test(self, test_id: int, teacher_id: int, user_ids: List[int],
                 due_date=None, role: str = "teacher"):
         """Назначить тест студентам"""
-        test = self.test_repo.get_test_by_id(test_id)
+        test = await self.test_repo.get_test_by_id(test_id)
         if not test:
             raise ValueError("Тест не найден")
         
         if role == "teacher" and test.creator_id != teacher_id:
             raise PermissionError("Вы не можете назначать этот тест")
         
-        students = self.teacher_student_repo.get_students_by_ids(user_ids)
+        students = await self.teacher_student_repo.get_students_by_ids(user_ids)
         if len(students) != len(user_ids):
             raise ValueError("Некоторые пользователи не найдены или не являются студентами")
         
-        missing = self.teacher_student_repo.check_students_belong_to_teacher(user_ids, teacher_id)
+        missing = await self.teacher_student_repo.check_students_belong_to_teacher(user_ids, teacher_id)
         if missing:
             raise PermissionError(f"Вы не можете назначать тесты студентам: {missing}")
         
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
         created_assignments = []
         existing_assignments = []
         for user_id in user_ids:
-            existing = self.assignment_repo.check_existing_assignment(test_id, user_id)
+            existing = await self.assignment_repo.check_existing_assignment(test_id, user_id)
             if existing:
                 existing_assignments.append(existing)
                 continue
             
-            assignment = self.assignment_repo.create_assignment(
+            assignment = await self.assignment_repo.create_assignment(
                 test_id=test_id,
                 user_id=user_id,
                 due_date=due_date
@@ -299,15 +267,15 @@ class TeacherService:
             created_assignments.append(assignment)
         
         if created_assignments:
-            self.assignment_repo.db.commit()
+            await self.db.commit()
             for a in created_assignments:
-                self.assignment_repo.db.refresh(a)
+                await self.db.refresh(a)
         
         all_assignments = created_assignments + existing_assignments
         
         result = []
         for assignment in all_assignments:
-            student = self.user_repo.get_user_by_id(assignment.user_id)
+            student = await self.user_repo.get_user_by_id(assignment.user_id)
             result.append(TeacherAssignmentItemResponse(
                 id=assignment.id if assignment.id else 0,
                 test_id=assignment.test_id,
@@ -322,9 +290,9 @@ class TeacherService:
         
         return result
     
-    def get_test_assignments(self, test_id: int, teacher_id: int, role: str):
+    async def get_test_assignments(self, test_id: int, teacher_id: int, role: str):
         """Получить назначения для теста"""
-        test = self.test_repo.get_test_by_id(test_id)
+        test = await self.test_repo.get_test_by_id(test_id)
         if not test:
             raise ValueError("Тест не найден")
         
@@ -333,13 +301,13 @@ class TeacherService:
         
         max_points = self.test_repo.calculate_test_max_points(test)
         
-        assignments = self.assignment_repo.get_test_assignments(test_id)
-        latest_results = self.assignment_repo.get_latest_results_for_test(test_id)
+        assignments = await self.assignment_repo.get_test_assignments(test_id)
+        latest_results = await self.assignment_repo.get_latest_results_for_test(test_id)
         results_map = {r.user_id: r for r in latest_results}
         
         result = []
         for assignment in assignments:
-            student = self.user_repo.get_user_by_id(assignment.user_id)
+            student = await self.user_repo.get_user_by_id(assignment.user_id)
             latest_result = results_map.get(assignment.user_id)
             
             is_completed = latest_result is not None
@@ -370,23 +338,23 @@ class TeacherService:
         result.sort(key=lambda x: (x.is_completed, x.student_name))
         return result
     
-    def get_student_assignments(self, student_id: int, teacher_id: int, role: str):
+    async def get_student_assignments(self, student_id: int, teacher_id: int, role: str):
         """Получить назначения студента"""
-        student = self.user_repo.get_user_by_id(student_id)
+        student = await self.user_repo.get_user_by_id(student_id)
         if not student or student.role != "student":
             raise ValueError("Студент не найден")
         
         if role == "teacher":
-            if not self.teacher_student_repo.check_student_belongs_to_teacher(student_id, teacher_id):
+            if not await self.teacher_student_repo.check_student_belongs_to_teacher(student_id, teacher_id):
                 raise PermissionError("У вас нет доступа к этому ученику")
         
-        assignments = self.assignment_repo.get_user_assignments(student_id)
-        latest_results = self.assignment_repo.get_latest_results_for_student(student_id)
+        assignments = await self.assignment_repo.get_user_assignments(student_id)
+        latest_results = await self.assignment_repo.get_latest_results_for_student(student_id)
         results_map = {r.test_id: r for r in latest_results}
         
         response = []
         for assignment in assignments:
-            test = self.test_repo.get_test_by_id(assignment.test_id)
+            test = await self.test_repo.get_test_by_id(assignment.test_id)
             if not test:
                 continue
             
@@ -419,35 +387,36 @@ class TeacherService:
         
         return response
     
-    def delete_assignment(self, assignment_id: int, teacher_id: int, role: str):
+    async def delete_assignment(self, assignment_id: int, teacher_id: int, role: str):
         """Удалить назначение"""
-        assignment = self.assignment_repo.get_assignment_by_id(assignment_id)
+        assignment = await self.assignment_repo.get_assignment_by_id(assignment_id)
         if not assignment:
             raise ValueError("Назначение не найдено")
         
-        test = self.test_repo.get_test_by_id(assignment.test_id)
+        test = await self.test_repo.get_test_by_id(assignment.test_id)
         if not test:
             raise ValueError("Связанный тест не найден")
         
         if role == "teacher" and test.creator_id != teacher_id:
             raise PermissionError("Вы не можете удалить это назначение")
         
-        self.assignment_repo.delete_assignment_by_obj(assignment)
+        await self.assignment_repo.delete_assignment_by_obj(assignment)
+        await self.db.commit()
         
         return MessageResponse(message="Назначение удалено")
     
-    def assign_test_to_group(self, group_id: int, test_id: int, teacher_id: int,
+    async def assign_test_to_group(self, group_id: int, test_id: int, teacher_id: int,
                         due_date=None, role: str = "teacher"):
         """Назначить тест всей группе"""
-        group = self.group_repo.get_group_by_id(group_id, teacher_id)
+        group = await self.group_repo.get_group_by_id(group_id, teacher_id)
         if not group:
             raise ValueError("Группа не найдена")
         
-        student_ids = self.group_repo.get_student_ids_by_group(group_id, teacher_id)
+        student_ids = await self.group_repo.get_student_ids_by_group(group_id, teacher_id)
         if not student_ids:
             raise ValueError("В группе нет студентов")
         
-        test = self.test_repo.get_test_by_id(test_id)
+        test = await self.test_repo.get_test_by_id(test_id)
         if not test:
             raise ValueError("Тест не найден")
         
@@ -456,11 +425,11 @@ class TeacherService:
         
         created = 0
         for student_id in student_ids:
-            existing = self.assignment_repo.check_existing_assignment(test_id, student_id)
+            existing = await self.assignment_repo.check_existing_assignment(test_id, student_id)
             if existing:
                 continue
             
-            self.assignment_repo.create_assignment(
+            await self.assignment_repo.create_assignment(
                 test_id=test_id,
                 user_id=student_id,
                 due_date=due_date,
@@ -468,9 +437,8 @@ class TeacherService:
             )
             created += 1
         
-        # 🔥 ДОБАВЬ ЭТО:
         if created > 0:
-            self.assignment_repo.db.commit()
+            await self.db.commit()
         
         return GroupAssignResponse(
             message=f"Тест назначен {created} студентам группы '{group.name}'",
@@ -481,7 +449,7 @@ class TeacherService:
     
     # ==================== ВСПОМОГАТЕЛЬНЫЕ МЕТОДЫ ====================
     
-    def _format_detailed_result(self, result) -> DetailedResultResponse:
+    async def _format_detailed_result(self, result) -> DetailedResultResponse:
         """Форматировать детальный результат"""
         if not result.test:
             return DetailedResultResponse(
@@ -497,8 +465,8 @@ class TeacherService:
                 details=[],
             )
         
-        all_tasks = self.task_repo.get_tasks_by_test_id(result.test_id)
-        user_answers = self.result_repo.get_user_answers_for_result(result.id)
+        all_tasks = await self.task_repo.get_tasks_by_test_id(result.test_id)
+        user_answers = await self.result_repo.get_user_answers_for_result(result.id)
         answers_map = {ua.task_id: ua for ua in user_answers}
         
         details = []
@@ -550,9 +518,9 @@ class TeacherService:
     
         # ==================== УПРАВЛЕНИЕ ГРУППАМИ ====================
     
-    def get_my_groups(self, teacher_id: int):
+    async def get_my_groups(self, teacher_id: int):
         """Получить все группы учителя"""
-        groups = self.group_repo.get_teacher_groups(teacher_id)
+        groups = await self.group_repo.get_teacher_groups(teacher_id)
         
         result = []
         for group in groups:
@@ -576,65 +544,67 @@ class TeacherService:
         
         return result
     
-    def create_group(self, name: str, teacher_id: int, description: str = None):
+    async def create_group(self, name: str, teacher_id: int, description: str = None):
         """Создать новую группу"""
         if not name:
             raise ValueError("Название группы обязательно")
         
-        return self.group_repo.create_group(name, teacher_id, description)
+        return await self.group_repo.create_group(name, teacher_id, description)
     
-    def update_group(self, group_id: int, teacher_id: int, name: str = None, description: str = None):
+    async def update_group(self, group_id: int, teacher_id: int, name: str = None, description: str = None):
         """Обновить группу"""
-        group = self.group_repo.get_group_by_id(group_id, teacher_id)
+        group = await self.group_repo.get_group_by_id(group_id, teacher_id)
         if not group:
             raise ValueError("Группа не найдена")
         
         if name:
-            existing = self.group_repo.get_group_by_name(name, teacher_id)
+            existing = await self.group_repo.get_group_by_name(name, teacher_id)
             if existing and existing.id != group_id:
                 raise PermissionError("Группа с таким названием уже существует")
         
-        return self.group_repo.update_group(group, name, description)
+        return await self.group_repo.update_group(group, name, description)
     
-    def delete_group(self, group_id: int, teacher_id: int):
+    async def delete_group(self, group_id: int, teacher_id: int):
         """Удалить группу"""
-        group = self.group_repo.get_group_by_id(group_id, teacher_id)
+        group = await self.group_repo.get_group_by_id(group_id, teacher_id)
         if not group:
             raise ValueError("Группа не найдена")
         
-        self.group_repo.delete_group(group)
+        await self.group_repo.delete_group(group)
+        await self.db.commit()
         return MessageResponse(message=f"Группа '{group.name}' удалена")
     
-    def add_students_to_group(self, group_id: int, teacher_id: int, student_ids: list):
+    async def add_students_to_group(self, group_id: int, teacher_id: int, student_ids: list):
         """Добавить студентов в группу"""
-        group = self.group_repo.get_group_by_id(group_id, teacher_id)
+        group = await self.group_repo.get_group_by_id(group_id, teacher_id)
         if not group:
             raise ValueError("Группа не найдена")
         
         if not student_ids:
             raise ValueError("Не указаны студенты")
         
-        added = self.group_repo.add_students(group, student_ids, teacher_id)
+        added = await self.group_repo.add_students(group, student_ids, teacher_id)
         
         return AddStudentsToGroupResponse(
             message=f"Добавлено {added} студентов в группу '{group.name}'",
             added=added,
         )
     
-    def remove_student_from_group(self, group_id: int, student_id: int, teacher_id: int):
+    async def remove_student_from_group(self, group_id: int, student_id: int, teacher_id: int):
         """Удалить студента из группы"""
-        group = self.group_repo.get_group_by_id(group_id, teacher_id)
+        group = await self.group_repo.get_group_by_id(group_id, teacher_id)
         if not group:
             raise ValueError("Группа не найдена")
         
-        if not self.group_repo.remove_student(group, student_id):
+        if not await self.group_repo.remove_student(group, student_id):
             raise ValueError("Студент не в группе")
         
+        await self.db.commit()
         return MessageResponse(message="Студент удалён из группы")
     
-    def get_group_students(self, group_id: int, teacher_id: int):
+    async def get_group_students(self, group_id: int, teacher_id: int):
         """Получить список студентов группы"""
-        group = self.group_repo.get_group_by_id(group_id, teacher_id)
+        group = await self.group_repo.get_group_by_id(group_id, teacher_id)
         if not group:
             raise ValueError("Группа не найдена")
         
@@ -649,13 +619,13 @@ class TeacherService:
             for s in group.students
         ]
     
-    def get_tasks_by_topic_section(self, topic: str, section: str):
+    async def get_tasks_by_topic_section(self, topic: str, section: str):
         """Получить задания по теме и разделу"""
-        return self.task_repo.get_tasks_by_topic_and_section(topic, section)
+        return await self.task_repo.get_tasks_by_topic_and_section(topic, section)
 
-    def get_test_tasks(self, test_id: int, teacher_id: int, role: str):
+    async def get_test_tasks(self, test_id: int, teacher_id: int, role: str):
         """Получить задания теста (для ленивой загрузки)"""
-        test = self.test_repo.get_test_with_tasks(test_id)
+        test = await self.test_repo.get_test_with_tasks(test_id)
         if not test:
             raise ValueError("Тест не найден")
         if role == "teacher" and test.creator_id != teacher_id:
@@ -679,9 +649,9 @@ class TeacherService:
             ))
         return tasks
     
-    def get_tasks_meta(self):
+    async def get_tasks_meta(self):
         """Получить метаинформацию: { task_class: { topic_number: count } }"""
-        tasks = self.task_repo.get_all_tasks()
+        tasks = await self.task_repo.get_all_tasks()
         result = {}
         for task in tasks:
             cls = str(task.task_class)
@@ -695,8 +665,9 @@ class TeacherService:
             result[cls][topic_num] += 1
         
         return TeacherTaskMetaResponse(result)
-    def get_tasks_by_class_and_topic(self, task_class: str, topic_number: str):
-        return self.task_repo.get_tasks_by_class_and_topic(task_class, topic_number)
+    
+    async def get_tasks_by_class_and_topic(self, task_class: str, topic_number: str):
+        return await self.task_repo.get_tasks_by_class_and_topic(task_class, topic_number)
     
     def get_tasks_meta_by_topic_section(self):
         """Получить метаинформацию по topic и section: { topic: { section: count } }"""
