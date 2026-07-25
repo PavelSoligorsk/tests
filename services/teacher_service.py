@@ -1,7 +1,7 @@
 import datetime
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-
+from sqlalchemy.orm import selectinload, select
 from repositories.user_repository import UserRepository
 from repositories.test_repository import TestRepository
 from repositories.task_repository import TaskRepository
@@ -9,6 +9,8 @@ from repositories.result_repository import ResultRepository
 from repositories.assignment_repository import AssignmentRepository
 from repositories.group_repository import GroupRepository
 from repositories.teacher_student_repository import TeacherStudentRepository
+
+from core.models import Test
 
 from dto_schemas.user import MessageResponse, UserResponse
 from dto_schemas.task import TaskResponse
@@ -107,7 +109,7 @@ class TeacherService:
     async def create_test(self, title: str, creator_id: int, target_class=None,
                     target_topic=None, is_autocompile: bool = False,
                     task_ids=None):
-        """Создать новый тест"""
+        """Создать новый тест с предварительной загрузкой"""
         test_data = {
             "title": title,
             "target_class": str(target_class) if target_class else None,
@@ -117,11 +119,28 @@ class TeacherService:
             "is_active": True
         }
         
-        tasks = None
+        test = Test(**test_data)
+        self.db.add(test)
+        await self.db.flush()
+        
+        # Загружаем задачи и добавляем их
         if task_ids:
             tasks = await self.task_repo.get_tasks_by_ids(task_ids)
+            if tasks:
+                # Важно: сначала загружаем существующие tasks через selectinload
+                # чтобы избежать lazy loading
+                await self.db.refresh(test, attribute_names=['tasks'])
+                # Теперь безопасно добавляем
+                test.tasks.extend(tasks)
+                await self.db.flush()
         
-        return await self.test_repo.create_test(test_data, tasks)
+        # Возвращаем тест с загруженными задачами
+        result = await self.db.execute(
+            select(Test)
+            .options(selectinload(Test.tasks))
+            .where(Test.id == test.id)
+        )
+        return result.scalars().first()
     
     async def update_test(self, test_id: int, teacher_id: int, title: str,
                     target_class=None, target_topic=None,
