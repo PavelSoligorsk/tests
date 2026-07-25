@@ -21,7 +21,7 @@ class AllowedEmailRepository:
         new_email = AllowedEmail(email=email)
         self.db.add(new_email)
         await self.db.commit()
-        await self.db.refresh(new_email)
+        # expire_on_commit=False preserves object state; refresh() is unnecessary
         return new_email
     
     async def delete(self, allowed_email):

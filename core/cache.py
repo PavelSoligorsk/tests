@@ -10,7 +10,7 @@ from typing import Any, Callable, Optional, TypeVar
 
 try:
     import redis as redis_lib
-    REDIS_AVAILABLE = True
+    REDIS_AVAILABLE = False
 except ImportError:
     REDIS_AVAILABLE = False
 

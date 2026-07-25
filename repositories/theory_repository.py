@@ -12,14 +12,14 @@ class TheoryRepository:
         new_theory = Theory(**theory_data)
         self.db.add(new_theory)
         await self.db.commit()
-        await self.db.refresh(new_theory)
+        # expire_on_commit=False preserves object state; refresh() is unnecessary
         return new_theory
 
     async def update_theory(self, theory: Theory, update_data: dict):
         for key, value in update_data.items():
             setattr(theory, key, value)
         await self.db.commit()
-        await self.db.refresh(theory)
+        # expire_on_commit=False preserves object state; refresh() is unnecessary
         return theory
 
     async def delete_theory(self, theory: Theory):

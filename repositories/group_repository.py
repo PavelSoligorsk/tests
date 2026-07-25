@@ -67,7 +67,7 @@ class GroupRepository:
         )
         self.db.add(group)
         await self.db.commit()
-        await self.db.refresh(group)
+        # expire_on_commit=False preserves object state; refresh() is unnecessary
         
         return {
             "id": group.id,
@@ -86,7 +86,7 @@ class GroupRepository:
             group.description = description
         
         await self.db.commit()
-        await self.db.refresh(group)
+        # expire_on_commit=False preserves object state; refresh() is unnecessary
         
         return {
             "id": group.id,

@@ -125,7 +125,7 @@ class TaskRepository:
         new_task = Task(**task_data)
         self.db.add(new_task)
         await self.db.commit()
-        await self.db.refresh(new_task)
+        # expire_on_commit=False preserves object state; refresh() is unnecessary
         return new_task
 
     async def update_task(self, task: Task, update_data: dict):
@@ -133,7 +133,7 @@ class TaskRepository:
         for key, value in update_data.items():
             setattr(task, key, value)
         await self.db.commit()
-        await self.db.refresh(task)
+        # expire_on_commit=False preserves object state; refresh() is unnecessary
         return task
 
     async def delete_task(self, task_id: int):
@@ -174,8 +174,8 @@ class TaskRepository:
         tasks = [Task(**data) for data in tasks_data]
         self.db.add_all(tasks)
         await self.db.flush()
-        for task in tasks:
-            await self.db.refresh(task)
+        # expire_on_commit=False preserves object state; refresh() is unnecessary
+        await self.db.commit()
         return tasks
 
     async def bulk_update_tasks(self, updates: dict[int, dict]) -> list[Task]:

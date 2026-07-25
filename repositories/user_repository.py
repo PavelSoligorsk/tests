@@ -45,7 +45,7 @@ class UserRepository:
         )
         self.db.add(user)
         await self.db.commit()
-        await self.db.refresh(user)
+        # expire_on_commit=False preserves object state; refresh() is unnecessary
         return user
 
     async def update_user(self, user: User, update_data: dict):
@@ -54,7 +54,7 @@ class UserRepository:
         try:
             self.db.add(user)
             await self.db.commit()
-            await self.db.refresh(user)
+            # expire_on_commit=False preserves object state; refresh() is unnecessary
             return user
         except Exception as e:
             await self.db.rollback()

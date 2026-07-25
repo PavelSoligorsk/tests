@@ -268,8 +268,8 @@ class TeacherService:
         
         if created_assignments:
             await self.db.commit()
-            for a in created_assignments:
-                await self.db.refresh(a)
+            # expire_on_commit=False preserves object state (including auto-generated IDs);
+            # refresh() is unnecessary
         
         all_assignments = created_assignments + existing_assignments
         

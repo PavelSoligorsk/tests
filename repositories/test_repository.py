@@ -45,7 +45,9 @@ class TestRepository:
         await self.db.flush()
         new_test.tasks = tasks
         await self.db.commit()
-        await self.db.refresh(new_test)
+        # refresh() would expunge the lazy-loaded 'tasks' relationship,
+        # causing greenlet_spawn errors during Pydantic serialization.
+        # expire_on_commit=False already preserves object state after commit.
         return new_test
     
     async def deactivate_test(self, test_id: int):
@@ -83,7 +85,9 @@ class TestRepository:
             test.tasks = tasks
         
         await self.db.commit()
-        await self.db.refresh(test)
+        # refresh() would expunge the lazy-loaded 'tasks' relationship,
+        # causing greenlet_spawn errors during Pydantic serialization.
+        # Re-fetch with joinedload instead for a clean, fully-loaded object.
         return await self.get_test_with_tasks(test.id)
 
     async def delete_test_cascade(self, test_id: int):
