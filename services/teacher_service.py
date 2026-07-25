@@ -669,9 +669,9 @@ class TeacherService:
     async def get_tasks_by_class_and_topic(self, task_class: str, topic_number: str):
         return await self.task_repo.get_tasks_by_class_and_topic(task_class, topic_number)
     
-    def get_tasks_meta_by_topic_section(self):
+    async def get_tasks_meta_by_topic_section(self):
         """Получить метаинформацию по topic и section: { topic: { section: count } }"""
-        tasks = self.task_repo.get_all_tasks()
+        tasks = await self.task_repo.get_all_tasks()
         result = {}
         
         for task in tasks:

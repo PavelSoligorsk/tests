@@ -53,14 +53,19 @@ app.dependency_overrides[get_db] = override_get_db
 
 # ==================== ФИКСТУРЫ ====================
 
-@pytest_asyncio.fixture(autouse=True)
-async def setup_database():
+@pytest.fixture(autouse=True)
+def setup_database():
     """Создаёт таблицы перед тестом, удаляет после"""
-    async with async_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.create_all)
+    import asyncio
+    async def _init():
+        async with async_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.create_all)
+    asyncio.run(_init())
     yield
-    async with async_engine.begin() as conn:
-        await conn.run_sync(Base.metadata.drop_all)
+    async def _drop():
+        async with async_engine.begin() as conn:
+            await conn.run_sync(Base.metadata.drop_all)
+    asyncio.run(_drop())
 
 
 @pytest.fixture
