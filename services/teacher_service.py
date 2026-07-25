@@ -1,7 +1,8 @@
 import datetime
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload, select
+from sqlalchemy.orm import selectinload
+from sqlalchemy import select
 from repositories.user_repository import UserRepository
 from repositories.test_repository import TestRepository
 from repositories.task_repository import TaskRepository
