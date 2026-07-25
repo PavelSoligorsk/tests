@@ -7,8 +7,9 @@ import asyncio
 import boto3
 from botocore.config import Config
 from typing import List
+import logging
 from sqlalchemy import select, delete, update
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from repositories.user_repository import UserRepository
 from repositories.task_repository import TaskRepository
@@ -34,7 +35,7 @@ from dto_schemas.cached import (
     TeacherHistoryResultResponse,
 )
 
-
+logger = logging.getLogger(__name__)
 
 
 class AdminService:
@@ -525,27 +526,6 @@ class AdminService:
                 
             except httpx.RequestError as e:
                 raise Exception(f"Не удалось связаться с рендер-ботом: {str(e)}")
-    
-    from sqlalchemy import select, delete
-from sqlalchemy.orm import selectinload
-from sqlalchemy.ext.asyncio import AsyncSession
-from typing import List, Set
-import logging
-
-logger = logging.getLogger(__name__)
-
-class AdminService:
-    def __init__(self, db: AsyncSession):
-        self.user_repo = UserRepository(db)
-        self.task_repo = TaskRepository(db)
-        self.test_repo = TestRepository(db)
-        self.result_repo = ResultRepository(db)
-        self.assignment_repo = AssignmentRepository(db)
-        self.group_repo = GroupRepository(db)
-        self.teacher_student_repo = TeacherStudentRepository(db)
-        self.allowed_email_repo = AllowedEmailRepository(db)
-        self.theory_repo = TheoryRepository(db)
-        self.db = db
 
     async def rebuild_all_static_tests(self, admin_id: int):
         """
