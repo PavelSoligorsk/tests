@@ -526,35 +526,72 @@ class AdminService:
             except httpx.RequestError as e:
                 raise Exception(f"Не удалось связаться с рендер-ботом: {str(e)}")
     
+    from sqlalchemy import select, delete
+from sqlalchemy.orm import selectinload
+from sqlalchemy.ext.asyncio import AsyncSession
+from typing import List, Set
+import logging
+
+logger = logging.getLogger(__name__)
+
+class AdminService:
+    def __init__(self, db: AsyncSession):
+        self.user_repo = UserRepository(db)
+        self.task_repo = TaskRepository(db)
+        self.test_repo = TestRepository(db)
+        self.result_repo = ResultRepository(db)
+        self.assignment_repo = AssignmentRepository(db)
+        self.group_repo = GroupRepository(db)
+        self.teacher_student_repo = TeacherStudentRepository(db)
+        self.allowed_email_repo = AllowedEmailRepository(db)
+        self.theory_repo = TheoryRepository(db)
+        self.db = db
+
     async def rebuild_all_static_tests(self, admin_id: int):
         """
         🔄 Пересобрать статические (автособранные) тесты.
+        Исправленная версия с явной загрузкой связей.
         """
         try:
-            # ========== 1. Собираем актуальные категории из задач ==========
+            # ========== 1. Загружаем существующие тесты администратора с их задачами ==========
+            # Явно загружаем связи tasks через selectinload
+            result = await self.db.execute(
+                select(Test)
+                .options(selectinload(Test.tasks))  # ← Явная загрузка всех задач
+                .filter(
+                    Test.is_autocompile == True,
+                    Test.is_ai_generated == False,
+                    Test.creator_id == admin_id
+                )
+            )
+            existing_tests = result.scalars().all()
+            
+            # Создаем словарь для быстрого поиска тестов по классу и теме
+            tests_dict = {}
+            for test in existing_tests:
+                key = f"{test.target_class}_{test.target_topic}"
+                tests_dict[key] = test
+            
+            # ========== 2. Получаем актуальные категории из задач ==========
             result = await self.db.execute(
                 select(Task.task_class, Task.topic_number).distinct()
             )
             active_categories = result.all()
             
             updated_test_ids = []
+            new_tests_created = 0
 
             for t_class, t_num in active_categories:
                 t_class_str = str(t_class)
                 t_num_str = str(t_num)
+                key = f"{t_class_str}_{t_num_str}"
                 
-                result = await self.db.execute(
-                    select(Test).filter(
-                        Test.target_class == t_class_str,
-                        Test.target_topic == t_num_str,
-                        Test.is_autocompile == True,
-                        Test.is_ai_generated == False,
-                        Test.creator_id == admin_id
-                    )
-                )
-                test = result.scalars().first()
-
+                # Проверяем, существует ли уже такой тест
+                test = tests_dict.get(key)
+                is_new_test = False
+                
                 if not test:
+                    # Создаем новый тест
                     test = Test(
                         title=f"Тест: {t_class_str} класс, Тема {t_num_str}",
                         target_class=t_class_str,
@@ -562,11 +599,19 @@ class AdminService:
                         is_autocompile=True,
                         is_ai_generated=False,
                         creator_id=admin_id,
-                        is_active=True
+                        is_active=True,
+                        tasks=[]  # Инициализируем пустым списком
                     )
                     self.db.add(test)
-                    await self.db.flush()
-
+                    await self.db.flush()  # Получаем ID
+                    is_new_test = True
+                    new_tests_created += 1
+                    
+                    # Загружаем связи для нового теста (они уже пустые)
+                    # Но нам нужно загрузить tasks для дальнейшей работы
+                    await self.db.refresh(test, attribute_names=['tasks'])
+                
+                # ========== 3. Получаем актуальные задачи для этой категории ==========
                 result = await self.db.execute(
                     select(Task).filter(
                         Task.task_class == t_class,
@@ -577,38 +622,65 @@ class AdminService:
                     )
                 )
                 relevant_tasks = result.scalars().all()
-
-                test.tasks = relevant_tasks
+                
+                # ========== 4. Обновляем связи теста с задачами ==========
+                # Важно: работаем с коллекцией безопасно
+                # Очищаем существующие связи (если они есть)
+                if not is_new_test:
+                    # Для существующего теста очищаем связи
+                    test.tasks.clear()
+                
+                # Добавляем новые задачи
+                test.tasks.extend(relevant_tasks)
+                
                 updated_test_ids.append(test.id)
 
             await self.db.flush()
 
-            # ========== 2. Удаляем старые автотесты админа ==========
+            # ========== 5. Удаляем старые автотесты админа ==========
             deleted_count = 0
+            
             if updated_test_ids:
+                # Загружаем все тесты админа, которые НЕ должны существовать
+                # с явной загрузкой связей для проверки
                 result = await self.db.execute(
-                    select(Test.id).filter(
+                    select(Test)
+                    .options(selectinload(Test.tasks))  # ← Явная загрузка
+                    .filter(
                         Test.id.not_in(updated_test_ids),
                         Test.is_autocompile == True,
                         Test.is_ai_generated == False,
                         Test.creator_id == admin_id
                     )
                 )
-                bad_test_ids = [row[0] for row in result.all()]
-
-                result = await self.db.execute(
-                    select(Test.id).filter(
-                        ~Test.tasks.any(),
-                        Test.id.not_in(updated_test_ids),
-                        Test.is_autocompile == True,
-                        Test.is_ai_generated == False,
-                        Test.creator_id == admin_id
+                tests_to_check = result.scalars().all()
+                
+                # Отбираем тесты без задач
+                bad_tests = [test for test in tests_to_check if not test.tasks]
+                
+                # Добавляем тесты без задач из основного списка (если есть дубли)
+                # Для этого проверяем все тесты админа
+                if not bad_tests:
+                    # Если не нашли тесты без задач, проверяем отдельно
+                    result = await self.db.execute(
+                        select(Test)
+                        .options(selectinload(Test.tasks))
+                        .filter(
+                            Test.is_autocompile == True,
+                            Test.is_ai_generated == False,
+                            Test.creator_id == admin_id
+                        )
                     )
-                )
-                bad_test_ids.extend([row[0] for row in result.all()])
-                bad_test_ids = list(set(bad_test_ids))
-
+                    all_admin_tests = result.scalars().all()
+                    bad_tests = [test for test in all_admin_tests 
+                                if test.id not in updated_test_ids and not test.tasks]
+                
+                # Убираем дубликаты
+                bad_test_ids = list(set([test.id for test in bad_tests]))
+                
                 if bad_test_ids:
+                    # ========== 5.1 Удаляем связанные результаты и ответы ==========
+                    # Получаем все результаты для удаляемых тестов
                     result = await self.db.execute(
                         select(TestResult.id).filter(
                             TestResult.test_id.in_(bad_test_ids)
@@ -617,30 +689,35 @@ class AdminService:
                     bad_result_ids = [row[0] for row in result.all()]
 
                     if bad_result_ids:
+                        # Удаляем ответы пользователей
                         await self.db.execute(
                             delete(UserAnswer).filter(
                                 UserAnswer.result_id.in_(bad_result_ids)
                             )
                         )
                         
+                        # Удаляем результаты тестов
                         await self.db.execute(
                             delete(TestResult).filter(
                                 TestResult.id.in_(bad_result_ids)
                             )
                         )
 
+                    # ========== 5.2 Удаляем связи тестов с задачами ==========
                     await self.db.execute(
                         delete(TestTaskAssociation).filter(
                             TestTaskAssociation.test_id.in_(bad_test_ids)
                         )
                     )
 
+                    # ========== 5.3 Удаляем назначения тестов ==========
                     await self.db.execute(
                         delete(TestAssignment).filter(
                             TestAssignment.test_id.in_(bad_test_ids)
                         )
                     )
 
+                    # ========== 5.4 Удаляем сами тесты ==========
                     result = await self.db.execute(
                         delete(Test).filter(
                             Test.id.in_(bad_test_ids)
@@ -650,10 +727,16 @@ class AdminService:
 
             await self.db.commit()
             
+            logger.info(
+                f"Rebuild tests completed. Updated: {len(updated_test_ids)}, "
+                f"Created: {new_tests_created}, Deleted: {deleted_count}"
+            )
+            
             return RebuildTestsResponse(
                 status="success",
                 message=(
                     f"Успешно синхронизировано {len(updated_test_ids)} тестов. "
+                    f"Создано новых: {new_tests_created}. "
                     f"Удалено устаревших автотестов: {deleted_count}."
                 ),
                 updated_test_ids=updated_test_ids,
@@ -662,18 +745,21 @@ class AdminService:
 
         except Exception as e:
             await self.db.rollback()
+            logger.error(f"Error rebuilding tests: {str(e)}", exc_info=True)
             raise Exception(f"Database Error: {str(e)}")
-        
+
     async def _recompute_answers_for_task(self, task: Task):
         """
         Пересчитывает правильность и баллы для всех UserAnswer, привязанных к task,
         и обновляет total_points в соответствующих TestResult.
         Возвращает статистику: сколько обновлено ответов и результатов.
+        
+        Исправленная версия с явной загрузкой связей.
         """
         if not task:
             return RecomputeAnswersResponse(answers_updated=0, results_updated=0)
 
-        # Получаем все ответы на это задание
+        # ========== 1. Получаем все ответы на это задание ==========
         result = await self.db.execute(
             select(UserAnswer).filter(UserAnswer.task_id == task.id)
         )
@@ -685,6 +771,7 @@ class AdminService:
         result_ids = set()
         answers_updated = 0
 
+        # ========== 2. Пересчитываем каждый ответ ==========
         for ua in user_answers:
             # Определяем, правильный ли ответ сейчас
             is_correct_now = False
@@ -701,27 +788,44 @@ class AdminService:
             if is_correct_now:
                 new_points = 2 if task.is_open_answer else 1
 
+            # Обновляем только если изменилось
             if ua.is_correct != is_correct_now or ua.points_earned != new_points:
                 ua.is_correct = is_correct_now
                 ua.points_earned = new_points
                 answers_updated += 1
-                result_ids.add(ua.result_id)
+                if ua.result_id:
+                    result_ids.add(ua.result_id)
 
-        # Обновляем total_points для всех затронутых результатов
+        # ========== 3. Обновляем total_points для всех затронутых результатов ==========
         results_updated = 0
         if result_ids:
+            # Явно загружаем ответы для каждого результата через selectinload
             result = await self.db.execute(
-                select(TestResult).options(
-                    joinedload(TestResult.answers)
-                ).filter(TestResult.id.in_(list(result_ids)))
+                select(TestResult)
+                .options(
+                    selectinload(TestResult.answers)  # ← Явная загрузка всех ответов
+                )
+                .filter(TestResult.id.in_(list(result_ids)))
             )
-            results_list = result.unique().scalars().all()
+            # Используем unique() для избежания дубликатов при joined-загрузке
+            results_list = result.scalars().unique().all()
 
             for r in results_list:
+                # Пересчитываем сумму баллов
                 new_total = sum(ans.points_earned for ans in r.answers)
                 if r.total_points != new_total:
                     r.total_points = new_total
                     results_updated += 1
 
-        return RecomputeAnswersResponse(answers_updated=answers_updated, results_updated=results_updated)
+        # Если были изменения, коммитим их
+        if answers_updated > 0 or results_updated > 0:
+            await self.db.flush()
+            logger.info(
+                f"Recomputed answers for task {task.id}: "
+                f"answers_updated={answers_updated}, results_updated={results_updated}"
+            )
 
+        return RecomputeAnswersResponse(
+            answers_updated=answers_updated,
+            results_updated=results_updated
+        )

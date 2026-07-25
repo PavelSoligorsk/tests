@@ -1,321 +1,340 @@
+﻿"""
+Statistics tests: personal stats, teacher/admin views, filtering, and data validation.
 """
-📊 ТЕСТЫ СТАТИСТИКИ
-Личная статистика студента, просмотр учителем/админом,
-фильтрация по периодам, защита доступа.
-"""
+
+from typing import Any
 
 import pytest
 import pytest_asyncio
+from fastapi.testclient import TestClient
+from sqlalchemy.ext.asyncio import AsyncSession
+
 import core.models as models
+from tests.conftest import auth_header
 
 
-# ==================== ФИКСТУРЫ ДЛЯ СТАТИСТИКИ ====================
+# ==================== FIXTURES ====================
+
 
 @pytest.fixture
-def sample_task2(client, admin_user):
-    """Создаёт второе задание (открытый ответ)"""
-    response = client.post(
+def sample_task2(client: TestClient, admin_user: dict) -> int:
+    """Create a second task (open-answer)."""
+    resp = client.post(
         "/admin/tasks",
         json={
-            "task_class": "10", "topic_number": "2",
-            "topic": "geometry", "section": "trigonometry",
-            "content": "Найдите $\\sin 30^\\circ$",
-            "answer": "0.5", "hint": "Таблица значений",
-            "solution": "$$\\sin 30^\\circ = 0.5$$",
-            "is_open_answer": True, "options": None, "difficulty": 3
+            "task_class": "10",
+            "topic_number": "2",
+            "topic": "geometry",
+            "section": "trigonometry",
+            "content": r"Find $\sin 30^\circ$",
+            "answer": "0.5",
+            "hint": "Values table",
+            "solution": r"$$\sin 30^\circ = 0.5$$",
+            "is_open_answer": True,
+            "options": None,
+            "difficulty": 3,
         },
-        headers={"Authorization": f"Bearer {admin_user['token']}"}
+        headers=auth_header(admin_user),
     )
-    return response.json()["id"]
+    return resp.json()["id"]
 
 
 @pytest_asyncio.fixture
-async def completed_test(client, db, admin_user, teacher_user, student_user, sample_task, sample_task2):
-    """Создаёт тест, который студент уже прошёл"""
+async def completed_test(
+    client: TestClient,
+    db: AsyncSession,
+    admin_user: dict,
+    teacher_user: dict,
+    student_user: dict,
+    sample_task: int,
+    sample_task2: int,
+) -> dict[str, Any]:
+    """Create a test that the student has already completed."""
     link = models.TeacherStudent(teacher_id=teacher_user["id"], student_id=student_user["id"])
     db.add(link)
     await db.commit()
 
-    test_response = client.post(
+    test_resp = client.post(
         "/teacher/tests",
-        json={"title": "Тест для статистики", "target_class": "10", "target_topic": "1",
-              "is_autocompile": False, "task_ids": [sample_task, sample_task2]},
-        headers={"Authorization": f"Bearer {teacher_user['token']}"}
+        json={
+            "title": "Stats Test",
+            "target_class": "10",
+            "target_topic": "1",
+            "is_autocompile": False,
+            "task_ids": [sample_task, sample_task2],
+        },
+        headers=auth_header(teacher_user),
     )
-    test = test_response.json()
+    test = test_resp.json()
 
-    client.post(f"/student/tests/{test['id']}/submit",
-                json=[{"task_id": sample_task, "user_answer": "2"},      # правильно
-                      {"task_id": sample_task2, "user_answer": "wrong"}], # неправильно
-                headers={"Authorization": f"Bearer {student_user['token']}"})
+    client.post(
+        f"/student/tests/{test['id']}/submit",
+        json=[
+            {"task_id": sample_task, "user_answer": "2"},
+            {"task_id": sample_task2, "user_answer": "wrong"},
+        ],
+        headers=auth_header(student_user),
+    )
 
     return test
 
 
-# ==================== 1. ЛИЧНАЯ СТАТИСТИКА СТУДЕНТА ====================
+# ==================== 1. PERSONAL STATS ====================
+
 
 class TestMyStats:
-    """Тесты личной статистики студента"""
+    """Tests for student's personal statistics."""
 
-    def test_get_my_period_stats(self, client, student_user, completed_test):
-        """✅ Статистика за месяц"""
-        response = client.get(
-            "/stats/me/period?period=month",
-            headers={"Authorization": f"Bearer {student_user['token']}"}
-        )
-        assert response.status_code == 200
-        data = response.json()
+    def test_get_my_period_stats_month(self, client: TestClient, student_user: dict, completed_test: dict):
+        """Monthly statistics."""
+        resp = client.get("/stats/me/period?period=month", headers=auth_header(student_user))
+        assert resp.status_code == 200
+        data = resp.json()
         assert data["period"] == "month"
         assert data["user_id"] == student_user["id"]
         assert data["total_tests"] >= 1
         assert "avg_score" in data
         assert "daily_stats" in data
 
-    def test_get_my_period_stats_week(self, client, student_user, completed_test):
-        """✅ Статистика за неделю"""
-        response = client.get(
-            "/stats/me/period?period=week",
-            headers={"Authorization": f"Bearer {student_user['token']}"}
-        )
-        assert response.status_code == 200
-        assert response.json()["period"] == "week"
+    def test_get_my_period_stats_week(self, client: TestClient, student_user: dict, completed_test: dict):
+        """Weekly statistics."""
+        resp = client.get("/stats/me/period?period=week", headers=auth_header(student_user))
+        assert resp.status_code == 200
+        assert resp.json()["period"] == "week"
 
-    def test_get_my_period_stats_all(self, client, student_user, completed_test):
-        """✅ Статистика за всё время"""
-        response = client.get(
-            "/stats/me/period?period=all",
-            headers={"Authorization": f"Bearer {student_user['token']}"}
-        )
-        assert response.status_code == 200
-        assert response.json()["start_date"] is None
+    def test_get_my_period_stats_all(self, client: TestClient, student_user: dict, completed_test: dict):
+        """All-time statistics."""
+        resp = client.get("/stats/me/period?period=all", headers=auth_header(student_user))
+        assert resp.status_code == 200
+        assert resp.json()["start_date"] is None
 
-    def test_get_my_topic_stats(self, client, student_user, completed_test):
-        """✅ Статистика по темам"""
-        response = client.get(
-            "/stats/me/topics?period=all",
-            headers={"Authorization": f"Bearer {student_user['token']}"}
-        )
-        assert response.status_code == 200
-        data = response.json()
+    def test_get_my_topic_stats(self, client: TestClient, student_user: dict, completed_test: dict):
+        """Topic statistics."""
+        resp = client.get("/stats/me/topics?period=all", headers=auth_header(student_user))
+        assert resp.status_code == 200
+        data = resp.json()
         assert "topics" in data
         assert "strongest_topic" in data or data.get("strongest_topic") is None
         assert "weakest_topic" in data or data.get("weakest_topic") is None
 
-    def test_get_my_difficulty_stats(self, client, student_user, completed_test):
-        """✅ Статистика по сложности"""
-        response = client.get(
-            "/stats/me/difficulty?period=all",
-            headers={"Authorization": f"Bearer {student_user['token']}"}
-        )
-        assert response.status_code == 200
-        data = response.json()
+    def test_get_my_difficulty_stats(self, client: TestClient, student_user: dict, completed_test: dict):
+        """Difficulty statistics."""
+        resp = client.get("/stats/me/difficulty?period=all", headers=auth_header(student_user))
+        assert resp.status_code == 200
+        data = resp.json()
         assert "difficulties" in data
         assert isinstance(data["difficulties"], list)
 
-    def test_get_my_full_stats(self, client, student_user, completed_test):
-        """✅ Полная статистика"""
-        response = client.get(
-            "/stats/me/full?period=month",
-            headers={"Authorization": f"Bearer {student_user['token']}"}
-        )
-        assert response.status_code == 200
-        data = response.json()
+    def test_get_my_full_stats(self, client: TestClient, student_user: dict, completed_test: dict):
+        """Full statistics."""
+        resp = client.get("/stats/me/full?period=month", headers=auth_header(student_user))
+        assert resp.status_code == 200
+        data = resp.json()
         assert "period" in data
         assert "topics" in data
         assert "difficulties" in data
 
-    def test_get_my_stats_empty(self, client, student2_user):
-        """✅ Статистика для студента без тестов"""
-        response = client.get(
-            "/stats/me/period?period=all",
-            headers={"Authorization": f"Bearer {student2_user['token']}"}
-        )
-        assert response.status_code == 200
-        assert response.json()["total_tests"] == 0
+    def test_get_my_stats_empty(self, client: TestClient, student2_user: dict):
+        """Statistics for a student with no tests."""
+        resp = client.get("/stats/me/period?period=all", headers=auth_header(student2_user))
+        assert resp.status_code == 200
+        assert resp.json()["total_tests"] == 0
 
-    def test_invalid_period(self, client, student_user):
-        """❌ Неверный период"""
-        response = client.get(
-            "/stats/me/period?period=invalid",
-            headers={"Authorization": f"Bearer {student_user['token']}"}
-        )
-        assert response.status_code == 400
+    def test_invalid_period(self, client: TestClient, student_user: dict):
+        """Invalid period returns 400."""
+        resp = client.get("/stats/me/period?period=invalid", headers=auth_header(student_user))
+        assert resp.status_code == 400
 
-    def test_my_stats_without_auth(self, client):
-        """❌ Статистика без авторизации"""
-        response = client.get("/stats/me/period")
-        assert response.status_code == 401
+    def test_my_stats_without_auth(self, client: TestClient):
+        """Statistics without auth returns 401."""
+        resp = client.get("/stats/me/period")
+        assert resp.status_code == 401
 
 
-# ==================== 2. СТАТИСТИКА ДЛЯ УЧИТЕЛЯ ====================
+# ==================== 2. TEACHER VIEW ====================
+
 
 class TestTeacherViewStats:
-    """Тесты просмотра статистики учеников учителем"""
+    """Tests for teacher viewing student stats."""
 
-    def test_teacher_can_view_linked_student(self, client, teacher_user, student_user, completed_test):
-        """✅ Учитель видит статистику своего ученика"""
-        response = client.get(
+    def test_teacher_can_view_linked_student(
+        self, client: TestClient, teacher_user: dict, student_user: dict, completed_test: dict
+    ):
+        """Teacher can see linked student's stats."""
+        resp = client.get(
             f"/stats/user/{student_user['id']}/period?period=all",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 200
-        assert response.json()["user_id"] == student_user["id"]
+        assert resp.status_code == 200
+        assert resp.json()["user_id"] == student_user["id"]
 
-    def test_teacher_cannot_view_foreign_student(self, client, teacher_user, student2_user, db):
-        """❌ Учитель не видит статистику чужого ученика"""
-        response = client.get(
+    def test_teacher_cannot_view_foreign_student(
+        self, client: TestClient, teacher_user: dict, student2_user: dict
+    ):
+        """Teacher cannot see unlinked student's stats."""
+        resp = client.get(
             f"/stats/user/{student2_user['id']}/period?period=all",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 403
+        assert resp.status_code == 403
 
-    def test_teacher_view_student_topics(self, client, teacher_user, student_user, completed_test):
-        """✅ Учитель видит статистику по темам ученика"""
-        response = client.get(
+    def test_teacher_view_student_topics(
+        self, client: TestClient, teacher_user: dict, student_user: dict, completed_test: dict
+    ):
+        """Teacher sees student's topic stats."""
+        resp = client.get(
             f"/stats/user/{student_user['id']}/topics?period=all",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 200
-        assert "topics" in response.json()
+        assert resp.status_code == 200
+        assert "topics" in resp.json()
 
-    def test_teacher_view_student_difficulty(self, client, teacher_user, student_user, completed_test):
-        """✅ Учитель видит статистику по сложности ученика"""
-        response = client.get(
+    def test_teacher_view_student_difficulty(
+        self, client: TestClient, teacher_user: dict, student_user: dict, completed_test: dict
+    ):
+        """Teacher sees student's difficulty stats."""
+        resp = client.get(
             f"/stats/user/{student_user['id']}/difficulty?period=all",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 200
-        assert "difficulties" in response.json()
+        assert resp.status_code == 200
+        assert "difficulties" in resp.json()
 
-    def test_teacher_view_student_full(self, client, teacher_user, student_user, completed_test):
-        """✅ Учитель видит полную статистику ученика"""
-        response = client.get(
+    def test_teacher_view_student_full(
+        self, client: TestClient, teacher_user: dict, student_user: dict, completed_test: dict
+    ):
+        """Teacher sees full student stats."""
+        resp = client.get(
             f"/stats/user/{student_user['id']}/full?period=month",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 200
-        assert "period" in response.json()
-        assert "topics" in response.json()
-        assert "difficulties" in response.json()
+        assert resp.status_code == 200
+        assert "period" in resp.json()
+        assert "topics" in resp.json()
+        assert "difficulties" in resp.json()
 
 
-# ==================== 3. СТАТИСТИКА ДЛЯ АДМИНА ====================
+# ==================== 3. ADMIN VIEW ====================
+
 
 class TestAdminViewStats:
-    """Тесты просмотра статистики админом"""
+    """Tests for admin viewing any student's stats."""
 
-    def test_admin_can_view_any_student(self, client, admin_user, student_user, completed_test):
-        """✅ Админ видит статистику любого студента"""
-        response = client.get(
+    def test_admin_can_view_any_student(
+        self, client: TestClient, admin_user: dict, student_user: dict, completed_test: dict
+    ):
+        """Admin can see any student's stats."""
+        resp = client.get(
             f"/stats/user/{student_user['id']}/period?period=all",
-            headers={"Authorization": f"Bearer {admin_user['token']}"}
+            headers=auth_header(admin_user),
         )
-        assert response.status_code == 200
+        assert resp.status_code == 200
 
-    def test_admin_can_view_any_student_topics(self, client, admin_user, student_user, completed_test):
-        """✅ Админ видит статистику по темам любого студента"""
-        response = client.get(
+    def test_admin_can_view_any_student_topics(
+        self, client: TestClient, admin_user: dict, student_user: dict, completed_test: dict
+    ):
+        """Admin sees topic stats for any student."""
+        resp = client.get(
             f"/stats/user/{student_user['id']}/topics?period=all",
-            headers={"Authorization": f"Bearer {admin_user['token']}"}
+            headers=auth_header(admin_user),
         )
-        assert response.status_code == 200
+        assert resp.status_code == 200
 
-    def test_admin_can_view_any_student_full(self, client, admin_user, student_user, completed_test):
-        """✅ Админ видит полную статистику любого студента"""
-        response = client.get(
+    def test_admin_can_view_any_student_full(
+        self, client: TestClient, admin_user: dict, student_user: dict, completed_test: dict
+    ):
+        """Admin sees full stats for any student."""
+        resp = client.get(
             f"/stats/user/{student_user['id']}/full?period=all",
-            headers={"Authorization": f"Bearer {admin_user['token']}"}
+            headers=auth_header(admin_user),
         )
-        assert response.status_code == 200
+        assert resp.status_code == 200
 
 
-# ==================== 4. ПРОВЕРКА ДАННЫХ ====================
+# ==================== 4. DATA VALIDATION ====================
+
 
 class TestStatsDataValidation:
-    """Проверка корректности данных статистики"""
+    """Verify correctness of statistics data."""
 
-    def test_stats_after_single_submission(self, client, student_user, completed_test):
-        """✅ Один пройденный тест — корректные данные"""
-        response = client.get(
-            "/stats/me/period?period=all",
-            headers={"Authorization": f"Bearer {student_user['token']}"}
-        )
-        data = response.json()
+    def test_stats_after_single_submission(
+        self, client: TestClient, student_user: dict, completed_test: dict
+    ):
+        """Single completed test produces correct data."""
+        resp = client.get("/stats/me/period?period=all", headers=auth_header(student_user))
+        data = resp.json()
         assert data["total_tests"] == 1
         assert data["total_tasks"] == 2
         assert data["correct_tasks"] == 1
 
-    def test_stats_after_multiple_submissions(self, client, student_user, completed_test):
-        """✅ Несколько попыток — данные агрегируются"""
-        client.post(f"/student/tests/{completed_test['id']}/submit",
-                    json=[{"task_id": completed_test["tasks"][0]["id"], "user_answer": "2"},
-                          {"task_id": completed_test["tasks"][1]["id"], "user_answer": "0.5"}],
-                    headers={"Authorization": f"Bearer {student_user['token']}"})
-
-        response = client.get(
-            "/stats/me/period?period=all",
-            headers={"Authorization": f"Bearer {student_user['token']}"}
+    def test_stats_after_multiple_submissions(
+        self, client: TestClient, student_user: dict, completed_test: dict
+    ):
+        """Multiple attempts are aggregated."""
+        client.post(
+            f"/student/tests/{completed_test['id']}/submit",
+            json=[
+                {"task_id": completed_test["tasks"][0]["id"], "user_answer": "2"},
+                {"task_id": completed_test["tasks"][1]["id"], "user_answer": "0.5"},
+            ],
+            headers=auth_header(student_user),
         )
-        data = response.json()
+
+        resp = client.get("/stats/me/period?period=all", headers=auth_header(student_user))
+        data = resp.json()
         assert data["total_tests"] == 2
         assert data["total_tasks"] == 2
 
-    def test_daily_stats_present(self, client, student_user, completed_test):
-        """✅ Дневная статистика присутствует"""
-        response = client.get(
-            "/stats/me/period?period=week",
-            headers={"Authorization": f"Bearer {student_user['token']}"}
-        )
-        data = response.json()
+    def test_daily_stats_present(self, client: TestClient, student_user: dict, completed_test: dict):
+        """Daily stats are present."""
+        resp = client.get("/stats/me/period?period=week", headers=auth_header(student_user))
+        data = resp.json()
         assert "daily_stats" in data
         assert len(data["daily_stats"]) >= 1
 
-    def test_streak_after_submission(self, client, student_user, completed_test):
-        """✅ Серия дней после прохождения теста"""
-        response = client.get(
-            "/stats/me/period?period=week",
-            headers={"Authorization": f"Bearer {student_user['token']}"}
-        )
-        data = response.json()
+    def test_streak_after_submission(self, client: TestClient, student_user: dict, completed_test: dict):
+        """Streak days after completing a test."""
+        resp = client.get("/stats/me/period?period=week", headers=auth_header(student_user))
+        data = resp.json()
         assert "streak_days" in data
         assert data["streak_days"] >= 0
 
-    def test_scores_in_range(self, client, student_user, completed_test):
-        """✅ Баллы в допустимом диапазоне"""
-        response = client.get(
-            "/stats/me/period?period=all",
-            headers={"Authorization": f"Bearer {student_user['token']}"}
-        )
-        data = response.json()
+    def test_scores_in_range(self, client: TestClient, student_user: dict, completed_test: dict):
+        """Scores are within [0, 100]."""
+        resp = client.get("/stats/me/period?period=all", headers=auth_header(student_user))
+        data = resp.json()
         assert 0 <= data["avg_score"] <= 100
         assert 0 <= data["best_score"] <= 100
         assert 0 <= data["worst_score"] <= 100
         assert data["best_score"] >= data["worst_score"]
 
 
-# ==================== 5. ЗАЩИТА ДОСТУПА ====================
+# ==================== 5. SECURITY ====================
+
 
 class TestStatsSecurity:
-    """Тесты безопасности статистики"""
+    """Security tests for statistics."""
 
-    def test_student_cannot_view_other_student(self, client, student_user, student2_user, completed_test):
-        """❌ Студент не может смотреть статистику другого студента"""
-        response = client.get(
+    def test_student_cannot_view_other_student(
+        self, client: TestClient, student_user: dict, student2_user: dict, completed_test: dict
+    ):
+        """Student cannot view another student's stats."""
+        resp = client.get(
             f"/stats/user/{student2_user['id']}/period?period=all",
-            headers={"Authorization": f"Bearer {student_user['token']}"}
+            headers=auth_header(student_user),
         )
-        assert response.status_code == 403
+        assert resp.status_code == 403
 
-    def test_teacher_cannot_view_nonexistent_student(self, client, teacher_user):
-        """❌ Учитель не может смотреть несуществующего студента"""
-        response = client.get(
+    def test_teacher_cannot_view_nonexistent_student(self, client: TestClient, teacher_user: dict):
+        """Teacher cannot view non-existent student."""
+        resp = client.get(
             "/stats/user/99999/period?period=all",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 403
+        assert resp.status_code == 403
 
-    def test_stats_without_auth(self, client, student_user):
-        """❌ Статистика без авторизации"""
+    def test_stats_without_auth(self, client: TestClient, student_user: dict):
+        """All stats endpoints require auth."""
         endpoints = [
             "/stats/me/period",
             "/stats/me/topics",
@@ -323,5 +342,5 @@ class TestStatsSecurity:
             f"/stats/user/{student_user['id']}/period",
         ]
         for ep in endpoints:
-            response = client.get(ep)
-            assert response.status_code == 401, f"{ep} should return 401"
+            resp = client.get(ep)
+            assert resp.status_code == 401, f"{ep} should return 401"

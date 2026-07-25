@@ -1,363 +1,238 @@
-"""
-🔐 ТЕСТЫ АВТОРИЗАЦИИ
-Проверяют регистрацию, логин, защиту от дублей и невалидных данных.
+﻿"""
+Auth tests: registration, login, password reset, and security checks.
 """
 
 import pytest
 from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
-import sys
-import os
+from sqlalchemy import select as sa_select
+from sqlalchemy.ext.asyncio import AsyncSession
 
-# Добавляем путь к проекту
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-
-from main import app
-from core.database import Base, get_db
 import core.models as models
+from tests.conftest import auth_header
 
-
-# ==================== НАСТРОЙКА ТЕСТОВОЙ БД ====================
-
-SQLALCHEMY_DATABASE_URL = "sqlite:///:memory:"
-
-engine = create_engine(
-    SQLALCHEMY_DATABASE_URL,
-    connect_args={"check_same_thread": False},
-    poolclass=StaticPool,
-)
-TestingSessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-
-def override_get_db():
-    try:
-        db = TestingSessionLocal()
-        yield db
-    finally:
-        db.close()
-
-
-app.dependency_overrides[get_db] = override_get_db
-
-
-# ==================== ФИКСТУРЫ ====================
-
-@pytest.fixture(autouse=True)
-def setup_database():
-    """Создаёт таблицы перед тестом, удаляет после"""
-    Base.metadata.create_all(bind=engine)
-    yield
-    Base.metadata.drop_all(bind=engine)
-
-
-@pytest.fixture
-def client():
-    """Тестовый клиент FastAPI"""
-    return TestClient(app)
-
-
-@pytest.fixture
-def db_session():
-    """Сессия БД для прямого доступа"""
-    db = TestingSessionLocal()
-    try:
-        yield db
-    finally:
-        db.close()
-
-
-# ==================== ТЕСТЫ РЕГИСТРАЦИИ ====================
 
 class TestRegistration:
-    """Тесты регистрации"""
+    """Registration tests."""
 
-    def test_register_success(self, client, db_session):
-        """✅ Успешная регистрация"""
-        # Добавляем email в белый список
-        allowed = models.AllowedEmail(email="test@test.com")
-        db_session.add(allowed)
-        db_session.commit()
+    async def test_register_success(self, client: TestClient, db: AsyncSession):
+        """Successful registration when email is in whitelist."""
+        db.add(models.AllowedEmail(email="test@test.com"))
+        await db.commit()
 
-        response = client.post("/register", json={
+        resp = client.post("/register", json={
             "username": "test@test.com",
             "password": "Test123!",
             "first_name": "Test",
-            "last_name": "User"
+            "last_name": "User",
         })
+        assert resp.status_code == 200
 
-        assert response.status_code == 200
-        assert "успешно" in response.json()["message"]
-
-        # Проверяем, что пользователь создался в БД
-        user = db_session.query(models.User).filter(
-            models.User.username == "test@test.com"
-        ).first()
+        result = await db.execute(
+            sa_select(models.User).where(models.User.username == "test@test.com")
+        )
+        user = result.scalars().first()
         assert user is not None
         assert user.first_name == "Test"
         assert user.last_name == "User"
 
-    def test_register_without_whitelist(self, client):
-        """❌ Регистрация без белого списка — запрещена"""
-        response = client.post("/register", json={
+    def test_register_without_whitelist(self, client: TestClient):
+        """Registration without email in whitelist is forbidden."""
+        resp = client.post("/register", json={
             "username": "unknown@test.com",
             "password": "Test123!",
             "first_name": "Unknown",
-            "last_name": "User"
+            "last_name": "User",
         })
+        assert resp.status_code == 403
+        assert "запрещена" in resp.json()["detail"]
 
-        assert response.status_code == 403
-        assert "запрещена" in response.json()["detail"]
+    async def test_register_duplicate_email(self, client: TestClient, db: AsyncSession):
+        """Duplicate email registration fails."""
+        db.add(models.AllowedEmail(email="dup@test.com"))
+        await db.commit()
 
-    def test_register_duplicate_email(self, client, db_session):
-        """❌ Регистрация с уже существующим email"""
-        # Добавляем в белый список
-        allowed = models.AllowedEmail(email="duplicate@test.com")
-        db_session.add(allowed)
-        db_session.commit()
-
-        # Первая регистрация
         client.post("/register", json={
-            "username": "duplicate@test.com",
+            "username": "dup@test.com",
             "password": "Test123!",
-            "first_name": "Duplicate",
-            "last_name": "User"
+            "first_name": "First",
+            "last_name": "User",
         })
 
-        # Вторая регистрация (дубликат)
-        response = client.post("/register", json={
-            "username": "duplicate@test.com",
+        resp = client.post("/register", json={
+            "username": "dup@test.com",
             "password": "Test123!",
-            "first_name": "Duplicate",
-            "last_name": "User"
+            "first_name": "Second",
+            "last_name": "User",
         })
+        assert resp.status_code == 400
+        assert "уже существует" in resp.json()["detail"]
 
-        assert response.status_code == 400
-        assert "уже существует" in response.json()["detail"]
+    async def test_register_missing_password(self, client: TestClient, db: AsyncSession):
+        """Registration without password fails validation."""
+        db.add(models.AllowedEmail(email="nopass@test.com"))
+        await db.commit()
 
-    def test_register_missing_fields(self, client, db_session):
-        """❌ Регистрация без обязательных полей"""
-        allowed = models.AllowedEmail(email="missing@test.com")
-        db_session.add(allowed)
-        db_session.commit()
-
-        # Без пароля
-        response = client.post("/register", json={
-            "username": "missing@test.com",
-            "first_name": "Missing",
-            "last_name": "User"
+        resp = client.post("/register", json={
+            "username": "nopass@test.com",
+            "first_name": "No",
+            "last_name": "Pass",
         })
-        assert response.status_code == 422  # Validation error
+        assert resp.status_code == 422
 
-        # Без username
-        response = client.post("/register", json={
+    def test_register_missing_username(self, client: TestClient):
+        """Registration without username fails validation."""
+        resp = client.post("/register", json={
             "password": "Test123!",
-            "first_name": "Missing",
-            "last_name": "User"
+            "first_name": "No",
+            "last_name": "User",
         })
-        assert response.status_code == 422
+        assert resp.status_code == 422
 
-    def test_register_admin_auto_role(self, client, db_session):
-        """✅ Админ автоматически получает роль admin"""
-        allowed = models.AllowedEmail(email="admin@gmail.com")
-        db_session.add(allowed)
-        db_session.commit()
+    async def test_register_admin_auto_role(self, client: TestClient, db: AsyncSession):
+        """Gmail addresses automatically get admin role."""
+        db.add(models.AllowedEmail(email="admin@gmail.com"))
+        await db.commit()
 
-        response = client.post("/register", json={
+        resp = client.post("/register", json={
             "username": "admin@gmail.com",
             "password": "Admin123!",
             "first_name": "Admin",
-            "last_name": "Test"
+            "last_name": "Test",
         })
+        assert resp.status_code == 200
 
-        assert response.status_code == 200
-
-        user = db_session.query(models.User).filter(
-            models.User.username == "admin@gmail.com"
-        ).first()
+        result = await db.execute(
+            sa_select(models.User).where(models.User.username == "admin@gmail.com")
+        )
+        user = result.scalars().first()
         assert user.role == "admin"
 
 
-# ==================== ТЕСТЫ ЛОГИНА ====================
-
 class TestLogin:
-    """Тесты логина"""
+    """Login tests."""
 
-    @pytest.fixture
-    def registered_user(self, client, db_session):
-        """Создаёт пользователя для тестов логина"""
-        allowed = models.AllowedEmail(email="login@test.com")
-        db_session.add(allowed)
-        db_session.commit()
-
+    @pytest.fixture(autouse=True)
+    async def _registered_user(self, client: TestClient, db: AsyncSession):
+        """Create a user for login tests."""
+        db.add(models.AllowedEmail(email="login@test.com"))
+        await db.commit()
         client.post("/register", json={
             "username": "login@test.com",
             "password": "Correct123!",
             "first_name": "Login",
-            "last_name": "User"
+            "last_name": "User",
         })
 
-    def test_login_success(self, client, registered_user):
-        """✅ Успешный логин"""
-        response = client.post(
-            "/login",
-            data={"username": "login@test.com", "password": "Correct123!"}
-        )
+    def test_login_success(self, client: TestClient):
+        """Successful login returns a token."""
+        resp = client.post("/login", data={"username": "login@test.com", "password": "Correct123!"})
+        assert resp.status_code == 200
+        assert "access_token" in resp.json()
+        assert resp.json()["token_type"] == "bearer"
+        assert resp.json()["username"] == "login@test.com"
 
-        assert response.status_code == 200
-        assert "access_token" in response.json()
-        assert response.json()["token_type"] == "bearer"
-        assert "username" in response.json()
-        assert response.json()["username"] == "login@test.com"
+    def test_login_wrong_password(self, client: TestClient):
+        """Wrong password returns 401."""
+        resp = client.post("/login", data={"username": "login@test.com", "password": "Wrong123!"})
+        assert resp.status_code == 401
+        assert "Неверный логин или пароль" in resp.json()["detail"]
 
-    def test_login_wrong_password(self, client, registered_user):
-        """❌ Логин с неверным паролем"""
-        response = client.post(
-            "/login",
-            data={"username": "login@test.com", "password": "Wrong123!"}
-        )
+    def test_login_nonexistent_user(self, client: TestClient):
+        """Login for non-existent user returns 401."""
+        resp = client.post("/login", data={"username": "no@test.com", "password": "Test123!"})
+        assert resp.status_code == 401
+        assert "Неверный логин или пароль" in resp.json()["detail"]
 
-        assert response.status_code == 401
-        assert "Неверный логин или пароль" in response.json()["detail"]
+    def test_login_missing_password(self, client: TestClient):
+        """Login without password fails validation."""
+        resp = client.post("/login", data={"username": "login@test.com"})
+        assert resp.status_code == 422
 
-    def test_login_nonexistent_user(self, client):
-        """❌ Логин несуществующего пользователя"""
-        response = client.post(
-            "/login",
-            data={"username": "nonexistent@test.com", "password": "Test123!"}
-        )
+    def test_login_missing_username(self, client: TestClient):
+        """Login without username fails validation."""
+        resp = client.post("/login", data={"password": "Test123!"})
+        assert resp.status_code == 422
 
-        assert response.status_code == 401
-        assert "Неверный логин или пароль" in response.json()["detail"]
-
-    def test_login_missing_username(self, client):
-        """❌ Логин без username"""
-        response = client.post(
-            "/login",
-            data={"password": "Test123!"}
-        )
-        assert response.status_code == 422  # Validation error
-
-    def test_login_missing_password(self, client, registered_user):
-        """❌ Логин без пароля"""
-        response = client.post(
-            "/login",
-            data={"username": "login@test.com"}
-        )
-        assert response.status_code == 422
-
-
-# ==================== ТЕСТЫ СБРОСА ПАРОЛЯ ====================
 
 class TestPasswordReset:
-    """Тесты сброса пароля"""
+    """Password reset tests."""
 
-    @pytest.fixture
-    def registered_user(self, client, db_session):
-        allowed = models.AllowedEmail(email="reset@test.com")
-        db_session.add(allowed)
-        db_session.commit()
-
+    @pytest.fixture(autouse=True)
+    async def _registered_user(self, client: TestClient, db: AsyncSession):
+        """Create a user for reset tests."""
+        db.add(models.AllowedEmail(email="reset@test.com"))
+        await db.commit()
         client.post("/register", json={
             "username": "reset@test.com",
             "password": "OldPass123!",
             "first_name": "Reset",
-            "last_name": "User"
+            "last_name": "User",
         })
 
-    def test_forgot_password(self, client, registered_user):
-        """✅ Запрос на сброс пароля"""
-        response = client.post("/forgot-password", json={
-            "email": "reset@test.com"
-        })
+    def test_forgot_password(self, client: TestClient):
+        """Forgot password request succeeds."""
+        resp = client.post("/forgot-password", json={"email": "reset@test.com"})
+        assert resp.status_code == 200
+        assert "инструкция отправлена" in resp.json()["message"]
 
-        assert response.status_code == 200
-        assert "инструкция отправлена" in response.json()["message"]
+    def test_forgot_password_nonexistent(self, client: TestClient):
+        """Forgot password for unknown email returns 200 (no user enumeration)."""
+        resp = client.post("/forgot-password", json={"email": "ghost@test.com"})
+        assert resp.status_code == 200
+        assert "инструкция отправлена" in resp.json()["message"]
 
-    def test_forgot_password_nonexistent_email(self, client):
-        """❌ Сброс для несуществующего email"""
-        response = client.post("/forgot-password", json={
-            "email": "nonexistent@test.com"
-        })
+    def test_forgot_password_missing_email(self, client: TestClient):
+        """Forgot password without email fails validation."""
+        resp = client.post("/forgot-password", json={})
+        assert resp.status_code == 422
 
-        assert response.status_code == 200  # Всегда 200, чтобы не палить email
-        assert "инструкция отправлена" in response.json()["message"]
-
-    def test_forgot_password_missing_email(self, client):
-        """❌ Запрос без email"""
-        response = client.post("/forgot-password", json={})
-        assert response.status_code == 422
-
-
-# ==================== ТЕСТЫ ЗАЩИТЫ ====================
 
 class TestSecurity:
-    """Тесты безопасности"""
+    """Security: protected endpoints and role checks."""
 
-    def test_protected_endpoint_without_token(self, client):
-        """❌ Доступ к защищённому эндпоинту без токена"""
-        response = client.get("/teacher/tests")
-        assert response.status_code == 401
+    def test_protected_without_token(self, client: TestClient):
+        """Protected endpoint without token returns 401."""
+        resp = client.get("/teacher/tests")
+        assert resp.status_code == 401
 
-    def test_protected_endpoint_with_invalid_token(self, client):
-        """❌ Доступ с невалидным токеном"""
-        response = client.get(
-            "/teacher/tests",
-            headers={"Authorization": "Bearer invalid_token"}
-        )
-        assert response.status_code == 401
+    def test_protected_invalid_token(self, client: TestClient):
+        """Invalid token returns 401."""
+        resp = client.get("/teacher/tests", headers={"Authorization": "Bearer invalid.token.here"})
+        assert resp.status_code == 401
 
-    def test_student_cant_access_teacher(self, client, db_session):
-        """❌ Студент не может зайти в учительский эндпоинт"""
-        # Создаём студента
-        allowed = models.AllowedEmail(email="student_security@test.com")
-        db_session.add(allowed)
-        db_session.commit()
+    async def test_student_cant_access_teacher(self, client: TestClient, db: AsyncSession):
+        """Student cannot access teacher endpoints."""
+        db.add(models.AllowedEmail(email="studsec@test.com"))
+        await db.commit()
 
         client.post("/register", json={
-            "username": "student_security@test.com",
+            "username": "studsec@test.com",
             "password": "Student123!",
             "first_name": "Student",
-            "last_name": "Security"
+            "last_name": "Security",
         })
 
-        # Логинимся
-        login = client.post(
-            "/login",
-            data={"username": "student_security@test.com", "password": "Student123!"}
-        )
+        login = client.post("/login", data={"username": "studsec@test.com", "password": "Student123!"})
         token = login.json()["access_token"]
 
-        # Пытаемся зайти в учительский эндпоинт
-        response = client.get(
-            "/teacher/tests",
-            headers={"Authorization": f"Bearer {token}"}
-        )
-        assert response.status_code == 403
-        assert "Требуется роль teacher" in response.json()["detail"]
+        resp = client.get("/teacher/tests", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 403
+        assert "Требуется роль teacher" in resp.json()["detail"]
 
-    def test_student_cant_access_admin(self, client, db_session):
-        """❌ Студент не может зайти в админский эндпоинт"""
-        allowed = models.AllowedEmail(email="student_admin@test.com")
-        db_session.add(allowed)
-        db_session.commit()
+    async def test_student_cant_access_admin(self, client: TestClient, db: AsyncSession):
+        """Student cannot access admin endpoints."""
+        db.add(models.AllowedEmail(email="studadm@test.com"))
+        await db.commit()
 
         client.post("/register", json={
-            "username": "student_admin@test.com",
+            "username": "studadm@test.com",
             "password": "Student123!",
             "first_name": "Student",
-            "last_name": "Admin"
+            "last_name": "Admin",
         })
 
-        login = client.post(
-            "/login",
-            data={"username": "student_admin@test.com", "password": "Student123!"}
-        )
+        login = client.post("/login", data={"username": "studadm@test.com", "password": "Student123!"})
         token = login.json()["access_token"]
 
-        response = client.get(
-            "/admin/users",
-            headers={"Authorization": f"Bearer {token}"}
-        )
-        assert response.status_code == 403
+        resp = client.get("/admin/users", headers={"Authorization": f"Bearer {token}"})
+        assert resp.status_code == 403

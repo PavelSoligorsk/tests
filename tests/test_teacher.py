@@ -1,520 +1,731 @@
+﻿"""
+Teacher tests: CRUD for tests, tasks, groups, students, assignments, and results.
 """
-👨‍🏫 ТЕСТЫ УЧИТЕЛЯ
-CRUD тестов, заданий, групп, студентов, назначения полный цикл.
-"""
+
+from typing import Any
 
 import pytest
 import pytest_asyncio
-from sqlalchemy import select
+from fastapi.testclient import TestClient
+from sqlalchemy import select as sa_select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 import core.models as models
+from tests.conftest import auth_header
 
 
-# ==================== 1. ТЕСТЫ ====================
+# ==================== 1. TESTS CRUD ====================
+
 
 class TestTeacherTests:
-    """CRUD тестов"""
+    """CRUD for teacher-created tests."""
 
-    def test_get_tests_empty(self, client, teacher_user):
-        """✅ Пустой список тестов"""
-        response = client.get(
-            "/teacher/tests",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
-        )
-        assert response.status_code == 200
-        assert response.json() == []
+    def test_get_tests_empty(self, client: TestClient, teacher_user: dict):
+        """Empty test list."""
+        resp = client.get("/teacher/tests", headers=auth_header(teacher_user))
+        assert resp.status_code == 200
+        assert resp.json() == []
 
-    def test_create_test(self, client, teacher_user, sample_task):
-        """✅ Создание теста"""
-        response = client.post(
+    def test_create_test(self, client: TestClient, teacher_user: dict, sample_task: int):
+        """Create a test with a task."""
+        resp = client.post(
             "/teacher/tests",
             json={
-                "title": "Мой первый тест",
+                "title": "My First Test",
                 "target_class": "10",
                 "target_topic": "1",
                 "is_autocompile": False,
-                "task_ids": [sample_task]
+                "task_ids": [sample_task],
             },
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 200
-        assert response.json()["title"] == "Мой первый тест"
-        assert "id" in response.json()
+        assert resp.status_code == 200
+        assert resp.json()["title"] == "My First Test"
+        assert "id" in resp.json()
 
-    def test_create_test_without_tasks(self, client, teacher_user):
-        """✅ Создание теста без заданий"""
-        response = client.post(
+    def test_create_test_without_tasks(self, client: TestClient, teacher_user: dict):
+        """Create a test without tasks."""
+        resp = client.post(
             "/teacher/tests",
             json={
-                "title": "Пустой тест",
+                "title": "Empty Test",
                 "target_class": "10",
                 "target_topic": "1",
                 "is_autocompile": False,
-                "task_ids": []
+                "task_ids": [],
             },
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 200
+        assert resp.status_code == 200
 
-    def test_create_test_as_student(self, client, student_user):
-        """❌ Студент не может создать тест"""
-        response = client.post(
+    def test_create_test_as_student_forbidden(self, client: TestClient, student_user: dict):
+        """Student cannot create a test."""
+        resp = client.post(
             "/teacher/tests",
-            json={"title": "hack", "target_class": "10", "target_topic": "1",
-                  "is_autocompile": False, "task_ids": []},
-            headers={"Authorization": f"Bearer {student_user['token']}"}
+            json={
+                "title": "hack",
+                "target_class": "10",
+                "target_topic": "1",
+                "is_autocompile": False,
+                "task_ids": [],
+            },
+            headers=auth_header(student_user),
         )
-        assert response.status_code == 403
+        assert resp.status_code == 403
 
-    def test_get_my_tests(self, client, teacher_user, sample_task):
-        """✅ Получение своих тестов"""
-        client.post("/teacher/tests", json={
-            "title": "Тест 1", "target_class": "10", "target_topic": "1",
-            "is_autocompile": False, "task_ids": [sample_task]
-        }, headers={"Authorization": f"Bearer {teacher_user['token']}"})
-
-        response = client.get(
+    def test_get_my_tests(self, client: TestClient, teacher_user: dict, sample_task: int):
+        """Teacher sees own tests."""
+        client.post(
             "/teacher/tests",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            json={
+                "title": "Test 1",
+                "target_class": "10",
+                "target_topic": "1",
+                "is_autocompile": False,
+                "task_ids": [sample_task],
+            },
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 200
-        assert len(response.json()) == 1
+        resp = client.get("/teacher/tests", headers=auth_header(teacher_user))
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
 
-    async def test_cant_see_other_teachers_tests(self, client, db, teacher_user, sample_task):
-        """🛡️ Учитель не видит чужие тесты"""
-        # Создаём другого учителя
-        allowed2 = models.AllowedEmail(email="teacher2@test.com")
-        db.add(allowed2)
+    async def test_cant_see_other_teacher_tests(
+        self, client: TestClient, db: AsyncSession, teacher_user: dict, sample_task: int
+    ):
+        """Teacher cannot see another teacher's tests."""
+        db.add(models.AllowedEmail(email="t2@test.com"))
         await db.commit()
 
         client.post("/register", json={
-            "username": "teacher2@test.com", "password": "Teacher123!",
-            "first_name": "Teacher", "last_name": "Two"
+            "username": "t2@test.com",
+            "password": "Teacher123!",
+            "first_name": "T",
+            "last_name": "Two",
         })
-        teacher2 = (await db.execute(select(models.User).where(models.User.username == "teacher2@test.com"))).scalars().first()
+
+        result = await db.execute(
+            sa_select(models.User).where(models.User.username == "t2@test.com")
+        )
+        teacher2 = result.scalars().first()
         teacher2.role = "teacher"
         await db.commit()
 
-        login2 = client.post("/login", data={"username": "teacher2@test.com", "password": "Teacher123!"})
-        teacher2_token = login2.json()["access_token"]
+        login2 = client.post("/login", data={"username": "t2@test.com", "password": "Teacher123!"})
+        t2_token = login2.json()["access_token"]
 
-        # teacher2 создаёт тест
-        client.post("/teacher/tests", json={
-            "title": "Тест учителя 2", "target_class": "10", "target_topic": "1",
-            "is_autocompile": False, "task_ids": [sample_task]
-        }, headers={"Authorization": f"Bearer {teacher2_token}"})
-
-        # Первый учитель видит только свой
-        response = client.get(
+        client.post(
             "/teacher/tests",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            json={
+                "title": "T2 Test",
+                "target_class": "10",
+                "target_topic": "1",
+                "is_autocompile": False,
+                "task_ids": [sample_task],
+            },
+            headers={"Authorization": f"Bearer {t2_token}"},
         )
-        assert len(response.json()) == 0
 
-    def test_update_test(self, client, teacher_user, sample_task):
-        """✅ Обновление теста"""
-        test = client.post("/teacher/tests", json={
-            "title": "Старый", "target_class": "10", "target_topic": "1",
-            "is_autocompile": False, "task_ids": [sample_task]
-        }, headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
+        resp = client.get("/teacher/tests", headers=auth_header(teacher_user))
+        assert len(resp.json()) == 0
 
-        response = client.put(
-            f"/teacher/tests/{test['id']}",
-            json={"title": "Новый", "target_class": "11", "target_topic": "2",
-                  "is_autocompile": True, "task_ids": []},
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+    def test_get_test_detail(self, client: TestClient, teacher_user: dict, sample_task: int):
+        """Get test details."""
+        t = client.post(
+            "/teacher/tests",
+            json={
+                "title": "Detail",
+                "target_class": "10",
+                "target_topic": "1",
+                "is_autocompile": False,
+                "task_ids": [sample_task],
+            },
+            headers=auth_header(teacher_user),
+        ).json()
+
+        resp = client.get(f"/teacher/tests/{t['id']}", headers=auth_header(teacher_user))
+        assert resp.status_code == 200
+        assert resp.json()["id"] == t["id"]
+
+    def test_update_test(self, client: TestClient, teacher_user: dict, sample_task: int):
+        """Update an existing test."""
+        t = client.post(
+            "/teacher/tests",
+            json={
+                "title": "Old",
+                "target_class": "10",
+                "target_topic": "1",
+                "is_autocompile": False,
+                "task_ids": [sample_task],
+            },
+            headers=auth_header(teacher_user),
+        ).json()
+
+        resp = client.put(
+            f"/teacher/tests/{t['id']}",
+            json={
+                "title": "New",
+                "target_class": "11",
+                "target_topic": "2",
+                "is_autocompile": True,
+                "task_ids": [],
+            },
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 200
-        assert response.json()["title"] == "Новый"
+        assert resp.status_code == 200
+        assert resp.json()["title"] == "New"
 
-    def test_delete_test(self, client, teacher_user, sample_task):
-        """✅ Удаление теста"""
-        test = client.post("/teacher/tests", json={
-            "title": "На удаление", "target_class": "10", "target_topic": "1",
-            "is_autocompile": False, "task_ids": [sample_task]
-        }, headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
+    def test_delete_test(self, client: TestClient, teacher_user: dict, sample_task: int):
+        """Delete a test."""
+        t = client.post(
+            "/teacher/tests",
+            json={
+                "title": "ToDelete",
+                "target_class": "10",
+                "target_topic": "1",
+                "is_autocompile": False,
+                "task_ids": [sample_task],
+            },
+            headers=auth_header(teacher_user),
+        ).json()
 
-        response = client.delete(
-            f"/teacher/tests/{test['id']}",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
-        )
-        assert response.status_code == 200
+        resp = client.delete(f"/teacher/tests/{t['id']}", headers=auth_header(teacher_user))
+        assert resp.status_code == 200
 
-        get_resp = client.get(
-            f"/teacher/tests/{test['id']}",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
-        )
+        get_resp = client.get(f"/teacher/tests/{t['id']}", headers=auth_header(teacher_user))
         assert get_resp.status_code == 404
 
-    async def test_cant_delete_others_test(self, client, db, teacher_user, sample_task):
-        """🛡️ Нельзя удалить чужой тест"""
-        allowed2 = models.AllowedEmail(email="teacher3@test.com")
-        db.add(allowed2)
+    async def test_cant_delete_others_test(
+        self, client: TestClient, db: AsyncSession, teacher_user: dict, sample_task: int
+    ):
+        """Cannot delete another teacher's test."""
+        db.add(models.AllowedEmail(email="t3@test.com"))
         await db.commit()
 
         client.post("/register", json={
-            "username": "teacher3@test.com", "password": "Teacher123!",
-            "first_name": "T3", "last_name": "Test"
+            "username": "t3@test.com",
+            "password": "Teacher123!",
+            "first_name": "T3",
+            "last_name": "Test",
         })
-        teacher2 = (await db.execute(select(models.User).where(models.User.username == "teacher3@test.com"))).scalars().first()
+
+        result = await db.execute(
+            sa_select(models.User).where(models.User.username == "t3@test.com")
+        )
+        teacher2 = result.scalars().first()
         teacher2.role = "teacher"
         await db.commit()
 
-        login2 = client.post("/login", data={"username": "teacher3@test.com", "password": "Teacher123!"})
-        teacher2_token = login2.json()["access_token"]
+        login2 = client.post("/login", data={"username": "t3@test.com", "password": "Teacher123!"})
+        t2_token = login2.json()["access_token"]
 
-        test2 = client.post("/teacher/tests", json={
-            "title": "Чужой тест", "target_class": "10", "target_topic": "1",
-            "is_autocompile": False, "task_ids": [sample_task]
-        }, headers={"Authorization": f"Bearer {teacher2_token}"}).json()
+        t2 = client.post(
+            "/teacher/tests",
+            json={
+                "title": "Other",
+                "target_class": "10",
+                "target_topic": "1",
+                "is_autocompile": False,
+                "task_ids": [sample_task],
+            },
+            headers={"Authorization": f"Bearer {t2_token}"},
+        ).json()
 
-        response = client.delete(
-            f"/teacher/tests/{test2['id']}",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
-        )
-        assert response.status_code == 403
-
-    def test_get_test_detail(self, client, teacher_user, sample_task):
-        """✅ Детали теста"""
-        test = client.post("/teacher/tests", json={
-            "title": "Детали", "target_class": "10", "target_topic": "1",
-            "is_autocompile": False, "task_ids": [sample_task]
-        }, headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
-
-        response = client.get(
-            f"/teacher/tests/{test['id']}",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
-        )
-        assert response.status_code == 200
-        assert response.json()["id"] == test["id"]
+        resp = client.delete(f"/teacher/tests/{t2['id']}", headers=auth_header(teacher_user))
+        assert resp.status_code == 403
 
 
-# ==================== 2. ЗАДАНИЯ (БАНК ЗАДАНИЙ) ====================
+# ==================== 2. TASKS BANK ====================
+
 
 class TestTeacherTasks:
-    """Тесты банка заданий для учителя"""
+    """Tests for the tasks bank accessible to teachers."""
 
-    def test_get_all_tasks(self, client, teacher_user, sample_task):
-        """✅ Получение всех заданий"""
-        response = client.get(
-            "/teacher/tasks",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
-        )
-        assert response.status_code == 200
-        assert len(response.json()) >= 1
+    def test_get_all_tasks(self, client: TestClient, teacher_user: dict, sample_task: int):
+        """Get all tasks."""
+        resp = client.get("/teacher/tasks", headers=auth_header(teacher_user))
+        assert resp.status_code == 200
+        assert len(resp.json()) >= 1
 
-    def test_get_tasks_with_filter(self, client, teacher_user, sample_task):
-        """✅ Фильтрация заданий по классу"""
-        response = client.get(
-            "/teacher/tasks?task_class=10",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
-        )
-        assert response.status_code == 200
+    def test_get_tasks_filter_by_class(self, client: TestClient, teacher_user: dict, sample_task: int):
+        """Filter tasks by class."""
+        resp = client.get("/teacher/tasks?task_class=10", headers=auth_header(teacher_user))
+        assert resp.status_code == 200
 
-    def test_get_single_task(self, client, teacher_user, sample_task):
-        """✅ Получение задания по ID"""
-        response = client.get(
-            f"/teacher/tasks/{sample_task}",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
-        )
-        assert response.status_code == 200
+    def test_get_single_task(self, client: TestClient, teacher_user: dict, sample_task: int):
+        """Get task by ID."""
+        resp = client.get(f"/teacher/tasks/{sample_task}", headers=auth_header(teacher_user))
+        assert resp.status_code == 200
 
-    def test_get_tasks_grouped(self, client, teacher_user, sample_task):
-        """✅ Получение сгруппированных заданий"""
-        response = client.get(
-            "/teacher/tasks-grouped",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
-        )
-        assert response.status_code == 200
-        assert "grouped" in response.json()
-        assert "total_tasks" in response.json()
+    def test_get_tasks_grouped(self, client: TestClient, teacher_user: dict, sample_task: int):
+        """Get grouped tasks."""
+        resp = client.get("/teacher/tasks-grouped", headers=auth_header(teacher_user))
+        assert resp.status_code == 200
+        assert "grouped" in resp.json()
+        assert "total_tasks" in resp.json()
 
-    def test_get_tasks_meta(self, client, teacher_user, sample_task):
-        """✅ Мета-информация о заданиях"""
-        response = client.get(
-            "/teacher/tasks-meta",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
-        )
-        assert response.status_code == 200
+    def test_get_tasks_meta(self, client: TestClient, teacher_user: dict, sample_task: int):
+        """Get tasks metadata."""
+        resp = client.get("/teacher/tasks-meta", headers=auth_header(teacher_user))
+        assert resp.status_code == 200
 
-    def test_get_tasks_by_class_and_topic(self, client, teacher_user, sample_task):
-        """✅ Задания по классу и теме"""
-        response = client.get(
+    def test_get_tasks_by_class_and_topic(self, client: TestClient, teacher_user: dict, sample_task: int):
+        """Get tasks by class and topic."""
+        resp = client.get(
             "/teacher/tasks/by-class-topic?task_class=10&topic_number=1",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 200
+        assert resp.status_code == 200
 
 
-# ==================== 3. ГРУППЫ ====================
+# ==================== 3. GROUPS CRUD ====================
+
 
 class TestTeacherGroups:
-    """Полный CRUD групп"""
+    """Full CRUD for groups."""
 
-    def test_create_group(self, client, teacher_user):
-        """✅ Создание группы"""
-        response = client.post(
+    def test_create_group(self, client: TestClient, teacher_user: dict):
+        """Create a group."""
+        resp = client.post(
             "/teacher/groups/",
-            json={"name": "10A", "description": "Лучший класс"},
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            json={"name": "10A", "description": "Best class"},
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 200
-        assert response.json()["name"] == "10A"
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "10A"
 
-    def test_create_group_without_name(self, client, teacher_user):
-        """❌ Группа без имени"""
-        response = client.post(
+    def test_create_group_without_name(self, client: TestClient, teacher_user: dict):
+        """Creating a group without a name fails."""
+        resp = client.post(
             "/teacher/groups/",
-            json={"description": "Без имени"},
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            json={"description": "No name"},
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 400
+        assert resp.status_code == 400
 
-    def test_get_my_groups_empty(self, client, teacher_user):
-        """✅ Пустой список групп"""
-        response = client.get(
+    def test_get_my_groups_empty(self, client: TestClient, teacher_user: dict):
+        """Empty group list."""
+        resp = client.get("/teacher/groups/", headers=auth_header(teacher_user))
+        assert resp.status_code == 200
+        assert resp.json() == []
+
+    def test_get_my_groups(self, client: TestClient, teacher_user: dict):
+        """Get list of groups."""
+        client.post(
             "/teacher/groups/",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            json={"name": "10A"},
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 200
-        assert response.json() == []
+        resp = client.get("/teacher/groups/", headers=auth_header(teacher_user))
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
+        assert resp.json()[0]["name"] == "10A"
 
-    def test_get_my_groups(self, client, teacher_user):
-        """✅ Список групп"""
-        client.post("/teacher/groups/", json={"name": "10A"},
-                    headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        response = client.get("/teacher/groups/",
-                              headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        assert response.status_code == 200
-        assert len(response.json()) == 1
-        assert response.json()[0]["name"] == "10A"
+    def test_update_group(self, client: TestClient, teacher_user: dict):
+        """Update a group."""
+        g = client.post(
+            "/teacher/groups/",
+            json={"name": "Old"},
+            headers=auth_header(teacher_user),
+        ).json()
 
-    def test_update_group(self, client, teacher_user):
-        """✅ Обновление группы"""
-        group = client.post("/teacher/groups/", json={"name": "Старое"},
-                           headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
+        resp = client.put(
+            f"/teacher/groups/{g['id']}",
+            json={"name": "New", "description": "Updated"},
+            headers=auth_header(teacher_user),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["name"] == "New"
 
-        response = client.put(f"/teacher/groups/{group['id']}",
-                             json={"name": "Новое", "description": "Обновлён"},
-                             headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        assert response.status_code == 200
-        assert response.json()["name"] == "Новое"
+    def test_delete_group(self, client: TestClient, teacher_user: dict):
+        """Delete a group."""
+        g = client.post(
+            "/teacher/groups/",
+            json={"name": "ToDelete"},
+            headers=auth_header(teacher_user),
+        ).json()
 
-    def test_delete_group(self, client, teacher_user):
-        """✅ Удаление группы"""
-        group = client.post("/teacher/groups/", json={"name": "На удаление"},
-                           headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
+        resp = client.delete(f"/teacher/groups/{g['id']}", headers=auth_header(teacher_user))
+        assert resp.status_code == 200
 
-        response = client.delete(f"/teacher/groups/{group['id']}",
-                                headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        assert response.status_code == 200
-
-    async def test_cant_see_other_teacher_groups(self, client, db, teacher_user):
-        """🛡️ Не видит чужие группы"""
-        allowed2 = models.AllowedEmail(email="teachergrp@test.com")
-        db.add(allowed2)
+    async def test_cant_see_other_teacher_groups(
+        self, client: TestClient, db: AsyncSession, teacher_user: dict
+    ):
+        """Cannot see another teacher's groups."""
+        db.add(models.AllowedEmail(email="tg@test.com"))
         await db.commit()
 
         client.post("/register", json={
-            "username": "teachergrp@test.com", "password": "Teacher123!",
-            "first_name": "T", "last_name": "Grp"
+            "username": "tg@test.com",
+            "password": "Teacher123!",
+            "first_name": "T",
+            "last_name": "G",
         })
-        teacher2 = (await db.execute(select(models.User).where(models.User.username == "teachergrp@test.com"))).scalars().first()
-        teacher2.role = "teacher"
+
+        result = await db.execute(
+            sa_select(models.User).where(models.User.username == "tg@test.com")
+        )
+        t2 = result.scalars().first()
+        t2.role = "teacher"
         await db.commit()
 
-        login2 = client.post("/login", data={"username": "teachergrp@test.com", "password": "Teacher123!"})
-        teacher2_token = login2.json()["access_token"]
+        login2 = client.post("/login", data={"username": "tg@test.com", "password": "Teacher123!"})
+        t2_token = login2.json()["access_token"]
 
-        client.post("/teacher/groups/", json={"name": "Чужая группа"},
-                    headers={"Authorization": f"Bearer {teacher2_token}"})
+        client.post(
+            "/teacher/groups/",
+            json={"name": "Other group"},
+            headers={"Authorization": f"Bearer {t2_token}"},
+        )
 
-        response = client.get("/teacher/groups/",
-                              headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        assert len(response.json()) == 0
+        resp = client.get("/teacher/groups/", headers=auth_header(teacher_user))
+        assert len(resp.json()) == 0
 
-    def test_add_students_to_group(self, client, teacher_user, student_user, link_teacher_student):
-        """✅ Добавление студентов в группу"""
-        group = client.post("/teacher/groups/", json={"name": "Группа"},
-                           headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
+    def test_add_students_to_group(
+        self, client: TestClient, teacher_user: dict, student_user: dict, link_teacher_student: Any
+    ):
+        """Add students to a group."""
+        g = client.post(
+            "/teacher/groups/",
+            json={"name": "Group"},
+            headers=auth_header(teacher_user),
+        ).json()
 
-        response = client.post(f"/teacher/groups/{group['id']}/students",
-                              json={"student_ids": [student_user["id"]]},
-                              headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        assert response.status_code == 200
-        assert response.json()["added"] == 1
+        resp = client.post(
+            f"/teacher/groups/{g['id']}/students",
+            json={"student_ids": [student_user["id"]]},
+            headers=auth_header(teacher_user),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["added"] == 1
 
-    def test_remove_student_from_group(self, client, teacher_user, student_user, link_teacher_student):
-        """✅ Удаление студента из группы"""
-        group = client.post("/teacher/groups/", json={"name": "Группа2"},
-                           headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
-        client.post(f"/teacher/groups/{group['id']}/students",
-                   json={"student_ids": [student_user["id"]]},
-                   headers={"Authorization": f"Bearer {teacher_user['token']}"})
+    def test_remove_student_from_group(
+        self, client: TestClient, teacher_user: dict, student_user: dict, link_teacher_student: Any
+    ):
+        """Remove a student from a group."""
+        g = client.post(
+            "/teacher/groups/",
+            json={"name": "Group2"},
+            headers=auth_header(teacher_user),
+        ).json()
+        client.post(
+            f"/teacher/groups/{g['id']}/students",
+            json={"student_ids": [student_user["id"]]},
+            headers=auth_header(teacher_user),
+        )
 
-        response = client.delete(f"/teacher/groups/{group['id']}/students/{student_user['id']}",
-                                headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        assert response.status_code == 200
+        resp = client.delete(
+            f"/teacher/groups/{g['id']}/students/{student_user['id']}",
+            headers=auth_header(teacher_user),
+        )
+        assert resp.status_code == 200
 
-    def test_get_group_students(self, client, teacher_user, student_user, link_teacher_student):
-        """✅ Список студентов группы"""
-        group = client.post("/teacher/groups/", json={"name": "Группа3"},
-                           headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
-        client.post(f"/teacher/groups/{group['id']}/students",
-                   json={"student_ids": [student_user["id"]]},
-                   headers={"Authorization": f"Bearer {teacher_user['token']}"})
+    def test_get_group_students(
+        self, client: TestClient, teacher_user: dict, student_user: dict, link_teacher_student: Any
+    ):
+        """Get students in a group."""
+        g = client.post(
+            "/teacher/groups/",
+            json={"name": "Group3"},
+            headers=auth_header(teacher_user),
+        ).json()
+        client.post(
+            f"/teacher/groups/{g['id']}/students",
+            json={"student_ids": [student_user["id"]]},
+            headers=auth_header(teacher_user),
+        )
 
-        response = client.get(f"/teacher/groups/{group['id']}/students",
-                             headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        assert response.status_code == 200
-        assert len(response.json()) == 1
-        assert response.json()[0]["id"] == student_user["id"]
+        resp = client.get(
+            f"/teacher/groups/{g['id']}/students",
+            headers=auth_header(teacher_user),
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
+        assert resp.json()[0]["id"] == student_user["id"]
 
 
-# ==================== 4. СТУДЕНТЫ И НАЗНАЧЕНИЯ ====================
+# ==================== 4. STUDENTS & ASSIGNMENTS ====================
+
 
 class TestTeacherStudents:
-    """Тесты управления студентами и назначениями"""
+    """Tests for student management and test assignments."""
 
-    def test_get_my_students(self, client, teacher_user, link_teacher_student, student_user):
-        """✅ Список студентов"""
-        response = client.get(
-            "/teacher/students",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
-        )
-        assert response.status_code == 200
-        student_ids = [s["id"] for s in response.json()]
+    def test_get_my_students(
+        self, client: TestClient, teacher_user: dict, student_user: dict, link_teacher_student: Any
+    ):
+        """Get linked students."""
+        resp = client.get("/teacher/students", headers=auth_header(teacher_user))
+        assert resp.status_code == 200
+        student_ids = [s["id"] for s in resp.json()]
         assert student_user["id"] in student_ids
 
-    def test_student_profile(self, client, teacher_user, link_teacher_student, student_user):
-        """✅ Профиль студента"""
-        response = client.get(
+    def test_student_profile(
+        self, client: TestClient, teacher_user: dict, student_user: dict, link_teacher_student: Any
+    ):
+        """View student profile."""
+        resp = client.get(
             f"/teacher/students-profile/{student_user['id']}",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 200
-        assert response.json()["user"]["id"] == student_user["id"]
+        assert resp.status_code == 200
+        assert resp.json()["user"]["id"] == student_user["id"]
 
-    def test_assign_test(self, client, teacher_user, student_user, link_teacher_student, sample_task):
-        """✅ Назначение теста студенту"""
-        test = client.post("/teacher/tests", json={
-            "title": "Назнач", "target_class": "10", "target_topic": "1",
-            "is_autocompile": False, "task_ids": [sample_task]
-        }, headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
+    def test_assign_test(
+        self,
+        client: TestClient,
+        teacher_user: dict,
+        student_user: dict,
+        link_teacher_student: Any,
+        sample_task: int,
+    ):
+        """Assign a test to a student."""
+        t = client.post(
+            "/teacher/tests",
+            json={
+                "title": "Assign",
+                "target_class": "10",
+                "target_topic": "1",
+                "is_autocompile": False,
+                "task_ids": [sample_task],
+            },
+            headers=auth_header(teacher_user),
+        ).json()
 
-        response = client.post("/teacher/assign-test", json={
-            "test_id": test["id"], "user_ids": [student_user["id"]]
-        }, headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        assert response.status_code == 200
-        assert len(response.json()) == 1
+        resp = client.post(
+            "/teacher/assign-test",
+            json={"test_id": t["id"], "user_ids": [student_user["id"]]},
+            headers=auth_header(teacher_user),
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
 
-    def test_assign_test_twice(self, client, teacher_user, student_user, link_teacher_student, sample_task):
-        """🛡️ Повторное назначение — не дублируется"""
-        test = client.post("/teacher/tests", json={
-            "title": "Дубль", "target_class": "10", "target_topic": "1",
-            "is_autocompile": False, "task_ids": [sample_task]
-        }, headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
+    def test_assign_test_twice_no_duplicate(
+        self,
+        client: TestClient,
+        teacher_user: dict,
+        student_user: dict,
+        link_teacher_student: Any,
+        sample_task: int,
+    ):
+        """Assigning a test twice does not duplicate."""
+        t = client.post(
+            "/teacher/tests",
+            json={
+                "title": "Dup",
+                "target_class": "10",
+                "target_topic": "1",
+                "is_autocompile": False,
+                "task_ids": [sample_task],
+            },
+            headers=auth_header(teacher_user),
+        ).json()
 
-        client.post("/teacher/assign-test", json={"test_id": test["id"], "user_ids": [student_user["id"]]},
-                    headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        response = client.post("/teacher/assign-test", json={"test_id": test["id"], "user_ids": [student_user["id"]]},
-                              headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        assert len(response.json()) == 1  # по-прежнему одна запись
+        client.post(
+            "/teacher/assign-test",
+            json={"test_id": t["id"], "user_ids": [student_user["id"]]},
+            headers=auth_header(teacher_user),
+        )
+        resp = client.post(
+            "/teacher/assign-test",
+            json={"test_id": t["id"], "user_ids": [student_user["id"]]},
+            headers=auth_header(teacher_user),
+        )
+        assert len(resp.json()) == 1
 
-    def test_assign_test_to_group(self, client, teacher_user, student_user, link_teacher_student, sample_task):
-        """✅ Назначение теста всей группе"""
-        group = client.post("/teacher/groups/", json={"name": "Группа-тест"},
-                           headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
-        client.post(f"/teacher/groups/{group['id']}/students",
-                   json={"student_ids": [student_user["id"]]},
-                   headers={"Authorization": f"Bearer {teacher_user['token']}"})
+    def test_assign_test_to_group(
+        self,
+        client: TestClient,
+        teacher_user: dict,
+        student_user: dict,
+        link_teacher_student: Any,
+        sample_task: int,
+    ):
+        """Assign a test to an entire group."""
+        g = client.post(
+            "/teacher/groups/",
+            json={"name": "TestGroup"},
+            headers=auth_header(teacher_user),
+        ).json()
+        client.post(
+            f"/teacher/groups/{g['id']}/students",
+            json={"student_ids": [student_user["id"]]},
+            headers=auth_header(teacher_user),
+        )
 
-        test = client.post("/teacher/tests", json={
-            "title": "Для группы", "target_class": "10", "target_topic": "1",
-            "is_autocompile": False, "task_ids": [sample_task]
-        }, headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
+        t = client.post(
+            "/teacher/tests",
+            json={
+                "title": "ForGroup",
+                "target_class": "10",
+                "target_topic": "1",
+                "is_autocompile": False,
+                "task_ids": [sample_task],
+            },
+            headers=auth_header(teacher_user),
+        ).json()
 
-        response = client.post("/teacher/assign-test-to-group", json={
-            "group_id": group["id"], "test_id": test["id"]
-        }, headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        assert response.status_code == 200
-        assert response.json()["assigned_count"] == 1
+        resp = client.post(
+            "/teacher/assign-test-to-group",
+            json={"group_id": g["id"], "test_id": t["id"]},
+            headers=auth_header(teacher_user),
+        )
+        assert resp.status_code == 200
+        assert resp.json()["assigned_count"] == 1
 
-    def test_get_test_assignments(self, client, teacher_user, student_user, link_teacher_student, sample_task):
-        """✅ Назначения для теста"""
-        test = client.post("/teacher/tests", json={
-            "title": "Проверка", "target_class": "10", "target_topic": "1",
-            "is_autocompile": False, "task_ids": [sample_task]
-        }, headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
-        client.post("/teacher/assign-test", json={"test_id": test["id"], "user_ids": [student_user["id"]]},
-                    headers={"Authorization": f"Bearer {teacher_user['token']}"})
+    def test_get_test_assignments(
+        self,
+        client: TestClient,
+        teacher_user: dict,
+        student_user: dict,
+        link_teacher_student: Any,
+        sample_task: int,
+    ):
+        """Get assignments for a test."""
+        t = client.post(
+            "/teacher/tests",
+            json={
+                "title": "Check",
+                "target_class": "10",
+                "target_topic": "1",
+                "is_autocompile": False,
+                "task_ids": [sample_task],
+            },
+            headers=auth_header(teacher_user),
+        ).json()
+        client.post(
+            "/teacher/assign-test",
+            json={"test_id": t["id"], "user_ids": [student_user["id"]]},
+            headers=auth_header(teacher_user),
+        )
 
-        response = client.get(f"/teacher/test/{test['id']}/assignments",
-                             headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        assert response.status_code == 200
-        assert len(response.json()) >= 1
+        resp = client.get(
+            f"/teacher/test/{t['id']}/assignments",
+            headers=auth_header(teacher_user),
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()) >= 1
 
-    def test_get_student_assignments(self, client, teacher_user, student_user, link_teacher_student, sample_task):
-        """✅ Назначения студента"""
-        test = client.post("/teacher/tests", json={
-            "title": "Студент", "target_class": "10", "target_topic": "1",
-            "is_autocompile": False, "task_ids": [sample_task]
-        }, headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
-        client.post("/teacher/assign-test", json={"test_id": test["id"], "user_ids": [student_user["id"]]},
-                    headers={"Authorization": f"Bearer {teacher_user['token']}"})
+    def test_get_student_assignments(
+        self,
+        client: TestClient,
+        teacher_user: dict,
+        student_user: dict,
+        link_teacher_student: Any,
+        sample_task: int,
+    ):
+        """Get assignments for a student."""
+        t = client.post(
+            "/teacher/tests",
+            json={
+                "title": "Student",
+                "target_class": "10",
+                "target_topic": "1",
+                "is_autocompile": False,
+                "task_ids": [sample_task],
+            },
+            headers=auth_header(teacher_user),
+        ).json()
+        client.post(
+            "/teacher/assign-test",
+            json={"test_id": t["id"], "user_ids": [student_user["id"]]},
+            headers=auth_header(teacher_user),
+        )
 
-        response = client.get(f"/teacher/student/{student_user['id']}/assignments",
-                             headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        assert response.status_code == 200
-        assert len(response.json()) >= 1
+        resp = client.get(
+            f"/teacher/student/{student_user['id']}/assignments",
+            headers=auth_header(teacher_user),
+        )
+        assert resp.status_code == 200
+        assert len(resp.json()) >= 1
 
-    def test_delete_assignment(self, client, teacher_user, student_user, link_teacher_student, sample_task):
-        """✅ Удаление назначения"""
-        test = client.post("/teacher/tests", json={
-            "title": "Удалить название", "target_class": "10", "target_topic": "1",
-            "is_autocompile": False, "task_ids": [sample_task]
-        }, headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
-        resp = client.post("/teacher/assign-test", json={"test_id": test["id"], "user_ids": [student_user["id"]]},
-                          headers={"Authorization": f"Bearer {teacher_user['token']}"})
-        assignment_id = resp.json()[0]["id"] if isinstance(resp.json(), list) else \
-                        resp.json()["id"]
+    def test_delete_assignment(
+        self,
+        client: TestClient,
+        teacher_user: dict,
+        student_user: dict,
+        link_teacher_student: Any,
+        sample_task: int,
+    ):
+        """Delete an assignment."""
+        t = client.post(
+            "/teacher/tests",
+            json={
+                "title": "DelAssign",
+                "target_class": "10",
+                "target_topic": "1",
+                "is_autocompile": False,
+                "task_ids": [sample_task],
+            },
+            headers=auth_header(teacher_user),
+        ).json()
+        resp = client.post(
+            "/teacher/assign-test",
+            json={"test_id": t["id"], "user_ids": [student_user["id"]]},
+            headers=auth_header(teacher_user),
+        )
+        assignment_id = resp.json()[0]["id"] if isinstance(resp.json(), list) else resp.json()["id"]
 
-        del_resp = client.delete(f"/teacher/assignments/{assignment_id}",
-                                headers={"Authorization": f"Bearer {teacher_user['token']}"})
+        del_resp = client.delete(
+            f"/teacher/assignments/{assignment_id}",
+            headers=auth_header(teacher_user),
+        )
         assert del_resp.status_code == 200
 
 
-# ==================== 5. РЕЗУЛЬТАТЫ ====================
+# ==================== 5. RESULTS ====================
+
 
 class TestTeacherResults:
-    """Тесты просмотра результатов"""
+    """Tests for viewing student results."""
 
-    def test_student_history_empty(self, client, teacher_user, student_user, link_teacher_student):
-        """✅ Пустая история студента"""
-        response = client.get(
+    def test_student_history_empty(
+        self, client: TestClient, teacher_user: dict, student_user: dict, link_teacher_student: Any
+    ):
+        """Empty student history."""
+        resp = client.get(
             f"/teacher/students-history/{student_user['id']}",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 200
-        assert response.json() == []
+        assert resp.status_code == 200
+        assert resp.json() == []
 
-    def test_student_history_after_submission(self, client, teacher_user, student_user, link_teacher_student, sample_task):
-        """✅ История после прохождения теста"""
-        test = client.post("/teacher/tests", json={
-            "title": "Для истории", "target_class": "10", "target_topic": "1",
-            "is_autocompile": False, "task_ids": [sample_task]
-        }, headers={"Authorization": f"Bearer {teacher_user['token']}"}).json()
+    def test_student_history_after_submission(
+        self,
+        client: TestClient,
+        teacher_user: dict,
+        student_user: dict,
+        link_teacher_student: Any,
+        sample_task: int,
+    ):
+        """History after test submission."""
+        t = client.post(
+            "/teacher/tests",
+            json={
+                "title": "HistoryTest",
+                "target_class": "10",
+                "target_topic": "1",
+                "is_autocompile": False,
+                "task_ids": [sample_task],
+            },
+            headers=auth_header(teacher_user),
+        ).json()
 
-        client.post("/teacher/assign-test", json={"test_id": test["id"], "user_ids": [student_user["id"]]},
-                    headers={"Authorization": f"Bearer {teacher_user['token']}"})
+        client.post(
+            "/teacher/assign-test",
+            json={"test_id": t["id"], "user_ids": [student_user["id"]]},
+            headers=auth_header(teacher_user),
+        )
 
-        client.post(f"/student/tests/{test['id']}/submit", json=[
-            {"task_id": sample_task, "user_answer": "2"}
-        ], headers={"Authorization": f"Bearer {student_user['token']}"})
+        client.post(
+            f"/student/tests/{t['id']}/submit",
+            json=[{"task_id": sample_task, "user_answer": "2"}],
+            headers=auth_header(student_user),
+        )
 
-        response = client.get(
+        resp = client.get(
             f"/teacher/students-history/{student_user['id']}",
-            headers={"Authorization": f"Bearer {teacher_user['token']}"}
+            headers=auth_header(teacher_user),
         )
-        assert response.status_code == 200
-        assert len(response.json()) == 1
-        assert response.json()[0]["test_title"] == "Для истории"
+        assert resp.status_code == 200
+        assert len(resp.json()) == 1
+        assert resp.json()[0]["test_title"] == "HistoryTest"
