@@ -201,6 +201,62 @@ class AdminService:
         await self.task_repo.delete_task(task_id)
         await self.db.commit()
         return MessageResponse(message=f"Задание с ID {task_id} и связанные данные успешно удалены")
+
+    # ==================== ПАКЕТНЫЕ ОПЕРАЦИИ С ЗАДАНИЯМИ ====================
+
+    async def create_tasks_batch(self, tasks_data: list[dict]) -> dict:
+        """Пакетное создание заданий"""
+        created = await self.task_repo.bulk_create_tasks(tasks_data)
+        await self.db.commit()
+        return {
+            "created": created,
+            "total": len(created),
+        }
+
+    async def update_tasks_batch(self, tasks_data: list[dict]) -> dict:
+        """Пакетное обновление заданий"""
+        # Группируем обновления по id
+        updates: dict[int, dict] = {}
+        all_ids = []
+        for item in tasks_data:
+            task_id = item.pop("id")
+            all_ids.append(task_id)
+            # Убираем None-значения, чтобы не перезаписывать поля
+            updates[task_id] = {k: v for k, v in item.items() if v is not None}
+
+        # Получаем существующие задания
+        existing = await self.task_repo.get_tasks_by_ids(all_ids)
+        existing_ids = {t.id for t in existing}
+        not_found = [tid for tid in all_ids if tid not in existing_ids]
+
+        # Обновляем
+        updated = await self.task_repo.bulk_update_tasks(updates)
+
+        # Пересчитываем ответы для каждого обновлённого задания
+        for task in updated:
+            await self._recompute_answers_for_task(task)
+
+        await self.db.commit()
+        return {
+            "updated": updated,
+            "not_found": not_found,
+            "total_updated": len(updated),
+        }
+
+    async def delete_tasks_batch(self, task_ids: list[int]) -> dict:
+        """Пакетное удаление заданий"""
+        # Проверяем существование
+        existing = await self.task_repo.get_tasks_by_ids(task_ids)
+        existing_ids = {t.id for t in existing}
+        not_found = [tid for tid in task_ids if tid not in existing_ids]
+
+        deleted = await self.task_repo.bulk_delete_tasks(list(existing_ids))
+        await self.db.commit()
+        return {
+            "deleted": deleted,
+            "not_found": not_found,
+            "total_deleted": len(deleted),
+        }
     
     async def get_detailed_result(self, result_id: int):
         result = await self.result_repo.get_result_by_id(result_id)

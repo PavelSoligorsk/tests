@@ -17,7 +17,13 @@ from dto_schemas.assignment import (
 )
 from dto_schemas.theory import TheoryBase, TheoryCreate, TheoryUpdate, TheoryResponse
 from dto_schemas.ai import AITestRequest, TheoryQuestionRequest
-from dto_schemas.admin import ChangeUserRoleRequest, SendTaskToTgRequest, AllowedEmailItemResponse, RebuildTestsResponse, RecomputeAnswersResponse
+from dto_schemas.admin import (
+    ChangeUserRoleRequest, SendTaskToTgRequest, AllowedEmailItemResponse,
+    RebuildTestsResponse, RecomputeAnswersResponse,
+    BatchTaskCreateItem, BatchTaskCreateRequest, BatchTaskCreateResponse,
+    BatchTaskUpdateItem, BatchTaskUpdateRequest, BatchTaskUpdateResponse,
+    BatchTaskDeleteRequest, BatchTaskDeleteResponse,
+)
 from dto_schemas.cached import (
     TaskShortResponse,
     TestSummaryResponse,
@@ -80,6 +86,9 @@ __all__ = [
     "AITestRequest", "TheoryQuestionRequest",
     "ChangeUserRoleRequest", "SendTaskToTgRequest",
     "AllowedEmailItemResponse", "RebuildTestsResponse", "RecomputeAnswersResponse",
+    "BatchTaskCreateItem", "BatchTaskCreateRequest", "BatchTaskCreateResponse",
+    "BatchTaskUpdateItem", "BatchTaskUpdateRequest", "BatchTaskUpdateResponse",
+    "BatchTaskDeleteRequest", "BatchTaskDeleteResponse",
     "TaskShortResponse", "TestSummaryResponse", "StudentHistoryItemResponse",
     "DifficultyStatResponse", "ResultUserResponse", "DetailedResultDetailResponse",
     "DetailedResultResponse", "StudentAssignmentItemResponse", "StudentAssignmentMetaItemResponse",

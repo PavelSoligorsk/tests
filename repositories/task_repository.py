@@ -169,6 +169,54 @@ class TaskRepository:
         tasks = result.scalars().all()
         return {task.id: task for task in tasks}
 
+    async def bulk_create_tasks(self, tasks_data: list[dict]) -> list[Task]:
+        """Пакетное создание заданий"""
+        tasks = [Task(**data) for data in tasks_data]
+        self.db.add_all(tasks)
+        await self.db.flush()
+        for task in tasks:
+            await self.db.refresh(task)
+        return tasks
+
+    async def bulk_update_tasks(self, updates: dict[int, dict]) -> list[Task]:
+        """Пакетное обновление заданий. updates = {task_id: {field: value, ...}}"""
+        if not updates:
+            return []
+        task_ids = list(updates.keys())
+        result = await self.db.execute(
+            select(Task).where(Task.id.in_(task_ids))
+        )
+        existing = {t.id: t for t in result.scalars().all()}
+        updated = []
+        for task_id, fields in updates.items():
+            task = existing.get(task_id)
+            if task:
+                for key, value in fields.items():
+                    setattr(task, key, value)
+                updated.append(task)
+        await self.db.flush()
+        return updated
+
+    async def bulk_delete_tasks(self, task_ids: list[int]) -> list[int]:
+        """Пакетное удаление заданий и связанных данных. Возвращает ID удалённых."""
+        if not task_ids:
+            return []
+        # Удаляем связанные ответы пользователей
+        await self.db.execute(
+            delete(UserAnswer).where(UserAnswer.task_id.in_(task_ids))
+        )
+        # Удаляем связи тест-задание
+        await self.db.execute(
+            delete(TestTaskAssociation).where(TestTaskAssociation.task_id.in_(task_ids))
+        )
+        # Удаляем сами задания
+        result = await self.db.execute(
+            delete(Task).where(Task.id.in_(task_ids)).returning(Task.id)
+        )
+        deleted_ids = [row[0] for row in result.fetchall()]
+        await self.db.flush()
+        return deleted_ids
+
     async def get_tasks_by_class_and_topic(self, task_class, topic_number):
         """Получить задания по классу и теме"""
         result = await self.db.execute(

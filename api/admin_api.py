@@ -10,6 +10,9 @@ from dto_schemas import (
     ChangeUserRoleRequest, SendTaskToTgRequest,
     AllowedEmailItemResponse, RebuildTestsResponse, MessageResponse,
     TeacherHistoryItemResponse, DetailedResultResponse,
+    BatchTaskCreateRequest, BatchTaskCreateResponse,
+    BatchTaskUpdateRequest, BatchTaskUpdateResponse,
+    BatchTaskDeleteRequest, BatchTaskDeleteResponse,
 )
 from core import auth
 from core.cache import invalidate_cache_pattern
@@ -165,6 +168,47 @@ async def delete_task(
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+# ==================== ПАКЕТНЫЕ ОПЕРАЦИИ С ЗАДАНИЯМИ ====================
+
+
+@router.post("/tasks/batch", response_model=BatchTaskCreateResponse)
+async def create_tasks_batch(
+    payload: BatchTaskCreateRequest,
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """Пакетное создание заданий (до 500 за раз)"""
+    tasks_data = [t.model_dump() for t in payload.tasks]
+    result = await service.create_tasks_batch(tasks_data)
+    _invalidate_task_caches()
+    return result
+
+
+@router.put("/tasks/batch", response_model=BatchTaskUpdateResponse)
+async def update_tasks_batch(
+    payload: BatchTaskUpdateRequest,
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """Пакетное обновление заданий (до 500 за раз)"""
+    tasks_data = [t.model_dump(exclude_unset=True) for t in payload.tasks]
+    result = await service.update_tasks_batch(tasks_data)
+    _invalidate_task_caches()
+    return result
+
+
+@router.delete("/tasks/batch", response_model=BatchTaskDeleteResponse)
+async def delete_tasks_batch(
+    payload: BatchTaskDeleteRequest,
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """Пакетное удаление заданий (до 500 за раз)"""
+    result = await service.delete_tasks_batch(payload.ids)
+    _invalidate_task_caches()
+    return result
 
 
 @router.get("/results/{result_id}", response_model=DetailedResultResponse)
