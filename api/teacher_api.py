@@ -688,4 +688,4 @@ def get_group_students(
             group_id=group_id
         )
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=404, detail=str(e ))
