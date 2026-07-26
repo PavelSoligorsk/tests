@@ -812,29 +812,35 @@ class TeacherService:
         task_count: int,
         difficulty: Optional[str] = None,
         student_ids: Optional[list[int]] = None,
-        group_id: Optional[int] = None,
+        group_ids: Optional[list[int]] = None,
+        recent_weeks: float = 1.5,
     ):
-        """Сгенерировать AI-тест для указанных учеников (или группы)."""
+        """Сгенерировать AI-тест для указанных учеников (или групп)."""
 
         # --- Собираем ID учеников ---
-        if group_id:
-            group = await self.group_repo.get_group_by_id(group_id, teacher_id)
-            if not group:
-                raise ValueError("Группа не найдена")
-            target_student_ids = [s.id for s in group.students]
-        elif student_ids:
-            # Проверяем, что все студенты принадлежат учителю
+        target_student_ids: list[int] = []
+
+        if group_ids:
+            for gid in group_ids:
+                group = await self.group_repo.get_group_by_id(gid, teacher_id)
+                if not group:
+                    raise ValueError(f"Группа {gid} не найдена")
+                for s in group.students:
+                    if s.id not in target_student_ids:
+                        target_student_ids.append(s.id)
+
+        if student_ids:
             not_linked = await self.teacher_student_repo.check_students_belong_to_teacher(
                 student_ids, teacher_id
             )
             if not_linked:
                 raise ValueError(f"Студенты {not_linked} не привязаны к вам")
-            target_student_ids = student_ids
-        else:
-            raise ValueError("Укажите student_ids или group_id")
+            for sid in student_ids:
+                if sid not in target_student_ids:
+                    target_student_ids.append(sid)
 
         if not target_student_ids:
-            raise ValueError("Нет учеников для создания теста")
+            raise ValueError("Укажите student_ids или group_ids")
 
         if task_count < 1 or task_count > 50:
             raise ValueError("Количество заданий должно быть от 1 до 50")
@@ -858,8 +864,8 @@ class TeacherService:
         }
         target_difficulties = difficulty_map.get(difficulty, [1, 2, 3, 4, 5]) if difficulty else [1, 2, 3, 4, 5]
 
-        # --- Шаг 3: Получаем недавно решённые задачи (последние 1.5 недели) ---
-        recent_cutoff = datetime.datetime.utcnow() - datetime.timedelta(weeks=1.5)
+        # --- Шаг 3: Получаем недавно решённые задачи ---
+        recent_cutoff = datetime.datetime.utcnow() - datetime.timedelta(weeks=recent_weeks)
         recent_task_ids: set[int] = set()
         for sid in target_student_ids:
             results = await self.result_repo.get_user_history(sid)

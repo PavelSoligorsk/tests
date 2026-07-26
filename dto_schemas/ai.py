@@ -24,6 +24,7 @@ class TeacherAITestRequest(BaseModel):
     task_count: int = Field(default=10, ge=1, le=50)
     difficulty: Optional[str] = None
     student_ids: Optional[list[int]] = None
-    group_id: Optional[int] = None
+    group_ids: Optional[list[int]] = None
+    recent_weeks: Optional[float] = Field(default=1.5, ge=0.0)
 
     model_config = ConfigDict(from_attributes=True)
