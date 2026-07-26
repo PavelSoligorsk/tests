@@ -12,6 +12,7 @@ from dto_schemas import (
     TeacherStudentProfileResponse, TeacherHistoryItemResponse,
     GroupAssignResponse, AddStudentsToGroupResponse, MessageResponse,
     TeacherTaskMetaResponse, TeacherTaskMetaByTopicSectionResponse,
+    TeacherAITestRequest,
 )
 from core import auth
 from core.database import get_db
@@ -225,6 +226,37 @@ async def create_test(
         return result
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/generate-test", response_model=TestResponse)
+async def generate_ai_test(
+    payload: TeacherAITestRequest,
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: User = Depends(check_teacher)
+):
+    """Сгенерировать AI-тест для учеников или группы."""
+    try:
+        result = await service.generate_ai_test(
+            teacher_id=current_teacher.id,
+            prompt=payload.prompt,
+            task_count=payload.task_count,
+            difficulty=payload.difficulty,
+            student_ids=payload.student_ids,
+            group_id=payload.group_id,
+        )
+
+        # Инвалидируем кеш
+        invalidate_user_cache(current_teacher.id, "teacher_tests")
+        invalidate_cache_pattern("available_tests")
+        invalidate_cache_pattern("available_tests:*")
+        invalidate_cache_pattern("tests_meta")
+        invalidate_cache_pattern("tests_meta:*")
+
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.put("/tests/{test_id}", response_model=TestResponse)

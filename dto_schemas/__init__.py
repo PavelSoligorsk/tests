@@ -16,7 +16,7 @@ from dto_schemas.assignment import (
     AddStudentsToGroupRequest
 )
 from dto_schemas.theory import TheoryBase, TheoryCreate, TheoryUpdate, TheoryResponse
-from dto_schemas.ai import AITestRequest, TheoryQuestionRequest
+from dto_schemas.ai import AITestRequest, TeacherAITestRequest, TheoryQuestionRequest
 from dto_schemas.admin import (
     ChangeUserRoleRequest, SendTaskToTgRequest, AllowedEmailItemResponse,
     RebuildTestsResponse, RecomputeAnswersResponse,
@@ -83,7 +83,7 @@ __all__ = [
     "TestAssignmentCreate", "TestAssignmentResponse", "StudentAssignmentResponse", "TestGroupAssignment",
     "GroupCreateRequest", "GroupUpdateRequest", "AddStudentsToGroupRequest",
     "TheoryBase", "TheoryCreate", "TheoryUpdate", "TheoryResponse",
-    "AITestRequest", "TheoryQuestionRequest",
+    "AITestRequest", "TeacherAITestRequest", "TheoryQuestionRequest",
     "ChangeUserRoleRequest", "SendTaskToTgRequest",
     "AllowedEmailItemResponse", "RebuildTestsResponse", "RecomputeAnswersResponse",
     "BatchTaskCreateItem", "BatchTaskCreateRequest", "BatchTaskCreateResponse",

@@ -1,4 +1,6 @@
 import datetime
+import re
+import random
 from typing import List, Optional
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -10,6 +12,7 @@ from repositories.result_repository import ResultRepository
 from repositories.assignment_repository import AssignmentRepository
 from repositories.group_repository import GroupRepository
 from repositories.teacher_student_repository import TeacherStudentRepository
+from services.ai_service import AIService
 
 from core.models import Test, TestTaskAssociation
 
@@ -45,6 +48,7 @@ class TeacherService:
         self.assignment_repo = AssignmentRepository(db)
         self.group_repo = GroupRepository(db)
         self.teacher_student_repo = TeacherStudentRepository(db)
+        self.ai_service = AIService()
         self.db = db
     
     # ==================== БАНК ЗАДАНИЙ ====================
@@ -799,7 +803,269 @@ class TeacherService:
         
         return TeacherTaskMetaByTopicSectionResponse(result)
 
+    # ==================== AI ГЕНЕРАЦИЯ ТЕСТОВ ====================
 
+    async def generate_ai_test(
+        self,
+        teacher_id: int,
+        prompt: str,
+        task_count: int,
+        difficulty: Optional[str] = None,
+        student_ids: Optional[list[int]] = None,
+        group_id: Optional[int] = None,
+    ):
+        """Сгенерировать AI-тест для указанных учеников (или группы)."""
+
+        # --- Собираем ID учеников ---
+        if group_id:
+            group = await self.group_repo.get_group_by_id(group_id, teacher_id)
+            if not group:
+                raise ValueError("Группа не найдена")
+            target_student_ids = [s.id for s in group.students]
+        elif student_ids:
+            # Проверяем, что все студенты принадлежат учителю
+            not_linked = await self.teacher_student_repo.check_students_belong_to_teacher(
+                student_ids, teacher_id
+            )
+            if not_linked:
+                raise ValueError(f"Студенты {not_linked} не привязаны к вам")
+            target_student_ids = student_ids
+        else:
+            raise ValueError("Укажите student_ids или group_id")
+
+        if not target_student_ids:
+            raise ValueError("Нет учеников для создания теста")
+
+        if task_count < 1 or task_count > 50:
+            raise ValueError("Количество заданий должно быть от 1 до 50")
+
+        # --- Шаг 1: AI классифицирует темы ---
+        structure_data = await self.task_repo.get_tasks_structure()
+        topics_structure = {}
+        for topic, section in structure_data:
+            if topic not in topics_structure:
+                topics_structure[topic] = set()
+            if section:
+                topics_structure[topic].add(section)
+
+        detected_topics = await self.ai_service.classify_topics(prompt, topics_structure)
+
+        # --- Шаг 2: Определяем трудность ---
+        difficulty_map = {
+            "easy": [1, 2],
+            "medium": [2, 3, 4],
+            "hard": [4, 5],
+        }
+        target_difficulties = difficulty_map.get(difficulty, [1, 2, 3, 4, 5]) if difficulty else [1, 2, 3, 4, 5]
+
+        # --- Шаг 3: Получаем недавно решённые задачи (последние 1.5 недели) ---
+        recent_cutoff = datetime.datetime.utcnow() - datetime.timedelta(weeks=1.5)
+        recent_task_ids: set[int] = set()
+        for sid in target_student_ids:
+            results = await self.result_repo.get_user_history(sid)
+            for r in results:
+                if r.completed_at and r.completed_at > recent_cutoff:
+                    answers = await self.result_repo.get_user_answers_for_result(r.id)
+                    for ans in answers:
+                        recent_task_ids.add(ans.task_id)
+
+        # --- Шаг 4: Подбираем задания ---
+        if not detected_topics:
+            # Случайный подбор без недавних
+            return await self._build_ai_test(
+                teacher_id, prompt, task_count, target_difficulties,
+                recent_task_ids, difficulty,
+            )
+
+        topic_names = []
+        sections_map = {}
+        for item in detected_topics:
+            topic_name = item.get("name")
+            sections = item.get("sections", [])
+            if topic_name:
+                topic_names.append(topic_name)
+                sections_map[topic_name] = sections
+
+        # Получаем задания по темам
+        if len(topic_names) >= 3:
+            filtered_tasks = await self._get_tasks_distributed(
+                topic_names, sections_map, target_difficulties, task_count,
+            )
+        else:
+            filtered_tasks = await self.task_repo.get_tasks_by_topics(
+                topic_names, sections_map, target_difficulties,
+            )
+
+        # Fallback по ключевым словам
+        if not filtered_tasks:
+            keywords = [w for w in re.sub(r'[^\w\s]', '', prompt).split() if len(w) > 3]
+            if keywords:
+                filtered_tasks = await self.task_repo.get_tasks_by_keywords(keywords, target_difficulties)
+
+        # Финальный fallback
+        if not filtered_tasks:
+            filtered_tasks = await self.task_repo.get_random_tasks(300, None, target_difficulties)
+
+        if not filtered_tasks:
+            # Создаём тест без заданий (как fallback при пустой базе)
+            return await self._build_ai_test(
+                teacher_id, prompt, task_count, target_difficulties,
+                recent_task_ids, difficulty,
+            )
+
+        # Исключаем недавние
+        filtered_tasks = [t for t in filtered_tasks if t.id not in recent_task_ids]
+
+        if not filtered_tasks:
+            raise ValueError("Нет заданий вне недавно пройденных. Попробуйте другую тему.")
+
+        # --- Шаг 5: AI выбирает лучшие задания ---
+        tasks_for_ai = []
+        topic_stats = {}
+        for task in filtered_tasks:
+            tasks_for_ai.append(
+                f"ID:{task.id} | Тема:{task.topic or 'Н/Д'} | Раздел:{task.section or 'Н/Д'} | "
+                f"Сложность:{task.difficulty or 'Н/Д'} | Тип:{'открытый' if task.is_open_answer else 'закрытый'} | "
+                f"Содержание:{(task.content or '')[:300]}..."
+            )
+            t = task.topic or "Н/Д"
+            topic_stats[t] = topic_stats.get(t, 0) + 1
+
+        selected_ids = await self.ai_service.select_tasks(
+            prompt, tasks_for_ai, task_count,
+            difficulty or "Любая",
+            len(topic_names), topic_stats,
+        )
+
+        if selected_ids:
+            selected_tasks = await self.task_repo.get_tasks_by_ids(selected_ids)
+            if len(selected_tasks) < task_count:
+                remaining_ids = [t.id for t in filtered_tasks if t.id not in selected_ids]
+                if remaining_ids:
+                    needed = task_count - len(selected_tasks)
+                    extra_ids = self._distribute_remaining(filtered_tasks, remaining_ids, needed)
+                    if extra_ids:
+                        extra_tasks = await self.task_repo.get_tasks_by_ids(extra_ids)
+                        selected_tasks.extend(extra_tasks)
+        else:
+            selected_tasks = random.sample(filtered_tasks, min(task_count, len(filtered_tasks)))
+
+        sorted_tasks = self._sort_for_test(selected_tasks)
+
+        # --- Шаг 6: Создаём тест ---
+        topics_used = list(set([t.topic for t in selected_tasks if t.topic]))
+        title_topics = ", ".join(topics_used[:3])
+        if len(topics_used) > 3:
+            title_topics += f" и ещё {len(topics_used) - 3} тем"
+        if not title_topics:
+            title_topics = "Умный подбор"
+
+        test_data = {
+            "title": f"AI: {title_topics}",
+            "target_class": None,
+            "target_topic": prompt[:47],
+            "is_autocompile": False,
+            "is_ai_generated": True,
+            "creator_id": teacher_id,
+            "is_active": True,
+        }
+
+        return await self.test_repo.create_test(test_data, sorted_tasks)
+
+    async def _build_ai_test(
+        self,
+        creator_id: int,
+        prompt: str,
+        task_count: int,
+        target_difficulties: list[int],
+        recent_task_ids: set[int],
+        difficulty: Optional[str] = None,
+    ):
+        """Создать AI тест случайным подбором (без AI-классификации тем)."""
+        open_count = random.randint(0, task_count)
+        closed_count = task_count - open_count
+
+        open_tasks = await self.task_repo.get_random_tasks(open_count, True, target_difficulties) if open_count > 0 else []
+        closed_tasks = await self.task_repo.get_random_tasks(closed_count, False, target_difficulties) if closed_count > 0 else []
+
+        selected = closed_tasks + open_tasks
+        selected = [t for t in selected if t.id not in recent_task_ids]
+
+        if len(selected) < task_count:
+            remaining = task_count - len(selected)
+            existing_ids = [t.id for t in selected]
+            extra = await self.task_repo.get_random_tasks(remaining, None, target_difficulties)
+            extra = [t for t in extra if t.id not in existing_ids and t.id not in recent_task_ids]
+            selected.extend(extra)
+
+        sorted_tasks = self._sort_for_test(selected)
+
+        test_data = {
+            "title": f"AI: Случайный тест ({difficulty or 'Любая'})",
+            "target_class": None,
+            "target_topic": prompt[:255],
+            "is_autocompile": False,
+            "is_ai_generated": True,
+            "creator_id": creator_id,
+            "is_active": True,
+        }
+
+        return await self.test_repo.create_test(test_data, sorted_tasks)
+
+    async def _get_tasks_distributed(
+        self,
+        topics: list[str],
+        sections_map: dict,
+        difficulties: list[int],
+        task_count: int,
+    ):
+        """Получить задания с распределением по темам."""
+        MAX_PER_TOPIC = 100
+        BUFFER_MULTIPLIER = 3
+        total_needed = task_count * BUFFER_MULTIPLIER
+        per_topic_quota = min(MAX_PER_TOPIC, max(10, total_needed // len(topics)))
+
+        all_tasks = []
+        all_ids = set()
+        for topic, sections in sections_map.items():
+            topic_tasks = await self.task_repo.get_tasks_by_topics(
+                [topic], {topic: sections}, difficulties, per_topic_quota,
+            )
+            for task in topic_tasks:
+                if task.id not in all_ids:
+                    all_ids.add(task.id)
+                    all_tasks.append(task)
+
+        return all_tasks
+
+    def _distribute_remaining(self, filtered_tasks, remaining_ids, needed):
+        """Распределить оставшиеся задания."""
+        topic_remaining = {}
+        for tid in remaining_ids:
+            task = next((t for t in filtered_tasks if t.id == tid), None)
+            if task:
+                t = task.topic or "unknown"
+                if t not in topic_remaining:
+                    topic_remaining[t] = []
+                topic_remaining[t].append(tid)
+
+        extra = []
+        topics_list = list(topic_remaining.keys())
+        while len(extra) < needed and topics_list:
+            for topic in topics_list:
+                if topic_remaining[topic] and len(extra) < needed:
+                    extra.append(topic_remaining[topic].pop(0))
+                elif not topic_remaining[topic]:
+                    pass
+            topics_list = [t for t in topics_list if topic_remaining.get(t)]
+
+        return extra
+
+    def _sort_for_test(self, tasks):
+        """Отсортировать: сначала закрытые по сложности, потом открытые."""
+        closed = sorted([t for t in tasks if not t.is_open_answer], key=lambda t: t.difficulty or 0)
+        open_tasks = sorted([t for t in tasks if t.is_open_answer], key=lambda t: t.difficulty or 0)
+        return closed + open_tasks
 
 
 class PermissionError(Exception):
