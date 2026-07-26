@@ -24,7 +24,7 @@ class AIService:
                 api_key=os.getenv("DEEPSEEK_API_KEY"),
                 base_url="https://api.deepseek.com",
             )
-            self.model = "deepseek-chat"
+            self.model = "deepseek-reasoner"
         else:
             from mistralai.client import Mistral
             self.client = Mistral(api_key=os.getenv("MISTRAL_TOKEN"))
