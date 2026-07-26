@@ -109,3 +109,23 @@ class BatchTaskDeleteResponse(BaseModel):
     total_deleted: int
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ==================== AI-КЛАССИФИКАЦИЯ ЗАДАНИЙ ====================
+
+
+class ClassifyTasksRequest(BaseModel):
+    """Запрос на AI-классификацию заданий"""
+    max_count: int = Field(default=50, ge=1, le=200)
+
+
+class ClassifyTasksResponse(BaseModel):
+    """Результат AI-классификации"""
+    total_processed: int
+    difficulty_assigned: int
+    solved_correctly: int
+    classified: int
+    failed: int
+    log: list[str] = []
+
+    model_config = ConfigDict(from_attributes=True)

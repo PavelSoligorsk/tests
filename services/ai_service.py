@@ -2,30 +2,68 @@ import json
 import re
 import os
 import asyncio
-from mistralai.client import Mistral
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Literal
+
+AIProvider = Literal["mistral", "deepseek"]
+
 
 class AIService:
-    def __init__(self):
-        self.client = Mistral(api_key=os.getenv("MISTRAL_TOKEN"))
-        self.model = "ministral-14b-2512"
-    
-    async def _chat_completion(self, system_prompt: str, user_prompt: str, temperature: float = 0.7, max_tokens: int = 800) -> str:
-        """Базовый метод для отправки запросов в Mistral (обёрнуто в asyncio.to_thread)"""
-        try:
-            response = await asyncio.to_thread(
-                self.client.chat.complete,
-                model=self.model,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                temperature=temperature,
-                max_tokens=max_tokens
+    """Гибкий AI-сервис с поддержкой Mistral (по умолчанию) и DeepSeek.
+
+    Использование:
+        ai = AIService()                   # Mistral (backward compatible)
+        ai = AIService(provider="mistral") # явно Mistral
+        ai = AIService(provider="deepseek")# DeepSeek
+    """
+
+    def __init__(self, provider: AIProvider = "mistral"):
+        self.provider = provider
+        if provider == "deepseek":
+            import openai
+            self.client = openai.AsyncOpenAI(
+                api_key=os.getenv("DEEPSEEK_API_KEY"),
+                base_url="https://api.deepseek.com",
             )
-            return response.choices[0].message.content
+            self.model = "deepseek-chat"
+        else:
+            from mistralai.client import Mistral
+            self.client = Mistral(api_key=os.getenv("MISTRAL_TOKEN"))
+            self.model = "ministral-14b-2512"
+
+    async def _chat_completion(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.7,
+        max_tokens: int = 800,
+    ) -> str:
+        """Базовый метод — автоматически выбирает API в зависимости от провайдера."""
+        try:
+            if self.provider == "deepseek":
+                response = await self.client.chat.completions.create(
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                return response.choices[0].message.content
+            else:
+                response = await asyncio.to_thread(
+                    self.client.chat.complete,
+                    model=self.model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                return response.choices[0].message.content
         except Exception as e:
-            raise Exception(f"AI Error: {str(e)}")
+            raise Exception(f"AI Error ({self.provider}): {str(e)}")
     
     async def get_hint(self, task: dict, topic_mastery: Optional[float] = None) -> str:
         """Получить подсказку для задания"""

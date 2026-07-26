@@ -2,11 +2,13 @@ import os
 import uuid
 import base64
 import re
-import httpx
+import json
 import asyncio
+import datetime
+import httpx
 import boto3
 from botocore.config import Config
-from typing import List
+from typing import List, Optional
 import logging
 from sqlalchemy import select, delete, update
 from sqlalchemy.orm import joinedload, selectinload
@@ -25,7 +27,7 @@ from core.models import Task, Test, TestResult, UserAnswer, TestAssignment, Test
 from dto_schemas.user import UserResponse, MessageResponse
 from dto_schemas.stats import UserResponseWithStats, UserStats
 from dto_schemas.image import ImageUploadResponse
-from dto_schemas.admin import AllowedEmailItemResponse, RebuildTestsResponse, RecomputeAnswersResponse
+from dto_schemas.admin import AllowedEmailItemResponse, RebuildTestsResponse, RecomputeAnswersResponse, ClassifyTasksResponse
 from dto_schemas.cached import (
     DetailedResultResponse,
     DetailedResultDetailResponse,
@@ -815,3 +817,233 @@ class AdminService:
             answers_updated=answers_updated,
             results_updated=results_updated
         )
+
+    # ==================== AI-КЛАССИФИКАЦИЯ ЗАДАНИЙ ====================
+
+    async def classify_tasks(self, max_count: int = 50) -> ClassifyTasksResponse:
+        """AI-классификация заданий: сложность → решение → topic/section.
+        
+        Три этапа, каждый через отдельный AI-вызов:
+        1. AI оценивает сложность (1-5) → сохраняет в БД
+        2. AI решает задание → сравниваем с эталонным ответом
+        3. Если ответ совпал: AI классифицирует topic/section → сохраняет в БД
+        
+        Обрабатываются только задания без section/topic.
+        """
+        from services.ai_service import AIService
+
+        ai = AIService()
+        log: list[str] = []
+        stats = {"difficulty": 0, "solved": 0, "classified": 0, "failed": 0}
+
+        # 1. Получаем неклассифицированные задания
+        result = await self.db.execute(
+            select(Task)
+            .where(
+                (Task.section.is_(None)) | (Task.section == "") |
+                (Task.topic.is_(None)) | (Task.topic == "")
+            )
+            .order_by(Task.task_class, Task.topic_number)
+            .limit(max_count)
+        )
+        tasks = list(result.scalars().all())
+
+        if not tasks:
+            log.append("✅ Все задания уже классифицированы")
+            return ClassifyTasksResponse(
+                total_processed=0, difficulty_assigned=0,
+                solved_correctly=0, classified=0, failed=0, log=log
+            )
+
+        log.append(f"🔍 Найдено неклассифицированных: {len(tasks)}")
+
+        # 2. Получаем структуру тем (для классификации)
+        struct_res = await self.db.execute(
+            select(Task.topic, Task.section)
+            .where(Task.topic.isnot(None), Task.topic != "")
+            .distinct()
+        )
+        topics_structure: dict[str, set] = {}
+        for topic, section in struct_res:
+            if topic not in topics_structure:
+                topics_structure[topic] = set()
+            if section:
+                topics_structure[topic].add(section)
+
+        log.append(f"📚 Тем в базе: {len(topics_structure)}")
+
+        for idx, task in enumerate(tasks, 1):
+            qtype = "закрытый" if not task.is_open_answer else "открытый"
+            prefix = f"[{idx}/{len(tasks)}] #{task.id} (кл.{task.task_class}, {qtype})"
+
+            try:
+                # === ЭТАП 1: AI-оценка сложности ===
+                est_diff = await self._ai_estimate_difficulty(ai, task)
+                if est_diff and est_diff != task.difficulty:
+                    task.difficulty = est_diff
+                    await self.db.flush()
+                    stats["difficulty"] += 1
+                    log.append(f"{prefix} 🎯 сложность={est_diff}")
+                else:
+                    log.append(f"{prefix} 🎯 сложность={task.difficulty} (не изменилась)")
+
+                # === ЭТАП 2: AI-решение ===
+                ai_answer = await self._ai_solve_task(ai, task)
+                matched = self._compare_answer(ai_answer, task)
+
+                if not matched:
+                    stats["failed"] += 1
+                    log.append(f"{prefix} ❌ ответ не совпал: AI=«{ai_answer}», эталон=«{task.answer}»")
+                    continue
+
+                stats["solved"] += 1
+                log.append(f"{prefix} ✅ ответ совпал: «{ai_answer}»")
+
+                # === ЭТАП 3: AI-классификация ===
+                classification = await self._ai_classify_task(ai, task, topics_structure)
+                if classification and classification.get("topic"):
+                    task.topic = classification["topic"]
+                    task.section = classification.get("section", "")
+                    await self.db.flush()
+                    stats["classified"] += 1
+                    log.append(f"{prefix} 🏷️  topic={task.topic}, section={task.section}")
+                else:
+                    stats["failed"] += 1
+                    log.append(f"{prefix} ⚠️ AI не вернул topic/section")
+
+            except Exception as e:
+                stats["failed"] += 1
+                log.append(f"{prefix} 💥 ошибка: {e}")
+                logger.error(f"Classify failed for task {task.id}: {e}")
+
+            await asyncio.sleep(0.2)
+
+        await self.db.commit()
+        log.append(f"\n📊 Итого: сложность={stats['difficulty']}, решено={stats['solved']}, "
+                   f"классифицировано={stats['classified']}, ошибок={stats['failed']}")
+
+        return ClassifyTasksResponse(
+            total_processed=min(len(tasks), max_count),
+            difficulty_assigned=stats["difficulty"],
+            solved_correctly=stats["solved"],
+            classified=stats["classified"],
+            failed=stats["failed"],
+            log=log,
+        )
+
+    async def _ai_estimate_difficulty(self, ai, task: Task) -> int | None:
+        """AI оценивает сложность задания (1-5)."""
+        prompt = f"""Оцени сложность этого задания по шкале 1-5.
+Верни ТОЛЬКО JSON: {{"difficulty": N}}
+
+Класс: {task.task_class}
+Тип: {'открытый ответ' if task.is_open_answer else 'выбор варианта'}
+Условие:
+{task.content[:800]}
+"""
+        try:
+            response = await ai._chat_completion(
+                system_prompt="Ты — эксперт по математике. Отвечаешь только валидным JSON без markdown.",
+                user_prompt=prompt,
+                temperature=0.1,
+                max_tokens=100,
+            )
+            m = re.search(r'\{.*\}', response, re.DOTALL)
+            if m:
+                data = json.loads(m.group())
+                d = data.get("difficulty")
+                if isinstance(d, int) and 1 <= d <= 5:
+                    return d
+        except Exception as e:
+            logger.warning(f"Difficulty estimation failed for task {task.id}: {e}")
+        return None
+
+    async def _ai_solve_task(self, ai, task: Task) -> str:
+        """AI решает задание. Возвращает ответ строкой."""
+        if task.is_open_answer:
+            prompt = f"""Реши задачу и верни ТОЛЬКО JSON: {{"answer": "..."}}
+
+Класс: {task.task_class}
+Условие:
+{task.content[:800]}
+
+В answer — только число/выражение без префиксов («x=», «ответ:» и т.п.).
+"""
+        else:
+            opts = ""
+            if task.options:
+                for i, opt in enumerate(task.options, 1):
+                    opts += f"{i}) {opt}\n"
+            prompt = f"""Реши задачу и выбери НОМЕР правильного варианта.
+Верни ТОЛЬКО JSON: {{"answer": "N"}}
+
+Класс: {task.task_class}
+Условие:
+{task.content[:800]}
+
+Варианты:
+{opts}
+"""
+        try:
+            response = await ai._chat_completion(
+                system_prompt="Ты — математик. Отвечаешь только валидным JSON. В answer — строка.",
+                user_prompt=prompt,
+                temperature=0.1,
+                max_tokens=100,
+            )
+            m = re.search(r'\{.*\}', response, re.DOTALL)
+            if m:
+                data = json.loads(m.group())
+                return str(data.get("answer", "")).strip()
+        except Exception as e:
+            logger.warning(f"AI solve failed for task {task.id}: {e}")
+        return ""
+
+    def _compare_answer(self, ai_answer: str, task: Task) -> bool:
+        """Сравнить ответ AI с эталоном."""
+        a = ai_answer.strip().lower().replace(",", ".").replace(" ", "")
+        b = (task.answer or "").strip().lower().replace(",", ".").replace(" ", "")
+        # Убираем "x=", "ответ:" и т.п.
+        a = re.sub(r'^(x=|ответ:?\s*)', '', a)
+        b = re.sub(r'^(x=|ответ:?\s*)', '', b)
+        return a == b
+
+    async def _ai_classify_task(self, ai, task: Task, topics_structure: dict) -> dict | None:
+        """AI классифицирует задание → {topic, section}."""
+        hierarchy = []
+        for topic, sections in topics_structure.items():
+            hierarchy.append(f"- {topic}")
+            if sections:
+                for s in sorted(sections):
+                    hierarchy.append(f"    - {s}")
+
+        prompt = f"""Классифицируй задание по теме и разделу ИЗ СПИСКА НИЖЕ.
+Верни ТОЛЬКО JSON: {{"topic": "...", "section": "..."}}
+
+=== ДОСТУПНЫЕ ТЕМЫ ===
+{chr(10).join(hierarchy)}
+
+=== ЗАДАНИЕ ===
+Класс: {task.task_class}
+Номер темы: {task.topic_number}
+Тип: {'открытый ответ' if task.is_open_answer else 'выбор варианта'}
+Условие:
+{task.content[:600]}
+
+Выбери topic и section ТОЛЬКО из списка выше. Если точного совпадения нет — ближайшее.
+"""
+        try:
+            response = await ai._chat_completion(
+                system_prompt="Ты — строгий классификатор. Отвечаешь только валидным JSON без markdown.",
+                user_prompt=prompt,
+                temperature=0.1,
+                max_tokens=200,
+            )
+            m = re.search(r'\{.*\}', response, re.DOTALL)
+            if m:
+                data = json.loads(m.group())
+                if data.get("topic"):
+                    return data
+        except Exception as e:
+            logger.warning(f"AI classify failed for task {task.id}: {e}")
+        return None

@@ -23,6 +23,7 @@ from dto_schemas.admin import (
     BatchTaskCreateItem, BatchTaskCreateRequest, BatchTaskCreateResponse,
     BatchTaskUpdateItem, BatchTaskUpdateRequest, BatchTaskUpdateResponse,
     BatchTaskDeleteRequest, BatchTaskDeleteResponse,
+    ClassifyTasksRequest, ClassifyTasksResponse,
 )
 from dto_schemas.cached import (
     TaskShortResponse,
@@ -89,6 +90,7 @@ __all__ = [
     "BatchTaskCreateItem", "BatchTaskCreateRequest", "BatchTaskCreateResponse",
     "BatchTaskUpdateItem", "BatchTaskUpdateRequest", "BatchTaskUpdateResponse",
     "BatchTaskDeleteRequest", "BatchTaskDeleteResponse",
+    "ClassifyTasksRequest", "ClassifyTasksResponse",
     "TaskShortResponse", "TestSummaryResponse", "StudentHistoryItemResponse",
     "DifficultyStatResponse", "ResultUserResponse", "DetailedResultDetailResponse",
     "DetailedResultResponse", "StudentAssignmentItemResponse", "StudentAssignmentMetaItemResponse",

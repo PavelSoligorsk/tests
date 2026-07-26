@@ -13,6 +13,7 @@ from dto_schemas import (
     BatchTaskCreateRequest, BatchTaskCreateResponse,
     BatchTaskUpdateRequest, BatchTaskUpdateResponse,
     BatchTaskDeleteRequest, BatchTaskDeleteResponse,
+    ClassifyTasksRequest, ClassifyTasksResponse,
 )
 from core import auth
 from core.cache import invalidate_cache_pattern
@@ -389,6 +390,28 @@ async def send_task_to_tg(
         return await service.send_task_to_tg(task_id, target_chat_id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@router.post("/classify-tasks", response_model=ClassifyTasksResponse)
+async def classify_tasks(
+    payload: ClassifyTasksRequest,
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """AI-классификация заданий: сложность → решение → topic/section.
+    
+    Три этапа, каждый через отдельный AI-вызов:
+    1. AI оценивает сложность (1-5)
+    2. AI решает → сравниваем с эталоном
+    3. Если ответ совпал: AI классифицирует topic/section
+    
+    Параметр max_count — максимум обрабатываемых заданий (1-200).
+    """
+    try:
+        result = await service.classify_tasks(payload.max_count)
+        _invalidate_task_caches()
+        return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
