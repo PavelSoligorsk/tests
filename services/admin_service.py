@@ -1031,26 +1031,39 @@ class AdminService:
         )
 
     async def _ai_estimate_difficulty(self, ai, task: Task) -> int | None:
-        """AI оценивает сложность задания (1-5)."""
-        prompt = f"""You are a math expert. Rate the difficulty of this task on a scale 1-5.
-Output ONLY a JSON object with the key "difficulty" and an integer value.
+        """AI оценивает сложность задания (1-5).
 
-Class: {task.task_class}
-Type: {'open answer' if task.is_open_answer else 'multiple choice'}
-Problem:
+        Использует thinking (не json_mode), потому что для оценки сложности
+        модель должна проанализировать математическое содержание.
+        Ответ извлекается из последнего JSON-блока в reasoning.
+        """
+        prompt = f"""Оцени сложность этого задания по математике по шкале 1-5,
+где 1 — простейшее (устный счёт), 5 — олимпиадное.
+
+Класс: {task.task_class}
+Тип: {'открытый ответ' if task.is_open_answer else 'выбор варианта'}
+Условие:
 {task.content[:800]}
+
+В конце ответа напиши СТРОГО в последней строке:
+DIFFICULTY_JSON: {{"difficulty": N}}
 """
         try:
             response = await ai._chat_completion(
-                system_prompt="You are a math difficulty rater. Output valid JSON only: {\"difficulty\": N}",
+                system_prompt=(
+                    "Ты — эксперт по математике. Проанализируй задание и оцени его сложность 1-5. "
+                    "В последней строке ответа напиши DIFFICULTY_JSON: {\"difficulty\": N}"
+                ),
                 user_prompt=prompt,
-                temperature=0.1,
-                max_tokens=200,
-                json_mode=True,
+                temperature=0.0,
+                max_tokens=800,
+                enable_thinking=True,
             )
-            m = re.search(r'\{[^{}]*\}', response, re.DOTALL)
+            m = re.search(r'DIFFICULTY_JSON:\s*(\{[^{}]*\})', response)
+            if not m:
+                m = re.search(r'\{[^{}]*"difficulty"[^{}]*\}', response, re.DOTALL)
             if m:
-                data = json.loads(m.group())
+                data = json.loads(m.group(1) if m.lastindex else m.group())
                 d = data.get("difficulty")
                 if isinstance(d, int) and 1 <= d <= 5:
                     return d
@@ -1059,10 +1072,11 @@ Problem:
         return None
 
     async def _ai_solve_open_batch(self, ai, tasks: list[Task]) -> dict[int, str]:
-        """Пакетное решение открытых заданий.
+        """Пакетное решение открытых заданий с reasoning.
 
-        Отправляет все задания одним промптом, AI возвращает JSON-массив
-        с ответами для каждого задания. Возвращает словарь {task_id: answer}.
+        Ключевое изменение: НЕ используем json_mode (он отключает thinking).
+        Вместо этого модель решает с reasoning, а в конце пишет JSON-блок.
+        JSON извлекается из последней части ответа.
         """
         if not tasks:
             return {}
@@ -1070,43 +1084,35 @@ Problem:
         task_blocks: list[str] = []
         for i, task in enumerate(tasks, 1):
             block = (
-                f"### TASK {i} (id={task.id}, class={task.task_class})\n"
-                f"Problem:\n{task.content[:600]}\n"
+                f"### Задание {i} (id={task.id}, класс={task.task_class}, сложность={task.difficulty})\n"
+                f"Условие:\n{task.content[:800]}\n"
             )
             task_blocks.append(block)
 
         prompt = (
-            "Solve EACH task below. Output ONLY a JSON array:\n"
-            '[{"task_id": N, "answer": "..."}, ...]\n'
-            "Where task_id is the task id, answer is the result as a string (number/expression, no prefixes like 'x=', 'answer:' etc).\n\n"
+            "Реши КАЖДОЕ задание. Думай пошагово.\n"
+            "В САМОМ КОНЦЕ ответа напиши JSON-массив с ответами:\n"
+            '[{"task_id": <id>, "answer": "<твой ответ числом или выражением>"}, ...]\n'
+            "answer — ТОЛЬКО число или математическое выражение без префиксов (без «x=», «ответ:», и т.п.).\n\n"
             + "\n".join(task_blocks)
         )
 
-        max_tokens = max(2000, min(len(tasks) * 400, 32000))
+        max_tokens = max(2000, min(len(tasks) * 800, 32000))
 
         try:
             response = await ai._chat_completion(
                 system_prompt=(
-                    "You are a mathematician. Solve multiple problems in one response. "
-                    "Output ONLY a valid JSON array, no markdown. "
-                    "answer is a string with the result (number/expression)."
+                    "Ты — математик. Решай каждую задачу пошагово, объясняй рассуждения. "
+                    "В КОНЦЕ ответа выдай JSON-массив с task_id и answer для каждого задания."
                 ),
                 user_prompt=prompt,
-                temperature=0.1,
+                temperature=0.0,
                 max_tokens=max_tokens,
-                json_mode=True,
+                enable_thinking=True,
             )
 
-            m = re.search(r'\[.*\]', response, re.DOTALL)
-            if m:
-                items = json.loads(m.group())
-                result: dict[int, str] = {}
-                for item in items:
-                    tid = item.get("task_id")
-                    ans = item.get("answer")
-                    if tid is not None and ans is not None:
-                        result[int(tid)] = str(ans).strip()
-                return result
+            result: dict[int, str] = self._extract_answer_json(response)
+            return result
 
         except Exception as e:
             logger.warning(f"Open batch solve failed for {len(tasks)} tasks: {e}")
@@ -1114,10 +1120,10 @@ Problem:
         return {}
 
     async def _ai_solve_batch(self, ai, tasks: list[Task]) -> dict[int, str]:
-        """Пакетное решение закрытых заданий (выбор варианта).
+        """Пакетное решение закрытых заданий (выбор варианта) с reasoning.
 
-        Отправляет все задания одним промптом, AI возвращает JSON-массив
-        с ответами для каждого задания. Возвращает словарь {task_id: answer}.
+        НЕ используем json_mode — с thinking модель решает точнее.
+        JSON извлекается из последней части ответа.
         """
         if not tasks:
             return {}
@@ -1130,61 +1136,125 @@ Problem:
                     opts += f"{j}) {opt}\n"
 
             block = (
-                f"### TASK {i} (id={task.id}, class={task.task_class})\n"
-                f"Problem:\n{task.content[:600]}\n"
-                f"Options:\n{opts}"
+                f"### Задание {i} (id={task.id}, класс={task.task_class}, сложность={task.difficulty})\n"
+                f"Условие:\n{task.content[:800]}\n"
+                f"Варианты:\n{opts}"
             )
             task_blocks.append(block)
 
         prompt = (
-            "Solve EACH task and choose the NUMBER of the correct option.\n"
-            "Output ONLY a JSON array:\n"
-            '[{"task_id": N, "answer": "N"}, ...]\n'
-            "Where task_id is the task id, answer is the option number as a string.\n\n"
+            "Реши КАЖДОЕ задание и выбери НОМЕР правильного варианта. Думай пошагово.\n"
+            "В САМОМ КОНЦЕ ответа напиши JSON-массив:\n"
+            '[{"task_id": <id>, "answer": "<номер варианта>"}, ...]\n'
+            "answer — строка с номером правильного варианта.\n\n"
             + "\n".join(task_blocks)
         )
 
-        # Подбираем max_tokens пропорционально количеству заданий
-        max_tokens = max(2000, min(len(tasks) * 400, 32000))
+        max_tokens = max(2000, min(len(tasks) * 800, 32000))
 
         try:
             response = await ai._chat_completion(
                 system_prompt=(
-                    "You are a mathematician. Solve multiple problems in one response. "
-                    "Output ONLY a valid JSON array, no markdown. "
-                    "answer is a string with the number of the correct option."
+                    "Ты — математик. Решай каждую задачу пошагово, объясняй рассуждения. "
+                    "В КОНЦЕ ответа выдай JSON-массив с task_id и answer для каждого задания. "
+                    "answer — строка с номером правильного варианта."
                 ),
                 user_prompt=prompt,
-                temperature=0.1,
+                temperature=0.0,
                 max_tokens=max_tokens,
-                json_mode=True,
+                enable_thinking=True,
             )
 
-            # Ищем JSON-массив в ответе
-            m = re.search(r'\[.*\]', response, re.DOTALL)
-            if m:
-                items = json.loads(m.group())
-                result: dict[int, str] = {}
-                for item in items:
-                    tid = item.get("task_id")
-                    ans = item.get("answer")
-                    if tid is not None and ans is not None:
-                        result[int(tid)] = str(ans).strip()
-                return result
+            result: dict[int, str] = self._extract_answer_json(response)
+            return result
 
         except Exception as e:
             logger.warning(f"Batch solve failed for {len(tasks)} tasks: {e}")
 
         return {}
 
-    def _compare_answer(self, ai_answer: str, task: Task) -> bool:
-        """Сравнить ответ AI с эталоном."""
-        a = ai_answer.strip().lower().replace(",", ".").replace(" ", "")
-        b = (task.answer or "").strip().lower().replace(",", ".").replace(" ", "")
-        # Убираем "x=", "ответ:" и т.п.
-        a = re.sub(r'^(x=|ответ:?\s*)', '', a)
-        b = re.sub(r'^(x=|ответ:?\s*)', '', b)
-        return a == b
+    @staticmethod
+    def _extract_answer_json(response: str) -> dict[int, str]:
+        """Извлекает {task_id: answer} из JSON-массива в ответе AI.
+
+        Ищет JSON-массив в последней трети ответа (после рассуждений),
+        а не в начале, где может быть шаблон из промпта.
+        """
+        # Ищем ВСЕ JSON-массивы, берём последний (он после рассуждений)
+        matches = list(re.finditer(r'\[.*?\]', response, re.DOTALL))
+        result: dict[int, str] = {}
+
+        # Пробуем от последнего к первому — самый надёжный
+        for m in reversed(matches):
+            try:
+                items = json.loads(m.group())
+                if isinstance(items, list) and items:
+                    for item in items:
+                        tid = item.get("task_id")
+                        ans = item.get("answer")
+                        if tid is not None and ans is not None:
+                            result[int(tid)] = str(ans).strip()
+                    if result:
+                        return result
+            except (json.JSONDecodeError, TypeError, ValueError):
+                continue
+
+        # Fallback: ищем JSON в хвосте ответа (последние 2000 символов)
+        tail = response[-2000:] if len(response) > 2000 else response
+        m = re.search(r'\[.*\]', tail, re.DOTALL)
+        if m:
+            try:
+                items = json.loads(m.group())
+                for item in items:
+                    tid = item.get("task_id")
+                    ans = item.get("answer")
+                    if tid is not None and ans is not None:
+                        result[int(tid)] = str(ans).strip()
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+
+        return result
+
+    @staticmethod
+    def _compare_answer(ai_answer: str, task: Task) -> bool:
+        """Сравнить ответ AI с эталоном.
+
+        Нормализует оба ответа и сравнивает:
+        - Убирает пробелы, префиксы (x=, ответ:)
+        - Нормализует десятичные разделители
+        - Пробует числовое сравнение (float)
+        """
+        def _norm(s: str) -> str:
+            s = s.strip().lower()
+            s = s.replace(",", ".").replace(" ", "")
+            # Убираем префиксы
+            s = re.sub(r'^(x=|y=|ответ:?\s*|answer:?\s*)', '', s)
+            # Убираем trailing точку
+            s = s.rstrip('.')
+            return s
+
+        a = _norm(ai_answer)
+        b = _norm(task.answer or "")
+
+        # Точное строковое совпадение
+        if a == b:
+            return True
+
+        # Числовое сравнение
+        try:
+            fa = float(a)
+            fb = float(b)
+            return abs(fa - fb) < 1e-9
+        except (ValueError, TypeError):
+            pass
+
+        # Сравнение без скобок (скобки могут быть эквивалентны)
+        a_nobraces = a.replace("(", "").replace(")", "")
+        b_nobraces = b.replace("(", "").replace(")", "")
+        if a_nobraces == b_nobraces:
+            return True
+
+        return False
 
     async def _ai_classify_task(self, ai, task: Task, topics_structure: dict) -> dict | None:
         """AI классифицирует задание → {topic, section}."""
