@@ -751,7 +751,7 @@ async def test_admin_get_detailed_result_full_cycle(
             "hint": "Move 3 to the right side",
             "solution": "2x = 4, x = 2",
         },
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert create_task_resp.status_code == 200
     task = create_task_resp.json()
@@ -759,7 +759,7 @@ async def test_admin_get_detailed_result_full_cycle(
     # 2. Get teacher & student IDs
     users_resp = await async_client.get(
         "/admin/users",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     users = users_resp.json()
     teacher = next((u for u in users if u["role"] == "teacher"), None)
@@ -770,7 +770,7 @@ async def test_admin_get_detailed_result_full_cycle(
     link_resp = await async_client.post(
         "/admin/assign-student-to-teacher",
         json={"teacher_id": teacher["id"], "student_id": student["id"]},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert link_resp.status_code == 200
 
@@ -783,7 +783,7 @@ async def test_admin_get_detailed_result_full_cycle(
             "target_topic": "1",
             "task_ids": [task["id"]],
         },
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {teacher_token}"},
     )
     assert test_resp.status_code == 200
     test_data = test_resp.json()
@@ -792,14 +792,14 @@ async def test_admin_get_detailed_result_full_cycle(
     assign_resp = await async_client.post(
         "/teacher/assign-test",
         json={"test_id": test_data["id"], "user_ids": [student["id"]]},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {teacher_token}"},
     )
     assert assign_resp.status_code == 200
 
     # 6. Student starts the test
     start_resp = await async_client.post(
         f"/student/start-test/{test_data['id']}",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {student_token}"},
     )
     assert start_resp.status_code == 200
 
@@ -807,7 +807,7 @@ async def test_admin_get_detailed_result_full_cycle(
     submit_resp = await async_client.post(
         f"/student/tests/{test_data['id']}/submit",
         json=[{"task_id": task["id"], "user_answer": "2"}],
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {student_token}"},
     )
     assert submit_resp.status_code == 200
     submit_data = submit_resp.json()
@@ -817,7 +817,7 @@ async def test_admin_get_detailed_result_full_cycle(
     # 8. Get result_id from student history
     history_resp = await async_client.get(
         "/student/history",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {student_token}"},
     )
     assert history_resp.status_code == 200
     history = history_resp.json()
@@ -827,7 +827,7 @@ async def test_admin_get_detailed_result_full_cycle(
     # 9. Admin gets detailed result
     detail_resp = await async_client.get(
         f"/admin/results/{result_id}",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert detail_resp.status_code == 200, detail_resp.text
     detail = detail_resp.json()
@@ -868,7 +868,7 @@ async def test_admin_get_detailed_result_not_found(
     """БТ: Запрос несуществующего результата — ошибка 404."""
     resp = await async_client.get(
         "/admin/results/99999",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 404, resp.text
 
@@ -892,14 +892,14 @@ async def test_admin_get_detailed_result_with_open_answer(
             "hint": "Add exponents",
             "solution": "a^(1+2) = a^3",
         },
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert task_resp.status_code == 200
     task = task_resp.json()
 
     # 2. Get teacher & student
     users_resp = await async_client.get(
-        "/admin/users", headers={"Authorization": f"******"})
+        "/admin/users", headers={"Authorization": f"Bearer {admin_token}"})
     users = users_resp.json()
     teacher = next((u for u in users if u["role"] == "teacher"), None)
     student = next((u for u in users if u["username"] == "student_async@test.com"), None)
@@ -908,7 +908,7 @@ async def test_admin_get_detailed_result_with_open_answer(
     await async_client.post(
         "/admin/assign-student-to-teacher",
         json={"teacher_id": teacher["id"], "student_id": student["id"]},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
 
     # 3. Teacher creates test
@@ -919,7 +919,7 @@ async def test_admin_get_detailed_result_with_open_answer(
             "target_class": "11", "target_topic": "1",
             "task_ids": [task["id"]],
         },
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {teacher_token}"},
     )
     assert test_resp.status_code == 200
     test_data = test_resp.json()
@@ -928,27 +928,27 @@ async def test_admin_get_detailed_result_with_open_answer(
     await async_client.post(
         "/teacher/assign-test",
         json={"test_id": test_data["id"], "user_ids": [student["id"]]},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {teacher_token}"},
     )
     await async_client.post(
         f"/student/start-test/{test_data['id']}",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {student_token}"},
     )
     await async_client.post(
         f"/student/tests/{test_data['id']}/submit",
         json=[{"task_id": task["id"], "user_answer": "wrong"}],
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {student_token}"},
     )
 
     # Get result_id
     history_resp = await async_client.get(
-        "/student/history", headers={"Authorization": f"******"})
+        "/student/history", headers={"Authorization": f"Bearer {student_token}"})
     result_id = history_resp.json()[0]["id"]
 
     # Admin checks detailed result
     detail_resp = await async_client.get(
         f"/admin/results/{result_id}",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert detail_resp.status_code == 200
     detail = detail_resp.json()
@@ -986,21 +986,21 @@ async def test_admin_update_task_cascade_recompute(
             "hint": "Think simple",
             "solution": "2 + 2 = 4",
         },
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert task_resp.status_code == 200
     task = task_resp.json()
 
     # 2. Get teacher & student, link them
     users_resp = await async_client.get(
-        "/admin/users", headers={"Authorization": f"******"})
+        "/admin/users", headers={"Authorization": f"Bearer {admin_token}"})
     users = users_resp.json()
     teacher = next((u for u in users if u["role"] == "teacher"), None)
     student = next((u for u in users if u["username"] == "student_async@test.com"), None)
     await async_client.post(
         "/admin/assign-student-to-teacher",
         json={"teacher_id": teacher["id"], "student_id": student["id"]},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
 
     # 3. Teacher creates test & assigns
@@ -1011,33 +1011,33 @@ async def test_admin_update_task_cascade_recompute(
             "target_class": "9", "target_topic": "1",
             "task_ids": [task["id"]],
         },
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {teacher_token}"},
     )
     test_data = test_resp.json()
     await async_client.post(
         "/teacher/assign-test",
         json={"test_id": test_data["id"], "user_ids": [student["id"]]},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {teacher_token}"},
     )
 
     # 4. Student submits answer "4" — correct
     await async_client.post(
         f"/student/start-test/{test_data['id']}",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {student_token}"},
     )
     await async_client.post(
         f"/student/tests/{test_data['id']}/submit",
         json=[{"task_id": task["id"], "user_answer": "4"}],
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {student_token}"},
     )
 
     # Verify before update: correct
     history_resp = await async_client.get(
-        "/student/history", headers={"Authorization": f"******"})
+        "/student/history", headers={"Authorization": f"Bearer {student_token}"})
     result_id = history_resp.json()[0]["id"]
     detail_before = await async_client.get(
         f"/admin/results/{result_id}",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert detail_before.status_code == 200
     assert detail_before.json()["total_points"] == 1
@@ -1058,14 +1058,14 @@ async def test_admin_update_task_cascade_recompute(
             "hint": "Think simple",
             "solution": "2 + 2 = 4",
         },
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert update_resp.status_code == 200, update_resp.text
 
     # 6. Verify after update: now wrong
     detail_after = await async_client.get(
         f"/admin/results/{result_id}",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert detail_after.status_code == 200
     d = detail_after.json()
@@ -1090,7 +1090,7 @@ async def test_admin_delete_user_cascade(
     email = "cascade-delete@test.com"
     await async_client.post(
         "/admin/allowed-emails", json={"email": email},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     await async_client.post("/register", json={
         "username": email, "password": "Cascade1!",
@@ -1098,7 +1098,7 @@ async def test_admin_delete_user_cascade(
     })
 
     users_resp = await async_client.get(
-        "/admin/users", headers={"Authorization": f"******"})
+        "/admin/users", headers={"Authorization": f"Bearer {admin_token}"})
     users = users_resp.json()
     student = next((u for u in users if u["username"] == email), None)
     teacher = next((u for u in users if u["role"] == "teacher"), None)
@@ -1108,7 +1108,7 @@ async def test_admin_delete_user_cascade(
     await async_client.post(
         "/admin/assign-student-to-teacher",
         json={"teacher_id": teacher["id"], "student_id": student["id"]},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
 
     # 3. Create task + test + assign + submit (so there are results/answers)
@@ -1123,7 +1123,7 @@ async def test_admin_delete_user_cascade(
             "difficulty": 1,
             "hint": "simple", "solution": "1 + 1 = 2",
         },
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     task = task_resp.json()
     test_resp = await async_client.post(
@@ -1132,13 +1132,13 @@ async def test_admin_delete_user_cascade(
             "title": "Cascade Delete Test", "target_class": "5",
             "target_topic": "1", "task_ids": [task["id"]],
         },
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {teacher_token}"},
     )
     test_data = test_resp.json()
     await async_client.post(
         "/teacher/assign-test",
         json={"test_id": test_data["id"], "user_ids": [student["id"]]},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {teacher_token}"},
     )
 
     # Login as student and submit
@@ -1147,31 +1147,31 @@ async def test_admin_delete_user_cascade(
     student_tok = student_login.json()["access_token"]
     await async_client.post(
         f"/student/start-test/{test_data['id']}",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {student_tok}"},
     )
     await async_client.post(
         f"/student/tests/{test_data['id']}/submit",
         json=[{"task_id": task["id"], "user_answer": "2"}],
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {student_tok}"},
     )
 
     # 4. Delete user
     del_resp = await async_client.delete(
         f"/admin/users/{student['id']}",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert del_resp.status_code == 200, del_resp.text
     assert "удалены" in del_resp.json()["message"]
 
     # 5. Verify user gone from /admin/users
     users_after = await async_client.get(
-        "/admin/users", headers={"Authorization": f"******"})
+        "/admin/users", headers={"Authorization": f"Bearer {admin_token}"})
     assert not any(u["id"] == student["id"] for u in users_after.json())
 
     # 6. Verify profile 404
     profile_resp = await async_client.get(
         f"/admin/users/{student['id']}/profile",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert profile_resp.status_code == 404
 
@@ -1188,14 +1188,14 @@ async def test_admin_change_role_invalid_role(
 ) -> None:
     """БТ: Недопустимая роль → ошибка 400."""
     users_resp = await async_client.get(
-        "/admin/users", headers={"Authorization": f"******"})
+        "/admin/users", headers={"Authorization": f"Bearer {admin_token}"})
     teacher = next((u for u in users_resp.json() if u["role"] == "teacher"), None)
     assert teacher is not None
 
     resp = await async_client.patch(
         f"/admin/users/{teacher['id']}/role",
         json={"new_role": "superhero"},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 400, resp.text
     assert "Недопустимая роль" in resp.json()["detail"]
@@ -1210,7 +1210,7 @@ async def test_admin_change_role_user_not_found(
     resp = await async_client.patch(
         "/admin/users/99999/role",
         json={"new_role": "teacher"},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 404, resp.text
 
@@ -1222,14 +1222,14 @@ async def test_admin_cannot_demote_self(
 ) -> None:
     """БТ: Админ не может снять роль админа с самого себя → ошибка 400."""
     users_resp = await async_client.get(
-        "/admin/users", headers={"Authorization": f"******"})
+        "/admin/users", headers={"Authorization": f"Bearer {admin_token}"})
     admin = next((u for u in users_resp.json() if u["role"] == "admin"), None)
     assert admin is not None
 
     resp = await async_client.patch(
         f"/admin/users/{admin['id']}/role",
         json={"new_role": "student"},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 400, resp.text
     assert "не можете" in resp.json()["detail"].lower()
@@ -1248,7 +1248,7 @@ async def test_admin_get_user_profile_not_found(
     """БТ: Профиль несуществующего пользователя → ошибка 404."""
     resp = await async_client.get(
         "/admin/users/99999/profile",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 404, resp.text
 
@@ -1261,7 +1261,7 @@ async def test_admin_delete_user_not_found(
     """БТ: Удаление несуществующего пользователя → ошибка 404."""
     resp = await async_client.delete(
         "/admin/users/99999",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 404, resp.text
 
@@ -1279,7 +1279,7 @@ async def test_admin_delete_nonexistent_task(
     """БТ: Удаление несуществующего задания → ошибка 404."""
     resp = await async_client.delete(
         "/admin/tasks/99999",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 404, resp.text
 
@@ -1298,7 +1298,7 @@ async def test_admin_add_allowed_email_empty(
     resp = await async_client.post(
         "/admin/allowed-emails",
         json={"email": ""},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 400, resp.text
 
@@ -1314,13 +1314,13 @@ async def test_admin_add_allowed_email_duplicate(
     await async_client.post(
         "/admin/allowed-emails",
         json={"email": email},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     # Duplicate
     resp = await async_client.post(
         "/admin/allowed-emails",
         json={"email": email},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 400, resp.text
     assert "уже" in resp.json()["detail"]
@@ -1334,7 +1334,7 @@ async def test_admin_delete_allowed_email_not_found(
     """БТ: Удаление несуществующего email → ошибка 404."""
     resp = await async_client.delete(
         "/admin/allowed-emails/nonexistent@test.com",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 404, resp.text
 
@@ -1351,14 +1351,14 @@ async def test_admin_assign_student_teacher_not_found(
 ) -> None:
     """БТ: Назначение с несуществующим учителем → ошибка 404."""
     users_resp = await async_client.get(
-        "/admin/users", headers={"Authorization": f"******"})
+        "/admin/users", headers={"Authorization": f"Bearer {admin_token}"})
     student = next((u for u in users_resp.json() if u["role"] == "student"), None)
     assert student is not None
 
     resp = await async_client.post(
         "/admin/assign-student-to-teacher",
         json={"teacher_id": 99999, "student_id": student["id"]},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 404, resp.text
 
@@ -1370,14 +1370,14 @@ async def test_admin_assign_student_not_found(
 ) -> None:
     """БТ: Назначение несуществующего ученика → ошибка 404."""
     users_resp = await async_client.get(
-        "/admin/users", headers={"Authorization": f"******"})
+        "/admin/users", headers={"Authorization": f"Bearer {admin_token}"})
     teacher = next((u for u in users_resp.json() if u["role"] == "teacher"), None)
     assert teacher is not None
 
     resp = await async_client.post(
         "/admin/assign-student-to-teacher",
         json={"teacher_id": teacher["id"], "student_id": 99999},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 404, resp.text
 
@@ -1389,7 +1389,7 @@ async def test_admin_assign_not_student_to_teacher(
 ) -> None:
     """БТ: Нельзя назначить не-студента (например, другого учителя) учеником → ошибка 404."""
     users_resp = await async_client.get(
-        "/admin/users", headers={"Authorization": f"******"})
+        "/admin/users", headers={"Authorization": f"Bearer {admin_token}"})
     teacher = next((u for u in users_resp.json() if u["role"] == "teacher"), None)
     admin = next((u for u in users_resp.json() if u["role"] == "admin"), None)
     assert teacher is not None and admin is not None
@@ -1397,7 +1397,7 @@ async def test_admin_assign_not_student_to_teacher(
     resp = await async_client.post(
         "/admin/assign-student-to-teacher",
         json={"teacher_id": teacher["id"], "student_id": admin["id"]},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 404, resp.text
 
@@ -1414,13 +1414,13 @@ async def test_admin_remove_student_link_not_found(
 ) -> None:
     """БТ: Удаление несуществующей связи ученик-учитель → ошибка 404."""
     users_resp = await async_client.get(
-        "/admin/users", headers={"Authorization": f"******"})
+        "/admin/users", headers={"Authorization": f"Bearer {admin_token}"})
     student = next((u for u in users_resp.json() if u["role"] == "student"), None)
     assert student is not None
 
     resp = await async_client.delete(
         f"/admin/remove-student-from-teacher/{student['id']}",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 404, resp.text
 
@@ -1444,14 +1444,14 @@ async def test_admin_create_theory_duplicate(
     # First — OK
     create1 = await async_client.post(
         "/admin/theory", json=payload,
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert create1.status_code == 200, create1.text
 
     # Second — duplicate
     create2 = await async_client.post(
         "/admin/theory", json=payload,
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert create2.status_code == 400, create2.text
     assert "уже существует" in create2.json()["detail"]
@@ -1465,7 +1465,7 @@ async def test_admin_get_theory_not_found(
     """БТ: Получение несуществующей теории → ошибка 404."""
     resp = await async_client.get(
         "/admin/theory/99999",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 404, resp.text
 
@@ -1479,7 +1479,7 @@ async def test_admin_update_theory_not_found(
     resp = await async_client.put(
         "/admin/theory/99999",
         json={"content": "New content"},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 400, resp.text
 
@@ -1492,7 +1492,7 @@ async def test_admin_delete_theory_not_found(
     """БТ: Удаление несуществующей теории → ошибка 404."""
     resp = await async_client.delete(
         "/admin/theory/99999",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 404, resp.text
 
@@ -1524,7 +1524,7 @@ async def test_admin_send_task_to_tg_success(
             "difficulty": 2,
             "hint": "hint", "solution": "solution",
         },
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert task_resp.status_code == 200
     task = task_resp.json()
@@ -1545,7 +1545,7 @@ async def test_admin_send_task_to_tg_success(
         resp = await async_client.post(
             f"/admin/tasks/{task['id']}/send-to-tg",
             json={"chat_id": "123456"},
-            headers={"Authorization": f"******"},
+            headers={"Authorization": f"Bearer {admin_token}"},
         )
         assert resp.status_code == 200, resp.text
         assert "отправлена" in resp.json()["message"]
@@ -1562,7 +1562,7 @@ async def test_admin_send_task_to_tg_not_found(
     resp = await async_client.post(
         "/admin/tasks/99999/send-to-tg",
         json={"chat_id": "123456"},
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert resp.status_code == 404, resp.text
 
@@ -1575,7 +1575,7 @@ async def test_admin_send_task_to_tg_not_found(
 @pytest.mark.admin
 @pytest.mark.asyncio
 async def test_admin_rebuild_all_static_tests(
-    async_client: AsyncClient, admin_token: str
+    async_client: AsyncClient, admin_token: str, teacher_token: str
 ) -> None:
     """БТ: Пересборка статических тестов — создаются автотесты по категориям заданий."""
     # 1. Create tasks in different categories
@@ -1608,13 +1608,13 @@ async def test_admin_rebuild_all_static_tests(
                 },
             ]
         },
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
 
     # 2. Rebuild
     rebuild_resp = await async_client.post(
         "/admin/rebuild-all-static-tests",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert rebuild_resp.status_code == 200, rebuild_resp.text
     data = rebuild_resp.json()
@@ -1623,10 +1623,9 @@ async def test_admin_rebuild_all_static_tests(
     assert "синхронизировано" in data["message"]
 
     # 3. Verify autocompile tests exist in teacher's task list
-    # (admin's autocompile tests are visible)
     tests_resp = await async_client.get(
         "/teacher/tests",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {teacher_token}"},
     )
     assert tests_resp.status_code == 200
     autocompile_tests = [
@@ -1652,20 +1651,20 @@ async def test_admin_rebuild_tests_idempotent(
             "is_open_answer": True, "difficulty": 1,
             "hint": "h", "solution": "s",
         },
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
 
     # First rebuild
     r1 = await async_client.post(
         "/admin/rebuild-all-static-tests",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert r1.status_code == 200
 
     # Second rebuild (idempotent)
     r2 = await async_client.post(
         "/admin/rebuild-all-static-tests",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert r2.status_code == 200, r2.text
     assert r2.json()["status"] == "success"
@@ -1684,7 +1683,7 @@ async def test_teacher_cannot_access_admin_endpoints(
     """БТ: Учитель не может получить доступ к админским эндпоинтам — ошибка 403."""
     resp = await async_client.get(
         "/admin/users",
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {teacher_token}"},
     )
     assert resp.status_code == 403, resp.text
 
@@ -1703,6 +1702,6 @@ async def test_teacher_cannot_create_task(
             "is_open_answer": True, "difficulty": 1,
             "hint": "h", "solution": "s",
         },
-        headers={"Authorization": f"******"},
+        headers={"Authorization": f"Bearer {teacher_token}"},
     )
     assert resp.status_code == 403, resp.text

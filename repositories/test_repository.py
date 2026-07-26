@@ -43,11 +43,10 @@ class TestRepository:
         new_test = Test(**test_data)
         self.db.add(new_test)
         await self.db.flush()
-        new_test.tasks = tasks
+        # Insert association rows directly to avoid lazy-load on `tasks` relationship
+        for task in tasks:
+            self.db.add(TestTaskAssociation(test_id=new_test.id, task_id=task.id))
         await self.db.commit()
-        # refresh() would expunge the lazy-loaded 'tasks' relationship,
-        # causing greenlet_spawn errors during Pydantic serialization.
-        # expire_on_commit=False already preserves object state after commit.
         return new_test
     
     async def deactivate_test(self, test_id: int):
@@ -82,7 +81,11 @@ class TestRepository:
             setattr(test, field, value)
         
         if tasks is not None:
-            test.tasks = tasks
+            # Remove old associations and add new ones to avoid lazy-load greenlet error
+            await self.db.execute(
+                delete(TestTaskAssociation).where(TestTaskAssociation.test_id == test.id))
+            for task in tasks:
+                self.db.add(TestTaskAssociation(test_id=test.id, task_id=task.id))
         
         await self.db.commit()
         # refresh() would expunge the lazy-loaded 'tasks' relationship,
@@ -120,7 +123,8 @@ class TestRepository:
             )
             
             # 4. Очищаем связи с задачами ПЕРЕД удалением теста
-            test.tasks = []
+            await self.db.execute(
+                delete(TestTaskAssociation).where(TestTaskAssociation.test_id == test_id))
             await self.db.flush()
             
             # 5. Удаляем сам тест

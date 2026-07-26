@@ -580,16 +580,11 @@ class AdminService:
                         is_ai_generated=False,
                         creator_id=admin_id,
                         is_active=True,
-                        tasks=[]  # Инициализируем пустым списком
                     )
                     self.db.add(test)
                     await self.db.flush()  # Получаем ID
                     is_new_test = True
                     new_tests_created += 1
-                    
-                    # Загружаем связи для нового теста (они уже пустые)
-                    # Но нам нужно загрузить tasks для дальнейшей работы
-                    await self.db.refresh(test, attribute_names=['tasks'])
                 
                 # ========== 3. Получаем актуальные задачи для этой категории ==========
                 result = await self.db.execute(
@@ -604,14 +599,15 @@ class AdminService:
                 relevant_tasks = result.scalars().all()
                 
                 # ========== 4. Обновляем связи теста с задачами ==========
-                # Важно: работаем с коллекцией безопасно
-                # Очищаем существующие связи (если они есть)
+                # Удаляем старые ассоциации (без lazy-load триггера)
                 if not is_new_test:
-                    # Для существующего теста очищаем связи
-                    test.tasks.clear()
+                    await self.db.execute(
+                        delete(TestTaskAssociation).where(
+                            TestTaskAssociation.test_id == test.id))
                 
-                # Добавляем новые задачи
-                test.tasks.extend(relevant_tasks)
+                # Добавляем новые связи через ассоциации
+                for task in relevant_tasks:
+                    self.db.add(TestTaskAssociation(test_id=test.id, task_id=task.id))
                 
                 updated_test_ids.append(test.id)
 

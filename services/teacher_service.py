@@ -11,7 +11,7 @@ from repositories.assignment_repository import AssignmentRepository
 from repositories.group_repository import GroupRepository
 from repositories.teacher_student_repository import TeacherStudentRepository
 
-from core.models import Test
+from core.models import Test, TestTaskAssociation
 
 from dto_schemas.user import MessageResponse, UserResponse
 from dto_schemas.task import TaskResponse
@@ -137,8 +137,9 @@ class TeacherService:
                 print(f"Found {len(tasks) if tasks else 0} tasks")
                 
                 if tasks:
-                    # Обновляем тест с задачами
-                    test.tasks = list(tasks)
+                    # Добавляем задачи через ассоциации (без lazy-load)
+                    for task in tasks:
+                        self.db.add(TestTaskAssociation(test_id=test.id, task_id=task.id))
                     await self.db.flush()
                     print(f"Added {len(tasks)} tasks to test")
             
