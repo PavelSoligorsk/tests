@@ -127,9 +127,10 @@ class TestRepository:
                 delete(TestTaskAssociation).where(TestTaskAssociation.test_id == test_id))
             await self.db.flush()
             
-            # 5. Удаляем сам тест
+            # 5. Refresh test to clear stale relationship state, then delete
+            await self.db.refresh(test)
             await self.db.delete(test)
-            await self.db.commit()
+            await self.db.flush()
             return test
         except Exception as e:
             await self.db.rollback()

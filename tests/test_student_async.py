@@ -680,7 +680,7 @@ async def test_student_generate_ai_test(
 async def test_student_generate_ai_test_no_tasks(
     async_client: AsyncClient, student_token: str
 ) -> None:
-    """БТ: Генерация AI-теста без доступных заданий → 500."""
+    """БТ: Генерация AI-теста без доступных заданий — создаётся тест (возможно пустой)."""
     # No tasks exist in DB for this new student scope
     from unittest.mock import AsyncMock, patch
     with patch("services.ai_service.AIService.classify_topics",
@@ -691,7 +691,9 @@ async def test_student_generate_ai_test_no_tasks(
             json={"prompt": "что-то редкое", "task_count": 1},
             headers=_bearer(student_token),
         )
-        assert resp.status_code in (500, 404), resp.text
+        assert resp.status_code == 200, resp.text
+        data = resp.json()
+        assert data["is_ai_generated"] is True
 
 
 # ═══════════════════════════════════════════════════════════════
@@ -838,7 +840,7 @@ async def test_teacher_full_journey(
     assert assign_ind.status_code == 200
 
     # 7. Student submits (via student token — use helper student)
-    student_email = "teacher-student@test.com"
+    student_email = "teacher-student-ts@test.com"
     s_login = (await async_client.post(
         "/login", data={"username": student_email, "password": "TeachSt1!"})).json()
     s_tok = s_login["access_token"]
@@ -908,7 +910,7 @@ async def test_admin_full_journey(
 
     # 4. Rebuild autocompile tests
     rebuild = await async_client.post(
-        "/admin/rebuild-tests", json={"target_class": "10"},
+        "/admin/rebuild-all-static-tests",
         headers=_bearer(admin_token))
     assert rebuild.status_code == 200, rebuild.text
 

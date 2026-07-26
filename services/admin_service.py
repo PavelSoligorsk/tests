@@ -276,14 +276,15 @@ class AdminService:
             ua = answers_map.get(task.id)
             is_correct = ua.is_correct if ua else False
             
-            diff_level = str(task.difficulty) if task.difficulty else "1"
+            diff_level = task.difficulty if task.difficulty else 1
+            diff_key = str(diff_level)
             
-            if diff_level not in difficulty_stats:
-                difficulty_stats[diff_level] = DifficultyStatResponse(total=0, correct=0)
+            if diff_key not in difficulty_stats:
+                difficulty_stats[diff_key] = DifficultyStatResponse(total=0, correct=0)
             
-            difficulty_stats[diff_level].total += 1
+            difficulty_stats[diff_key].total += 1
             if is_correct:
-                difficulty_stats[diff_level].correct += 1
+                difficulty_stats[diff_key].correct += 1
             
             max_task_points = 2 if task.is_open_answer else 1
             total_max_points += max_task_points
@@ -457,7 +458,16 @@ class AdminService:
         )
     
     # ==================== ОТПРАВКА В TELEGRAM ====================
-    
+
+    def _parse_correct_option_ids(self, answer: str, options: list[str]) -> list[int]:
+        """Parse the correct answer and return indices of matching options (0-based)."""
+        answer = str(answer).strip()
+        result = []
+        for i, opt in enumerate(options):
+            if str(opt).strip() == answer:
+                result.append(i)
+        return result
+
     async def send_task_to_tg(self, task_id: int, chat_id: str):
         task = await self.task_repo.get_task_by_id(task_id)
         if not task:

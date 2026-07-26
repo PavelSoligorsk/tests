@@ -763,7 +763,7 @@ async def test_teacher_cannot_get_anothers_test(
 @pytest.mark.teacher
 @pytest.mark.asyncio
 async def test_teacher_get_student_profile_not_linked(
-    async_client: AsyncClient, teacher_token: str, admin_token: str
+    async_client: AsyncClient, teacher_token: str, admin_token: str, student_token: str
 ) -> None:
     """БТ: Профиль не-привязанного ученика → 403."""
     users = (await async_client.get("/admin/users", headers=_bearer(admin_token))).json()
@@ -779,7 +779,7 @@ async def test_teacher_get_student_profile_not_linked(
 @pytest.mark.teacher
 @pytest.mark.asyncio
 async def test_teacher_get_student_history_not_linked(
-    async_client: AsyncClient, teacher_token: str, admin_token: str
+    async_client: AsyncClient, teacher_token: str, admin_token: str, student_token: str
 ) -> None:
     """БТ: История не-привязанного ученика → 403."""
     users = (await async_client.get("/admin/users", headers=_bearer(admin_token))).json()
@@ -1056,7 +1056,7 @@ async def test_teacher_get_student_assignments_student_not_found(
 @pytest.mark.teacher
 @pytest.mark.asyncio
 async def test_teacher_get_student_assignments_permission_denied(
-    async_client: AsyncClient, teacher_token: str, admin_token: str
+    async_client: AsyncClient, teacher_token: str, admin_token: str, student_token: str
 ) -> None:
     """БТ: Нельзя смотреть назначения чужого студента → 403."""
     users = (await async_client.get("/admin/users", headers=_bearer(admin_token))).json()

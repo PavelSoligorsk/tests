@@ -194,7 +194,7 @@ async def test_stats_invalid_period(
 @pytest.mark.student
 @pytest.mark.asyncio
 async def test_teacher_cannot_view_unlinked_student_stats(
-    async_client: AsyncClient, teacher_token: str, admin_token: str
+    async_client: AsyncClient, teacher_token: str, admin_token: str, student_token: str
 ) -> None:
     """БТ: Учитель не может смотреть статистику непривязанного ученика → 403."""
     users = (await async_client.get("/admin/users", headers=_bearer(admin_token))).json()

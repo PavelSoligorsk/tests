@@ -70,6 +70,8 @@ async def change_user_role(
             raise HTTPException(status_code=422, detail="new_role is required")
         return await service.change_user_role(user_id, role, current_admin.id)
     except ValueError as e:
+        if "найден" in str(e).lower():
+            raise HTTPException(status_code=404, detail=str(e))
         raise HTTPException(status_code=400, detail=str(e))
 
 

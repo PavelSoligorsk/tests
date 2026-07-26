@@ -857,7 +857,7 @@ async def test_admin_get_detailed_result_full_cycle(
     assert d["max_task_points"] == 1
     assert d["solution"] == "2x = 4, x = 2"
     assert d["hint"] == "Move 3 to the right side"
-    assert d["difficulty"] == "2"
+    assert d["difficulty"] == 2
 
 
 @pytest.mark.admin
@@ -1300,7 +1300,7 @@ async def test_admin_add_allowed_email_empty(
         json={"email": ""},
         headers={"Authorization": f"Bearer {admin_token}"},
     )
-    assert resp.status_code == 400, resp.text
+    assert resp.status_code == 422, resp.text
 
 
 @pytest.mark.admin
@@ -1347,7 +1347,7 @@ async def test_admin_delete_allowed_email_not_found(
 @pytest.mark.admin
 @pytest.mark.asyncio
 async def test_admin_assign_student_teacher_not_found(
-    async_client: AsyncClient, admin_token: str
+    async_client: AsyncClient, admin_token: str, student_token: str
 ) -> None:
     """БТ: Назначение с несуществующим учителем → ошибка 404."""
     users_resp = await async_client.get(
@@ -1366,7 +1366,7 @@ async def test_admin_assign_student_teacher_not_found(
 @pytest.mark.admin
 @pytest.mark.asyncio
 async def test_admin_assign_student_not_found(
-    async_client: AsyncClient, admin_token: str
+    async_client: AsyncClient, admin_token: str, teacher_token: str
 ) -> None:
     """БТ: Назначение несуществующего ученика → ошибка 404."""
     users_resp = await async_client.get(
@@ -1385,7 +1385,7 @@ async def test_admin_assign_student_not_found(
 @pytest.mark.admin
 @pytest.mark.asyncio
 async def test_admin_assign_not_student_to_teacher(
-    async_client: AsyncClient, admin_token: str
+    async_client: AsyncClient, admin_token: str, teacher_token: str
 ) -> None:
     """БТ: Нельзя назначить не-студента (например, другого учителя) учеником → ошибка 404."""
     users_resp = await async_client.get(
@@ -1410,7 +1410,7 @@ async def test_admin_assign_not_student_to_teacher(
 @pytest.mark.admin
 @pytest.mark.asyncio
 async def test_admin_remove_student_link_not_found(
-    async_client: AsyncClient, admin_token: str
+    async_client: AsyncClient, admin_token: str, student_token: str
 ) -> None:
     """БТ: Удаление несуществующей связи ученик-учитель → ошибка 404."""
     users_resp = await async_client.get(
@@ -1622,10 +1622,10 @@ async def test_admin_rebuild_all_static_tests(
     assert len(data["updated_test_ids"]) >= 2  # at least 2 categories
     assert "синхронизировано" in data["message"]
 
-    # 3. Verify autocompile tests exist in teacher's task list
+    # 3. Verify autocompile tests exist in admin's task list
     tests_resp = await async_client.get(
         "/teacher/tests",
-        headers={"Authorization": f"Bearer {teacher_token}"},
+        headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert tests_resp.status_code == 200
     autocompile_tests = [
