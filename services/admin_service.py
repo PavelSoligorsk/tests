@@ -1003,8 +1003,20 @@ class AdminService:
                     coros.append(("open", self._ai_solve_open_batch(ai, open_list)))
 
                 if coros:
-                    results = await asyncio.gather(*(c[1] for c in coros))
+                    results = await asyncio.gather(*(c[1] for c in coros), return_exceptions=True)
                     for (kind, _), answers_map in zip(coros, results):
+                        if isinstance(answers_map, Exception):
+                            logger.error(
+                                f"Phase2 {kind} solve batch crashed for diff={diff_level}, "
+                                f"batch={batch_num}: {type(answers_map).__name__}: {answers_map}"
+                            )
+                            log.append(f"  💥 [{kind}] batch {batch_num} (сл.{diff_level}) ошибка: {answers_map}")
+                            continue
+                        if not isinstance(answers_map, dict):
+                            logger.warning(
+                                f"Phase2 {kind} solve batch returned non-dict: {type(answers_map).__name__}"
+                            )
+                            continue
                         task_list = closed if kind == "closed" else open_list
                         for task in task_list:
                             ai_answer = answers_map.get(task.id, "")
@@ -1106,6 +1118,12 @@ class AdminService:
                 json_mode=True,
             )
 
+            if not response:
+                logger.warning(f"Difficulty batch: empty response from AI for {len(tasks)} tasks")
+                return {}
+
+            logger.debug(f"Difficulty batch: raw response ({len(response)} chars): {response[:300]}...")
+
             # json_mode даёт чистый JSON, пробуем весь ответ как массив
             result: dict[int, int] = {}
             m = re.search(r'\[.*\]', response, re.DOTALL)
@@ -1118,13 +1136,22 @@ class AdminService:
                             d = item.get("difficulty")
                             if tid is not None and isinstance(d, int) and 1 <= d <= 5:
                                 result[int(tid)] = d
-                except (json.JSONDecodeError, TypeError, ValueError):
-                    pass
+                    logger.debug(f"Difficulty batch: parsed {len(result)}/{len(tasks)} tasks")
+                except (json.JSONDecodeError, TypeError, ValueError) as e:
+                    logger.warning(f"Difficulty batch JSON parse error: {e}")
+                    logger.warning(f"  Failed JSON snippet: {m.group()[:200]}")
+            else:
+                logger.warning(f"Difficulty batch: no JSON array found in response")
+                logger.warning(f"  Response preview: {response[:500]}")
+
+            missing = [t.id for t in tasks if t.id not in result]
+            if missing:
+                logger.warning(f"Difficulty batch: {len(missing)} tasks missing in AI response: {missing}")
 
             return result
 
         except Exception as e:
-            logger.warning(f"Difficulty batch estimation failed: {e}")
+            logger.warning(f"Difficulty batch estimation failed: {type(e).__name__}: {e}")
 
         return {}
 
@@ -1168,11 +1195,22 @@ class AdminService:
                 enable_thinking=True,
             )
 
+            if not response:
+                logger.warning(f"Open solve batch: empty response from AI for {len(tasks)} tasks")
+                return {}
+
+            logger.debug(f"Open solve batch: raw response ({len(response)} chars): {response[:300]}...")
+
             result: dict[int, str] = self._extract_answer_json(response)
+            if not result:
+                logger.warning(f"Open solve batch: _extract_answer_json returned empty for {len(tasks)} tasks")
+                logger.warning(f"  Response tail: {response[-500:]}")
+            else:
+                logger.debug(f"Open solve batch: extracted {len(result)}/{len(tasks)} answers")
             return result
 
         except Exception as e:
-            logger.warning(f"Open batch solve failed for {len(tasks)} tasks: {e}")
+            logger.warning(f"Open batch solve failed for {len(tasks)} tasks: {type(e).__name__}: {e}")
 
         return {}
 
@@ -1222,11 +1260,22 @@ class AdminService:
                 enable_thinking=True,
             )
 
+            if not response:
+                logger.warning(f"Closed solve batch: empty response from AI for {len(tasks)} tasks")
+                return {}
+
+            logger.debug(f"Closed solve batch: raw response ({len(response)} chars): {response[:300]}...")
+
             result: dict[int, str] = self._extract_answer_json(response)
+            if not result:
+                logger.warning(f"Closed solve batch: _extract_answer_json returned empty for {len(tasks)} tasks")
+                logger.warning(f"  Response tail: {response[-500:]}")
+            else:
+                logger.debug(f"Closed solve batch: extracted {len(result)}/{len(tasks)} answers")
             return result
 
         except Exception as e:
-            logger.warning(f"Batch solve failed for {len(tasks)} tasks: {e}")
+            logger.warning(f"Batch solve failed for {len(tasks)} tasks: {type(e).__name__}: {e}")
 
         return {}
 
@@ -1241,8 +1290,10 @@ class AdminService:
         matches = list(re.finditer(r'\[.*?\]', response, re.DOTALL))
         result: dict[int, str] = {}
 
+        logger.debug(f"_extract_answer_json: response={len(response)} chars, found {len(matches)} array candidates")
+
         # Пробуем от последнего к первому — самый надёжный
-        for m in reversed(matches):
+        for idx, m in enumerate(reversed(matches)):
             try:
                 items = json.loads(m.group())
                 if isinstance(items, list) and items:
@@ -1252,8 +1303,10 @@ class AdminService:
                         if tid is not None and ans is not None:
                             result[int(tid)] = str(ans).strip()
                     if result:
+                        logger.debug(f"_extract_answer_json: success at candidate #{idx} — {len(result)} entries")
                         return result
-            except (json.JSONDecodeError, TypeError, ValueError):
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                logger.debug(f"_extract_answer_json: candidate #{idx} parse error: {type(e).__name__}: {e}")
                 continue
 
         # Fallback: ищем JSON в хвосте ответа (последние 2000 символов)
@@ -1267,8 +1320,16 @@ class AdminService:
                     ans = item.get("answer")
                     if tid is not None and ans is not None:
                         result[int(tid)] = str(ans).strip()
-            except (json.JSONDecodeError, TypeError, ValueError):
-                pass
+                if result:
+                    logger.debug(f"_extract_answer_json: fallback success — {len(result)} entries")
+                else:
+                    logger.warning(f"_extract_answer_json: fallback parsed array but no valid entries: {m.group()[:300]}")
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                logger.warning(f"_extract_answer_json: fallback parse error: {type(e).__name__}: {e}")
+                logger.warning(f"  Fallback snippet: {m.group()[:300]}")
+        else:
+            logger.warning(f"_extract_answer_json: no JSON array found in response tail. Tail preview:")
+            logger.warning(f"  {tail[:500]}")
 
         return result
 
@@ -1345,11 +1406,24 @@ Pick topic and section ONLY from the list above. If no exact match, choose the c
                 max_tokens=self.CLASSIFY_TOKENS_PER_TASK,
                 json_mode=True,
             )
+
+            if not response:
+                logger.warning(f"Classify task #{task.id}: empty response from AI")
+                return None
+
+            logger.debug(f"Classify task #{task.id}: raw ({len(response)} chars): {response[:200]}")
+
             m = re.search(r'\{[^{}]*\}', response, re.DOTALL)
             if m:
                 data = json.loads(m.group())
                 if data.get("topic"):
                     return data
+                else:
+                    logger.warning(f"Classify task #{task.id}: JSON parsed but no 'topic' field: {data}")
+            else:
+                logger.warning(f"Classify task #{task.id}: no JSON object found in response: {response[:300]}")
+        except json.JSONDecodeError as e:
+            logger.warning(f"Classify task #{task.id}: JSON parse error: {e}")
         except Exception as e:
-            logger.warning(f"AI classify failed for task {task.id}: {e}")
+            logger.warning(f"AI classify failed for task {task.id}: {type(e).__name__}: {e}")
         return None

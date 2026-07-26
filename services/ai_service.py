@@ -2,9 +2,12 @@ import json
 import re
 import os
 import asyncio
+import logging
 from typing import List, Dict, Optional, Literal
 
 AIProvider = Literal["mistral", "deepseek"]
+
+logger = logging.getLogger(__name__)
 
 
 class AIService:
@@ -77,7 +80,18 @@ class AIService:
                 if (not content or not content.strip()) and enable_thinking:
                     reasoning = getattr(response.choices[0].message, "reasoning_content", None)
                     if reasoning:
+                        logger.info(
+                            "DeepSeek thinking consumed all tokens — falling back to reasoning_content "
+                            f"({len(reasoning)} chars)"
+                        )
                         content = reasoning
+                if not content or not content.strip():
+                    logger.warning(
+                        f"DeepSeek returned empty content. "
+                        f"json_mode={json_mode}, thinking={enable_thinking}, "
+                        f"max_tokens={max_tokens}, finish_reason="
+                        f"{getattr(response.choices[0], 'finish_reason', '?')}"
+                    )
                 return content or ""
             else:
                 response = await asyncio.to_thread(
@@ -92,6 +106,7 @@ class AIService:
                 )
                 return response.choices[0].message.content or ""
         except Exception as e:
+            logger.error(f"AI Error ({self.provider}): {type(e).__name__}: {e}", exc_info=True)
             raise Exception(f"AI Error ({self.provider}): {str(e)}")
     
     async def get_hint(self, task: dict, topic_mastery: Optional[float] = None) -> str:
