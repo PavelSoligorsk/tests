@@ -831,6 +831,7 @@ class AdminService:
            Если AI не смог оценить → задание пропускается (не идёт на следующие этапы).
         2. Задания группируются по сложности и решаются пакетно
            (20/10/7/3/1 шт. для сложности 1/2/3/4/5).
+           И закрытые, и открытые задания решаются в одном батче.
            Ответы сравниваются с эталоном.
         3. Для заданий с верным ответом AI классифицирует topic/section.
 
@@ -965,16 +966,18 @@ class AdminService:
                             stats["failed"] += 1
                             log.append(f"  ❌ #{task.id} (сл.{diff_level}) ответ не совпал: AI=«{ai_answer}», эталон=«{task.answer}»")
 
-                # Открытые задания — по одному (их обычно мало)
-                for task in open_list:
-                    ai_answer = await self._ai_solve_task(ai, task)
-                    if self._compare_answer(ai_answer, task):
-                        solved_tasks.append(task)
-                        stats["solved"] += 1
-                        log.append(f"  ✅ #{task.id} (сл.{diff_level}, открытый) ответ совпал: «{ai_answer}»")
-                    else:
-                        stats["failed"] += 1
-                        log.append(f"  ❌ #{task.id} (сл.{diff_level}, открытый) ответ не совпал: AI=«{ai_answer}», эталон=«{task.answer}»")
+                # Пакетное решение открытых заданий
+                if open_list:
+                    answers_map = await self._ai_solve_open_batch(ai, open_list)
+                    for task in open_list:
+                        ai_answer = answers_map.get(task.id, "")
+                        if self._compare_answer(ai_answer, task):
+                            solved_tasks.append(task)
+                            stats["solved"] += 1
+                            log.append(f"  ✅ #{task.id} (сл.{diff_level}, открытый) ответ совпал: «{ai_answer}»")
+                        else:
+                            stats["failed"] += 1
+                            log.append(f"  ❌ #{task.id} (сл.{diff_level}, открытый) ответ не совпал: AI=«{ai_answer}», эталон=«{task.answer}»")
 
                 if i + batch_size < len(batch_tasks) or diff_level < 5:
                     await asyncio.sleep(0.3)
@@ -1046,30 +1049,59 @@ class AdminService:
             logger.warning(f"Difficulty estimation failed for task {task.id}: {e}")
         return None
 
-    async def _ai_solve_task(self, ai, task: Task) -> str:
-        """AI решает задание (открытый ответ). Возвращает ответ строкой."""
-        prompt = f"""Реши задачу и верни ТОЛЬКО JSON: {{"answer": "..."}}
+    async def _ai_solve_open_batch(self, ai, tasks: list[Task]) -> dict[int, str]:
+        """Пакетное решение открытых заданий.
 
-Класс: {task.task_class}
-Условие:
-{task.content[:800]}
+        Отправляет все задания одним промптом, AI возвращает JSON-массив
+        с ответами для каждого задания. Возвращает словарь {task_id: answer}.
+        """
+        if not tasks:
+            return {}
 
-В answer — только число/выражение без префиксов («x=», «ответ:» и т.п.).
-"""
+        task_blocks: list[str] = []
+        for i, task in enumerate(tasks, 1):
+            block = (
+                f"### ЗАДАНИЕ {i} (id={task.id}, класс={task.task_class})\n"
+                f"Условие:\n{task.content[:600]}\n"
+            )
+            task_blocks.append(block)
+
+        prompt = (
+            "Реши КАЖДОЕ задание и верни ТОЛЬКО JSON-массив:\n"
+            '[{"task_id": N, "answer": "..."}, ...]\n'
+            "Где task_id — id задания, answer — число/выражение без префиксов («x=», «ответ:» и т.п.).\n\n"
+            + "\n".join(task_blocks)
+        )
+
+        max_tokens = max(200, min(len(tasks) * 80, 2000))
+
         try:
             response = await ai._chat_completion(
-                system_prompt="Ты — математик. Отвечаешь только валидным JSON. В answer — строка.",
+                system_prompt=(
+                    "Ты — математик. Решаешь несколько задач одним ответом. "
+                    "Отвечаешь ТОЛЬКО валидным JSON-массивом без markdown. "
+                    "answer — строка с ответом (число/выражение)."
+                ),
                 user_prompt=prompt,
                 temperature=0.1,
-                max_tokens=100,
+                max_tokens=max_tokens,
             )
-            m = re.search(r'\{.*\}', response, re.DOTALL)
+
+            m = re.search(r'\[.*\]', response, re.DOTALL)
             if m:
-                data = json.loads(m.group())
-                return str(data.get("answer", "")).strip()
+                items = json.loads(m.group())
+                result: dict[int, str] = {}
+                for item in items:
+                    tid = item.get("task_id")
+                    ans = item.get("answer")
+                    if tid is not None and ans is not None:
+                        result[int(tid)] = str(ans).strip()
+                return result
+
         except Exception as e:
-            logger.warning(f"AI solve failed for task {task.id}: {e}")
-        return ""
+            logger.warning(f"Open batch solve failed for {len(tasks)} tasks: {e}")
+
+        return {}
 
     async def _ai_solve_batch(self, ai, tasks: list[Task]) -> dict[int, str]:
         """Пакетное решение закрытых заданий (выбор варианта).
