@@ -1289,52 +1289,59 @@ class AdminService:
     def _extract_answer_json(response: str) -> dict[int, str]:
         """Извлекает {task_id: answer} из JSON-массива в ответе AI.
 
-        Ищет JSON-массив в последней трети ответа (после рассуждений),
-        а не в начале, где может быть шаблон из промпта.
+        json_mode даёт чистый JSON — пробуем прямой парсинг.
+        Если не выходит — ищем массив в тексте.
         """
-        # Ищем ВСЕ JSON-массивы, берём последний (он после рассуждений)
-        matches = list(re.finditer(r'\[.*?\]', response, re.DOTALL))
         result: dict[int, str] = {}
 
-        logger.debug(f"_extract_answer_json: response={len(response)} chars, found {len(matches)} array candidates")
-
-        # Пробуем от последнего к первому — самый надёжный
-        for idx, m in enumerate(reversed(matches)):
-            try:
-                items = json.loads(m.group())
-                if isinstance(items, list) and items:
-                    for item in items:
-                        tid = item.get("task_id")
-                        ans = item.get("answer")
-                        if tid is not None and ans is not None:
-                            result[int(tid)] = str(ans).strip()
-                    if result:
-                        logger.debug(f"_extract_answer_json: success at candidate #{idx} — {len(result)} entries")
-                        return result
-            except (json.JSONDecodeError, TypeError, ValueError) as e:
-                logger.debug(f"_extract_answer_json: candidate #{idx} parse error: {type(e).__name__}: {e}")
-                continue
-
-        # Fallback: ищем JSON в хвосте ответа (последние 2000 символов)
-        tail = response[-2000:] if len(response) > 2000 else response
-        m = re.search(r'\[.*\]', tail, re.DOTALL)
-        if m:
-            try:
-                items = json.loads(m.group())
+        def _parse(items) -> dict[int, str]:
+            r: dict[int, str] = {}
+            if isinstance(items, list) and items:
                 for item in items:
                     tid = item.get("task_id")
                     ans = item.get("answer")
                     if tid is not None and ans is not None:
-                        result[int(tid)] = str(ans).strip()
+                        r[int(tid)] = str(ans).strip()
+            return r
+
+        # Попытка 1: прямой парсинг (json_mode гарантирует чистый JSON)
+        try:
+            items = json.loads(response.strip())
+            result = _parse(items)
+            if result:
+                logger.debug(f"_extract_answer_json: direct parse OK — {len(result)} entries")
+                return result
+        except (json.JSONDecodeError, TypeError, ValueError):
+            pass
+
+        # Попытка 2: жадный поиск JSON-массива (берёт самый большой)
+        for m in re.finditer(r'\[.*\]', response, re.DOTALL):
+            try:
+                items = json.loads(m.group())
+                result = _parse(items)
                 if result:
-                    logger.debug(f"_extract_answer_json: fallback success — {len(result)} entries")
-                else:
-                    logger.warning(f"_extract_answer_json: fallback parsed array but no valid entries: {m.group()[:300]}")
+                    logger.debug(f"_extract_answer_json: greedy match OK — {len(result)} entries")
+                    return result
             except (json.JSONDecodeError, TypeError, ValueError) as e:
-                logger.warning(f"_extract_answer_json: fallback parse error: {type(e).__name__}: {e}")
-                logger.warning(f"  Fallback snippet: {m.group()[:300]}")
+                logger.debug(f"_extract_answer_json: greedy match parse error: {type(e).__name__}: {e}")
+                continue
+
+        # Попытка 3: fallback — хвост ответа
+        tail = response[-3000:] if len(response) > 3000 else response
+        m = re.search(r'\[.*\]', tail, re.DOTALL)
+        if m:
+            try:
+                items = json.loads(m.group())
+                result = _parse(items)
+                if result:
+                    logger.debug(f"_extract_answer_json: tail match OK — {len(result)} entries")
+                else:
+                    logger.warning(f"_extract_answer_json: tail parsed but no entries: {m.group()[:300]}")
+            except (json.JSONDecodeError, TypeError, ValueError) as e:
+                logger.warning(f"_extract_answer_json: tail parse error: {type(e).__name__}: {e}")
+                logger.warning(f"  Snippet: {m.group()[:300]}")
         else:
-            logger.warning(f"_extract_answer_json: no JSON array found in response tail. Tail preview:")
+            logger.warning(f"_extract_answer_json: no JSON array found. Tail preview:")
             logger.warning(f"  {tail[:500]}")
 
         return result
