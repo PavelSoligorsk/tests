@@ -1,4 +1,5 @@
 import datetime
+import logging
 import re
 import random
 from typing import List, Optional
@@ -13,6 +14,8 @@ from repositories.assignment_repository import AssignmentRepository
 from repositories.group_repository import GroupRepository
 from repositories.teacher_student_repository import TeacherStudentRepository
 from services.ai_service import AIService
+
+logger = logging.getLogger("teacher_service")
 
 from core.models import Test, TestTaskAssociation
 
@@ -816,6 +819,7 @@ class TeacherService:
         recent_weeks: float = 1.5,
     ):
         """Сгенерировать AI-тест для указанных учеников (или групп)."""
+        log_prefix = f"[AI-Test] teacher={teacher_id}"
 
         # --- Собираем ID учеников ---
         target_student_ids: list[int] = []
@@ -845,6 +849,9 @@ class TeacherService:
         if task_count < 1 or task_count > 50:
             raise ValueError("Количество заданий должно быть от 1 до 50")
 
+        logger.info("%s ученики=%s групп=%s промт=«%s» задач=%d сложность=%s недель=%.1f",
+                     log_prefix, target_student_ids, group_ids, prompt[:60], task_count, difficulty or "любая", recent_weeks)
+
         # --- Шаг 1: AI классифицирует темы ---
         structure_data = await self.task_repo.get_tasks_structure()
         topics_structure = {}
@@ -854,7 +861,11 @@ class TeacherService:
             if section:
                 topics_structure[topic].add(section)
 
+        logger.debug("%s Шаг 1: классификация тем (в базе %d тем)", log_prefix, len(topics_structure))
         detected_topics = await self.ai_service.classify_topics(prompt, topics_structure)
+        logger.info("%s Шаг 1: AI определил %d тем: %s",
+                     log_prefix, len(detected_topics),
+                     [t.get("name") for t in detected_topics])
 
         # --- Шаг 2: Определяем трудность ---
         difficulty_map = {
@@ -863,6 +874,7 @@ class TeacherService:
             "hard": [4, 5],
         }
         target_difficulties = difficulty_map.get(difficulty, [1, 2, 3, 4, 5]) if difficulty else [1, 2, 3, 4, 5]
+        logger.debug("%s Шаг 2: диапазон сложности %s", log_prefix, target_difficulties)
 
         # --- Шаг 3: Получаем недавно решённые задачи ---
         recent_cutoff = datetime.datetime.utcnow() - datetime.timedelta(weeks=recent_weeks)
@@ -875,9 +887,11 @@ class TeacherService:
                     for ans in answers:
                         recent_task_ids.add(ans.task_id)
 
+        logger.info("%s Шаг 3: исключено %d недавних задач (за %.1f нед)", log_prefix, len(recent_task_ids), recent_weeks)
+
         # --- Шаг 4: Подбираем задания ---
         if not detected_topics:
-            # Случайный подбор без недавних
+            logger.warning("%s Шаг 4: AI не определил темы → случайный подбор", log_prefix)
             return await self._build_ai_test(
                 teacher_id, prompt, task_count, target_difficulties,
                 recent_task_ids, difficulty,
@@ -894,10 +908,12 @@ class TeacherService:
 
         # Получаем задания по темам
         if len(topic_names) >= 3:
+            logger.debug("%s Шаг 4: распределённый поиск по %d темам", log_prefix, len(topic_names))
             filtered_tasks = await self._get_tasks_distributed(
                 topic_names, sections_map, target_difficulties, task_count,
             )
         else:
+            logger.debug("%s Шаг 4: прямой поиск по темам %s", log_prefix, topic_names)
             filtered_tasks = await self.task_repo.get_tasks_by_topics(
                 topic_names, sections_map, target_difficulties,
             )
@@ -905,22 +921,27 @@ class TeacherService:
         # Fallback по ключевым словам
         if not filtered_tasks:
             keywords = [w for w in re.sub(r'[^\w\s]', '', prompt).split() if len(w) > 3]
+            logger.info("%s Шаг 4: по темам 0 задач → fallback по ключевым словам: %s", log_prefix, keywords[:10])
             if keywords:
                 filtered_tasks = await self.task_repo.get_tasks_by_keywords(keywords, target_difficulties)
 
         # Финальный fallback
         if not filtered_tasks:
+            logger.info("%s Шаг 4: по ключевым словам 0 задач → случайные 300", log_prefix)
             filtered_tasks = await self.task_repo.get_random_tasks(300, None, target_difficulties)
 
         if not filtered_tasks:
-            # Создаём тест без заданий (как fallback при пустой базе)
+            logger.warning("%s Шаг 4: В БД нет заданий → пустой тест", log_prefix)
             return await self._build_ai_test(
                 teacher_id, prompt, task_count, target_difficulties,
                 recent_task_ids, difficulty,
             )
 
+        logger.info("%s Шаг 4: найдено %d заданий до фильтрации недавних", log_prefix, len(filtered_tasks))
+
         # Исключаем недавние
         filtered_tasks = [t for t in filtered_tasks if t.id not in recent_task_ids]
+        logger.info("%s Шаг 4: после исключения недавних — %d заданий", log_prefix, len(filtered_tasks))
 
         if not filtered_tasks:
             raise ValueError("Нет заданий вне недавно пройденных. Попробуйте другую тему.")
@@ -937,6 +958,10 @@ class TeacherService:
             t = task.topic or "Н/Д"
             topic_stats[t] = topic_stats.get(t, 0) + 1
 
+        logger.info("%s Шаг 5: AI выбирает из %d заданий (статистика тем: %s)",
+                     log_prefix, len(filtered_tasks),
+                     {t: c for t, c in sorted(topic_stats.items(), key=lambda x: -x[1])[:10]})
+
         selected_ids = await self.ai_service.select_tasks(
             prompt, tasks_for_ai, task_count,
             difficulty or "Любая",
@@ -944,16 +969,19 @@ class TeacherService:
         )
 
         if selected_ids:
+            logger.info("%s Шаг 5: AI выбрал %d заданий: %s", log_prefix, len(selected_ids), selected_ids)
             selected_tasks = await self.task_repo.get_tasks_by_ids(selected_ids)
             if len(selected_tasks) < task_count:
                 remaining_ids = [t.id for t in filtered_tasks if t.id not in selected_ids]
                 if remaining_ids:
                     needed = task_count - len(selected_tasks)
                     extra_ids = self._distribute_remaining(filtered_tasks, remaining_ids, needed)
+                    logger.info("%s Шаг 5: докидываем %d заданий: %s", log_prefix, len(extra_ids), extra_ids)
                     if extra_ids:
                         extra_tasks = await self.task_repo.get_tasks_by_ids(extra_ids)
                         selected_tasks.extend(extra_tasks)
         else:
+            logger.warning("%s Шаг 5: AI не выбрал ничего → random.sample из %d", log_prefix, len(filtered_tasks))
             selected_tasks = random.sample(filtered_tasks, min(task_count, len(filtered_tasks)))
 
         sorted_tasks = self._sort_for_test(selected_tasks)
@@ -965,6 +993,9 @@ class TeacherService:
             title_topics += f" и ещё {len(topics_used) - 3} тем"
         if not title_topics:
             title_topics = "Умный подбор"
+
+        logger.info("%s Шаг 6: тест «%s» → %d заданий, темы: %s",
+                     log_prefix, title_topics, len(sorted_tasks), topics_used)
 
         test_data = {
             "title": f"AI: {title_topics}",

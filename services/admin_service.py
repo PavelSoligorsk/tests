@@ -893,7 +893,7 @@ class AdminService:
 
                 if not matched:
                     stats["failed"] += 1
-                    log.append(f"{prefix} ❌ ответ не совпал: AI=«{ai_answer}», эталон=«{task.answer}»")
+                    log.append(f"{prefix} {task.content}\n{prefix} ❌ ответ не совпал: AI=«{ai_answer}», эталон=«{task.answer}»")
                     continue
 
                 stats["solved"] += 1
