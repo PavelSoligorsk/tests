@@ -24,7 +24,7 @@ class AIService:
                 api_key=os.getenv("DEEPSEEK_API_KEY"),
                 base_url="https://api.deepseek.com",
             )
-            self.model = "deepseek-reasoner"
+            self.model = "deepseek-v4-pro"
         else:
             from mistralai.client import Mistral
             self.client = Mistral(api_key=os.getenv("MISTRAL_TOKEN"))
@@ -48,6 +48,8 @@ class AIService:
                     ],
                     temperature=temperature,
                     max_tokens=max_tokens,
+                    reasoning_effort="medium",
+                    extra_body={"thinking": {"type": "enabled"}},
                 )
                 return response.choices[0].message.content
             else:
