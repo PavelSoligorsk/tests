@@ -830,21 +830,24 @@ class AdminService:
     ESTIMATE_TOKENS_PER_TASK: int = 300
     ESTIMATE_MIN_TOKENS: int = 4096
 
-    # Фаза 2: решение. thinking включён — дорого, зависит от сложности.
-    # Сложнее задача → больше шагов reasoning → больше токенов.
+    # Фаза 2: решение. json_mode (без thinking) — модель всё равно считает внутри.
+    #   thinking отключён, потому что он съедает бюджет на рассуждения,
+    #   и JSON обрезается (finish_reason=length).
+    #   Бюджет на задачу выше, т.к. модель пишет решение текстом перед JSON.
     SOLVE_TOKENS_PER_TASK: dict[int, int] = {
-        1: 100,   # устный счёт — почти без reasoning
-        2: 200,   # простое — 1-2 шага
-        3: 400,   # среднее — 2-4 шага
-        4: 800,   # сложное — 5+ шагов
-        5: 1200,  # олимпиадное — много шагов
+        1: 300,
+        2: 600,
+        3: 1000,
+        4: 1500,
+        5: 2500,
     }
-    SOLVE_MIN_TOKENS: int = 2000
+    SOLVE_MIN_TOKENS: int = 4096
     SOLVE_MAX_TOKENS: int = 32000
 
-    # Фаза 3: классификация topic/section. json_mode — дёшево, flat.
-    CLASSIFY_TOKENS_PER_TASK: int = 200
-    CLASSIFY_MIN_TOKENS: int = 500
+    # Фаза 3: классификация topic/section. json_mode — один JSON-объект.
+    #   200 токенов было мало даже на {"topic":"...","section":"..."} — finish_reason=length.
+    CLASSIFY_TOKENS_PER_TASK: int = 1024
+    CLASSIFY_MIN_TOKENS: int = 1024
 
     @staticmethod
     def _solve_tokens_for(tasks: list[Task]) -> int:
@@ -1158,11 +1161,11 @@ class AdminService:
         return {}
 
     async def _ai_solve_open_batch(self, ai, tasks: list[Task]) -> dict[int, str]:
-        """Пакетное решение открытых заданий с reasoning.
+        """Пакетное решение открытых заданий — json_mode, без thinking.
 
-        Ключевое изменение: НЕ используем json_mode (он отключает thinking).
-        Вместо этого модель решает с reasoning, а в конце пишет JSON-блок.
-        JSON извлекается из последней части ответа.
+        thinking отключён, потому что он съедает бюджет токенов на рассуждения,
+        и JSON-массив обрезается (finish_reason=length).
+        json_mode гарантирует валидный JSON на выходе.
         """
         if not tasks:
             return {}
@@ -1176,10 +1179,10 @@ class AdminService:
             task_blocks.append(block)
 
         prompt = (
-            "Реши КАЖДОЕ задание. Думай пошагово.\n"
-            "В САМОМ КОНЦЕ ответа напиши JSON-массив с ответами:\n"
-            '[{"task_id": <id>, "answer": "<твой ответ числом или выражением>"}, ...]\n'
-            "answer — ТОЛЬКО число или математическое выражение без префиксов (без «x=», «ответ:», и т.п.).\n\n"
+            "Реши КАЖДОЕ задание и выведи ответы в JSON-массиве. "
+            "answer — ТОЛЬКО число или математическое выражение без префиксов (без «x=», «ответ:», и т.п.).\n"
+            "Формат ответа строго:\n"
+            '[{"task_id": <id>, "answer": "<число или выражение>"}, ...]\n\n'
             + "\n".join(task_blocks)
         )
 
@@ -1188,13 +1191,13 @@ class AdminService:
         try:
             response = await ai._chat_completion(
                 system_prompt=(
-                    "Ты — математик. Решай каждую задачу пошагово, объясняй рассуждения. "
-                    "В КОНЦЕ ответа выдай JSON-массив с task_id и answer для каждого задания."
+                    "Ты — математик. Реши каждое задание и верни ответ СТРОГО в JSON-массиве "
+                    '[{"task_id": <id>, "answer": "<ответ>"}, ...]. Никакого текста вне JSON.'
                 ),
                 user_prompt=prompt,
                 temperature=0.0,
                 max_tokens=max_tokens,
-                enable_thinking=True,
+                json_mode=True,
             )
 
             if not response:
@@ -1217,9 +1220,10 @@ class AdminService:
         return {}
 
     async def _ai_solve_batch(self, ai, tasks: list[Task]) -> dict[int, str]:
-        """Пакетное решение закрытых заданий (выбор варианта) с reasoning.
+        """Пакетное решение закрытых заданий (выбор варианта) — json_mode, без thinking.
 
         AI решает ЗНАЧЕНИЕ правильного ответа (текст варианта), а не его номер.
+        thinking отключён — json_mode даёт валидный JSON без обрезки.
         """
         if not tasks:
             return {}
@@ -1239,10 +1243,9 @@ class AdminService:
             task_blocks.append(block)
 
         prompt = (
-            "Реши КАЖДОЕ задание. Думай пошагово, а затем выбери правильный вариант.\n"
-            "В САМОМ КОНЦЕ ответа напиши JSON-массив. В поле answer положи ТОЧНЫЙ ТЕКСТ "
-            "правильного варианта (не номер, а само значение).\n"
-            "Формат:\n"
+            "Реши КАЖДОЕ задание и выбери правильный вариант. "
+            "В поле answer запиши ТОЧНЫЙ ТЕКСТ правильного варианта (не номер, а само значение).\n"
+            "Формат ответа строго:\n"
             '[{"task_id": <id>, "answer": "<текст правильного варианта>"}, ...]\n\n'
             + "\n".join(task_blocks)
         )
@@ -1252,14 +1255,15 @@ class AdminService:
         try:
             response = await ai._chat_completion(
                 system_prompt=(
-                    "Ты — математик. Решай каждую задачу пошагово, объясняй рассуждения. "
-                    "В КОНЦЕ ответа выдай JSON-массив с task_id и answer для каждого задания. "
-                    "answer — ТОЧНЫЙ ТЕКСТ правильного варианта (не номер, а само значение)."
+                    "Ты — математик. Реши каждое задание и верни ответ СТРОГО в JSON-массиве "
+                    '[{"task_id": <id>, "answer": "<текст варианта>"}, ...]. '
+                    "answer — ТОЧНЫЙ ТЕКСТ правильного варианта (не номер, а само значение). "
+                    "Никакого текста вне JSON."
                 ),
                 user_prompt=prompt,
                 temperature=0.0,
                 max_tokens=max_tokens,
-                enable_thinking=True,
+                json_mode=True,
             )
 
             if not response:
