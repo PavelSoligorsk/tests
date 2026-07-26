@@ -118,18 +118,6 @@ async def get_tasks(
     return await service.get_tasks()
 
 
-@router.get("/tasks/{task_id}", response_model=TaskResponse)
-async def get_task(
-    task_id: int,
-    service: AdminService = Depends(get_admin_service),
-    current_admin: User = Depends(auth.check_admin)
-):
-    try:
-        return await service.get_task(task_id)
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
 @router.post("/tasks", response_model=TaskResponse)
 async def create_task(
     payload: TaskCreate,
@@ -141,36 +129,9 @@ async def create_task(
     return result
 
 
-@router.put("/tasks/{task_id}")
-async def update_task(
-    task_id: int,
-    payload: TaskCreate,
-    service: AdminService = Depends(get_admin_service),
-    current_admin: User = Depends(auth.check_admin)
-):
-    try:
-        result = await service.update_task(task_id, payload.model_dump())
-        _invalidate_task_caches()
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
-@router.delete("/tasks/{task_id}", response_model=MessageResponse)
-async def delete_task(
-    task_id: int,
-    service: AdminService = Depends(get_admin_service),
-    current_admin: User = Depends(auth.check_admin)
-):
-    try:
-        result = await service.delete_task(task_id)
-        _invalidate_task_caches()
-        return result
-    except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
 # ==================== ПАКЕТНЫЕ ОПЕРАЦИИ С ЗАДАНИЯМИ ====================
+# Important: batch routes MUST be registered before /tasks/{task_id}
+# to avoid the path param capturing "batch" as a task_id.
 
 
 @router.post("/tasks/batch", response_model=BatchTaskCreateResponse)
@@ -209,6 +170,50 @@ async def delete_tasks_batch(
     result = await service.delete_tasks_batch(payload.ids)
     _invalidate_task_caches()
     return result
+
+
+# --- Single-item routes (after batch to avoid shadowing) ---
+
+
+@router.get("/tasks/{task_id}", response_model=TaskResponse)
+async def get_task(
+    task_id: int,
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    try:
+        return await service.get_task(task_id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.put("/tasks/{task_id}")
+async def update_task(
+    task_id: int,
+    payload: TaskCreate,
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    try:
+        result = await service.update_task(task_id, payload.model_dump())
+        _invalidate_task_caches()
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.delete("/tasks/{task_id}", response_model=MessageResponse)
+async def delete_task(
+    task_id: int,
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    try:
+        result = await service.delete_task(task_id)
+        _invalidate_task_caches()
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 @router.get("/results/{result_id}", response_model=DetailedResultResponse)

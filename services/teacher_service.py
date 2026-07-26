@@ -111,37 +111,56 @@ class TeacherService:
                     target_topic=None, is_autocompile: bool = False,
                     task_ids=None):
         """Создать новый тест с предварительной загрузкой"""
-        test_data = {
-            "title": title,
-            "target_class": str(target_class) if target_class else None,
-            "target_topic": str(target_topic) if target_topic else None,
-            "is_autocompile": is_autocompile,
-            "creator_id": creator_id,
-            "is_active": True
-        }
-        
-        test = Test(**test_data)
-        self.db.add(test)
-        await self.db.flush()
-        
-        # Загружаем задачи и добавляем их
-        if task_ids:
-            tasks = await self.task_repo.get_tasks_by_ids(task_ids)
-            if tasks:
-                # Важно: сначала загружаем существующие tasks через selectinload
-                # чтобы избежать lazy loading
-                await self.db.refresh(test, attribute_names=['tasks'])
-                # Теперь безопасно добавляем
-                test.tasks.extend(tasks)
-                await self.db.flush()
-        
-        # Возвращаем тест с загруженными задачами
-        result = await self.db.execute(
-            select(Test)
-            .options(selectinload(Test.tasks))
-            .where(Test.id == test.id)
-        )
-        return result.scalars().first()
+        try:
+            test_data = {
+                "title": title,
+                "target_class": str(target_class) if target_class else None,
+                "target_topic": str(target_topic) if target_topic else None,
+                "is_autocompile": is_autocompile,
+                "creator_id": creator_id,
+                "is_active": True
+            }
+            
+            # Логируем данные для отладки
+            print(f"Creating test with data: {test_data}")
+            print(f"Task IDs: {task_ids}")
+            
+            test = Test(**test_data)
+            self.db.add(test)
+            await self.db.flush()  # Получаем test.id
+            
+            print(f"Test created with ID: {test.id}")
+            
+            # Загружаем задачи и добавляем их
+            if task_ids:
+                tasks = await self.task_repo.get_tasks_by_ids(task_ids)
+                print(f"Found {len(tasks) if tasks else 0} tasks")
+                
+                if tasks:
+                    # Обновляем тест с задачами
+                    test.tasks = list(tasks)
+                    await self.db.flush()
+                    print(f"Added {len(tasks)} tasks to test")
+            
+            # Коммитим все изменения
+            await self.db.commit()
+            print("Transaction committed successfully")
+            
+            # Возвращаем тест с загруженными задачами
+            result = await self.db.execute(
+                select(Test)
+                .options(selectinload(Test.tasks))
+                .where(Test.id == test.id)
+            )
+            test_result = result.scalars().first()
+            print(f"Test loaded from DB: {test_result is not None}")
+            
+            return test_result
+            
+        except Exception as e:
+            print(f"Error creating test: {str(e)}")
+            await self.db.rollback()
+            raise
     
     async def update_test(self, test_id: int, teacher_id: int, title: str,
                     target_class=None, target_topic=None,
