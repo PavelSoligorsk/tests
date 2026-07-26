@@ -825,8 +825,10 @@ class AdminService:
 
     # ── Токен-бюджеты (расценки) ──
     # Фаза 1: оценка сложности. json_mode (без thinking) — дёшево, flat.
-    ESTIMATE_TOKENS_PER_TASK: int = 150
-    ESTIMATE_MIN_TOKENS: int = 2000
+    #   finish_reason=length при заниженном бюджете → JSON обрезается → пустой ответ.
+    #   300 токенов/задачу даёт запас на verbose формулировки AI.
+    ESTIMATE_TOKENS_PER_TASK: int = 300
+    ESTIMATE_MIN_TOKENS: int = 4096
 
     # Фаза 2: решение. thinking включён — дорого, зависит от сложности.
     # Сложнее задача → больше шагов reasoning → больше токенов.
@@ -923,8 +925,8 @@ class AdminService:
         log.append("\n── ФАЗА 1: оценка сложности ──")
         estimated_tasks: list[Task] = []
 
-        # Батчами по 25 заданий — вместо 100 вызовов делаем 4
-        DIFF_BATCH = 25
+        # Батчами по 15 заданий — json_mode, без thinking, не перегружаем модель
+        DIFF_BATCH = 15
         total_batches = (len(tasks) + DIFF_BATCH - 1) // DIFF_BATCH
         for batch_num in range(total_batches):
             batch = tasks[batch_num * DIFF_BATCH : (batch_num + 1) * DIFF_BATCH]
