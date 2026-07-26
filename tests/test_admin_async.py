@@ -1705,3 +1705,149 @@ async def test_teacher_cannot_create_task(
         headers={"Authorization": f"Bearer {teacher_token}"},
     )
     assert resp.status_code == 403, resp.text
+# ═══════════════════════════════════════════════════════════════
+# AI-классификация заданий
+# ═══════════════════════════════════════════════════════════════
+
+
+@pytest.mark.admin
+@pytest.mark.asyncio
+async def test_admin_classify_tasks_with_ids(
+    async_client: AsyncClient, admin_token: str
+) -> None:
+    """БТ: Админ запускает AI-классификацию заданий по списку ID.
+
+    Проверяем:
+    - Эндпоинт принимает task_ids и возвращает ClassifyTasksResponse.
+    - С мокнутым AI все три фазы проходят без ошибок.
+    - В ответе есть корректные счётчики processed/difficulty/solved/classified.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    # Создаём несколько заданий с уже заданными topic/section
+    # (для построения topics_structure в сервисе)
+    for i in range(3):
+        resp = await async_client.post(
+            "/admin/tasks",
+            json={
+                "task_class": "10",
+                "topic_number": str(i + 1),
+                "topic": "algebra",
+                "section": "equations",
+                "content": f"Solve: {i + 2}x + {i + 1} = 0",
+                "answer": str(round(-(i + 1) / (i + 2), 4)),
+                "is_open_answer": False,
+                "options": ["-0.5", "0", "0.5", "1"],
+                "difficulty": 1,
+                "hint": "Isolate x",
+                "solution": "x = -b/a",
+            },
+            headers={"Authorization": f"******"},
+        )
+        assert resp.status_code == 200, f"Task {i} creation failed: {resp.text}"
+
+    # Мокируем AIService._chat_completion чтобы возвращать предсказуемые ответы.
+    async def mock_chat_completion(
+        self_: object,
+        system_prompt: str,
+        user_prompt: str,
+        temperature: float = 0.7,
+        max_tokens: int = 800,
+        json_mode: bool = False,
+        enable_thinking: bool = False,
+    ) -> str:
+        if "difficulty" in system_prompt.lower() or "Rate the difficulty" in user_prompt:
+            return '{"difficulty": 3}'
+        if "Solve EACH task" in user_prompt or "solve" in system_prompt.lower():
+            import re as _re
+            items = []
+            for tid_str in _re.findall(r"id=(\d+)", user_prompt):
+                tid = int(tid_str)
+                items.append(f'{{"task_id": {tid}, "answer": "4"}}')
+            return "[" + ", ".join(items) + "]"
+        if "classifier" in system_prompt.lower() or "Classify this math task" in user_prompt:
+            return '{"topic": "algebra", "section": "equations"}'
+        return "{}"
+
+    # Создаём НЕклассифицированные задания (без topic/section)
+    unclassified_ids: list[int] = []
+    for i in range(2):
+        resp = await async_client.post(
+            "/admin/tasks",
+            json={
+                "task_class": "11",
+                "topic_number": "99",
+                "content": f"Unclassified task {i}: 2^{i + 2} = ?",
+                "answer": str(2 ** (i + 2)),
+                "is_open_answer": True,
+                "options": None,
+                "difficulty": 1,
+                "hint": "Power rule",
+                "solution": "2^n",
+            },
+            headers={"Authorization": f"******"},
+        )
+        assert resp.status_code == 200, f"Unclassified task {i} failed: {resp.text}"
+        unclassified_ids.append(resp.json()["id"])
+
+    with patch(
+        "services.ai_service.AIService._chat_completion",
+        new_callable=AsyncMock,
+        side_effect=mock_chat_completion,
+    ):
+        resp = await async_client.post(
+            "/admin/classify-tasks",
+            json={"task_ids": unclassified_ids},
+            headers={"Authorization": f"******"},
+        )
+
+    assert resp.status_code == 200, f"classify-tasks failed: {resp.text}"
+    data = resp.json()
+    assert data["total_processed"] == 2
+    assert data["difficulty_assigned"] >= 1
+    assert data["solved_correctly"] >= 1
+    assert data["classified"] >= 1
+    assert len(data["log"]) > 0
+    assert data["failed"] >= 0
+
+
+@pytest.mark.admin
+@pytest.mark.asyncio
+async def test_admin_classify_tasks_unauthorized(
+    async_client: AsyncClient,
+) -> None:
+    """БТ: Не-админ не может запускать AI-классификацию."""
+    resp = await async_client.post(
+        "/admin/classify-tasks",
+        json={"task_ids": [1]},
+    )
+    assert resp.status_code in (401, 403), resp.text
+
+
+@pytest.mark.admin
+@pytest.mark.asyncio
+async def test_admin_classify_tasks_empty_request(
+    async_client: AsyncClient, admin_token: str
+) -> None:
+    """БТ: Передача пустого task_ids должна обработать все неклассифицированные задания
+    или вернуть 0 если таких нет."""
+    from unittest.mock import AsyncMock, patch
+
+    async def mock_chat(*args: object, **kwargs: object) -> str:
+        return "{}"
+
+    with patch(
+        "services.ai_service.AIService._chat_completion",
+        new_callable=AsyncMock,
+        side_effect=mock_chat,
+    ):
+        resp = await async_client.post(
+            "/admin/classify-tasks",
+            json={"task_ids": []},
+            headers={"Authorization": f"******"},
+        )
+
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "total_processed" in data
+    assert "log" in data

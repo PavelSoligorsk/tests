@@ -1032,22 +1032,23 @@ class AdminService:
 
     async def _ai_estimate_difficulty(self, ai, task: Task) -> int | None:
         """AI оценивает сложность задания (1-5)."""
-        prompt = f"""Оцени сложность этого задания по шкале 1-5.
-Верни ТОЛЬКО JSON: {{"difficulty": N}}
+        prompt = f"""You are a math expert. Rate the difficulty of this task on a scale 1-5.
+Output ONLY a JSON object with the key "difficulty" and an integer value.
 
-Класс: {task.task_class}
-Тип: {'открытый ответ' if task.is_open_answer else 'выбор варианта'}
-Условие:
+Class: {task.task_class}
+Type: {'open answer' if task.is_open_answer else 'multiple choice'}
+Problem:
 {task.content[:800]}
 """
         try:
             response = await ai._chat_completion(
-                system_prompt="Ты — эксперт по математике. Отвечаешь только валидным JSON без markdown.",
+                system_prompt="You are a math difficulty rater. Output valid JSON only: {\"difficulty\": N}",
                 user_prompt=prompt,
                 temperature=0.1,
-                max_tokens=2000,
+                max_tokens=200,
+                json_mode=True,
             )
-            m = re.search(r'\{.*\}', response, re.DOTALL)
+            m = re.search(r'\{[^{}]*\}', response, re.DOTALL)
             if m:
                 data = json.loads(m.group())
                 d = data.get("difficulty")
@@ -1069,30 +1070,31 @@ class AdminService:
         task_blocks: list[str] = []
         for i, task in enumerate(tasks, 1):
             block = (
-                f"### ЗАДАНИЕ {i} (id={task.id}, класс={task.task_class})\n"
-                f"Условие:\n{task.content[:600]}\n"
+                f"### TASK {i} (id={task.id}, class={task.task_class})\n"
+                f"Problem:\n{task.content[:600]}\n"
             )
             task_blocks.append(block)
 
         prompt = (
-            "Реши КАЖДОЕ задание и верни ТОЛЬКО JSON-массив:\n"
+            "Solve EACH task below. Output ONLY a JSON array:\n"
             '[{"task_id": N, "answer": "..."}, ...]\n'
-            "Где task_id — id задания, answer — число/выражение без префиксов («x=», «ответ:» и т.п.).\n\n"
+            "Where task_id is the task id, answer is the result as a string (number/expression, no prefixes like 'x=', 'answer:' etc).\n\n"
             + "\n".join(task_blocks)
         )
 
-        max_tokens = max(4000, min(len(tasks) * 300, 32000))
+        max_tokens = max(2000, min(len(tasks) * 400, 32000))
 
         try:
             response = await ai._chat_completion(
                 system_prompt=(
-                    "Ты — математик. Решаешь несколько задач одним ответом. "
-                    "Отвечаешь ТОЛЬКО валидным JSON-массивом без markdown. "
-                    "answer — строка с ответом (число/выражение)."
+                    "You are a mathematician. Solve multiple problems in one response. "
+                    "Output ONLY a valid JSON array, no markdown. "
+                    "answer is a string with the result (number/expression)."
                 ),
                 user_prompt=prompt,
                 temperature=0.1,
                 max_tokens=max_tokens,
+                json_mode=True,
             )
 
             m = re.search(r'\[.*\]', response, re.DOTALL)
@@ -1128,33 +1130,34 @@ class AdminService:
                     opts += f"{j}) {opt}\n"
 
             block = (
-                f"### ЗАДАНИЕ {i} (id={task.id}, класс={task.task_class})\n"
-                f"Условие:\n{task.content[:600]}\n"
-                f"Варианты:\n{opts}"
+                f"### TASK {i} (id={task.id}, class={task.task_class})\n"
+                f"Problem:\n{task.content[:600]}\n"
+                f"Options:\n{opts}"
             )
             task_blocks.append(block)
 
         prompt = (
-            "Реши КАЖДОЕ задание и выбери НОМЕРА правильных вариантов.\n"
-            "Верни ТОЛЬКО JSON-массив:\n"
+            "Solve EACH task and choose the NUMBER of the correct option.\n"
+            "Output ONLY a JSON array:\n"
             '[{"task_id": N, "answer": "N"}, ...]\n'
-            "Где task_id — id задания, answer — номер правильного варианта (строка).\n\n"
+            "Where task_id is the task id, answer is the option number as a string.\n\n"
             + "\n".join(task_blocks)
         )
 
         # Подбираем max_tokens пропорционально количеству заданий
-        max_tokens = max(4000, min(len(tasks) * 300, 32000))
+        max_tokens = max(2000, min(len(tasks) * 400, 32000))
 
         try:
             response = await ai._chat_completion(
                 system_prompt=(
-                    "Ты — математик. Решаешь несколько задач одним ответом. "
-                    "Отвечаешь ТОЛЬКО валидным JSON-массивом без markdown. "
-                    "answer — строка с номером правильного варианта."
+                    "You are a mathematician. Solve multiple problems in one response. "
+                    "Output ONLY a valid JSON array, no markdown. "
+                    "answer is a string with the number of the correct option."
                 ),
                 user_prompt=prompt,
                 temperature=0.1,
                 max_tokens=max_tokens,
+                json_mode=True,
             )
 
             # Ищем JSON-массив в ответе
@@ -1186,35 +1189,36 @@ class AdminService:
     async def _ai_classify_task(self, ai, task: Task, topics_structure: dict) -> dict | None:
         """AI классифицирует задание → {topic, section}."""
         hierarchy = []
-        for topic, sections in topics_structure.items():
-            hierarchy.append(f"- {topic}")
+        for topic_name, sections in topics_structure.items():
+            hierarchy.append(f"- {topic_name}")
             if sections:
                 for s in sorted(sections):
                     hierarchy.append(f"    - {s}")
 
-        prompt = f"""Классифицируй задание по теме и разделу ИЗ СПИСКА НИЖЕ.
-Верни ТОЛЬКО JSON: {{"topic": "...", "section": "..."}}
+        prompt = f"""Classify this math task by topic and section from the list below.
+Output ONLY a JSON object: {{"topic": "...", "section": "..."}}
 
-=== ДОСТУПНЫЕ ТЕМЫ ===
+=== AVAILABLE TOPICS ===
 {chr(10).join(hierarchy)}
 
-=== ЗАДАНИЕ ===
-Класс: {task.task_class}
-Номер темы: {task.topic_number}
-Тип: {'открытый ответ' if task.is_open_answer else 'выбор варианта'}
-Условие:
+=== TASK ===
+Class: {task.task_class}
+Topic number: {task.topic_number}
+Type: {'open answer' if task.is_open_answer else 'multiple choice'}
+Problem:
 {task.content[:600]}
 
-Выбери topic и section ТОЛЬКО из списка выше. Если точного совпадения нет — ближайшее.
+Pick topic and section ONLY from the list above. If no exact match, choose the closest.
 """
         try:
             response = await ai._chat_completion(
-                system_prompt="Ты — строгий классификатор. Отвечаешь только валидным JSON без markdown.",
+                system_prompt="You are a strict classifier. Output valid JSON only, no markdown.",
                 user_prompt=prompt,
                 temperature=0.1,
-                max_tokens=2000,
+                max_tokens=500,
+                json_mode=True,
             )
-            m = re.search(r'\{.*\}', response, re.DOTALL)
+            m = re.search(r'\{[^{}]*\}', response, re.DOTALL)
             if m:
                 data = json.loads(m.group())
                 if data.get("topic"):

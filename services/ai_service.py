@@ -36,24 +36,50 @@ class AIService:
         user_prompt: str,
         temperature: float = 0.7,
         max_tokens: int = 800,
+        json_mode: bool = False,
+        enable_thinking: bool = False,
     ) -> str:
-        """Базовый метод — автоматически выбирает API в зависимости от провайдера."""
+        """Базовый метод — автоматически выбирает API в зависимости от провайдера.
+
+        Args:
+            json_mode: If True, sets response_format={'type': 'json_object'} (DeepSeek),
+                       which requires "json" in the prompt and disables thinking.
+            enable_thinking: If True, enables DeepSeek thinking/reasoning.
+                             Implicitly disabled when json_mode=True.
+        """
         try:
             if self.provider == "deepseek":
-                response = await self.client.chat.completions.create(
-                    model=self.model,
-                    messages=[
+                kwargs: dict = {
+                    "model": self.model,
+                    "messages": [
                         {"role": "system", "content": system_prompt},
                         {"role": "user", "content": user_prompt},
                     ],
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    extra_body={
-                        "thinking": {"type": "enabled"},
-                        "reasoning_effort": "medium",
-                    },
-                )
-                return response.choices[0].message.content
+                    "temperature": temperature,
+                    "max_tokens": max_tokens,
+                }
+
+                # JSON mode: required for reliable structured output.
+                # When json_mode=True, thinking MUST be disabled — the two are
+                # mutually exclusive per DeepSeek docs, and thinking tokens
+                # would otherwise consume the max_tokens budget leaving content empty.
+                if json_mode:
+                    kwargs["response_format"] = {"type": "json_object"}
+                elif enable_thinking:
+                    kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
+                    # reasoning_effort is a top-level parameter, not extra_body
+                    kwargs["reasoning_effort"] = "low"
+
+                response = await self.client.chat.completions.create(**kwargs)
+
+                content = response.choices[0].message.content
+                # Fallback: if thinking was enabled and consumed all tokens,
+                # the content may be empty. Try reasoning_content as last resort.
+                if (not content or not content.strip()) and enable_thinking:
+                    reasoning = getattr(response.choices[0].message, "reasoning_content", None)
+                    if reasoning:
+                        content = reasoning
+                return content or ""
             else:
                 response = await asyncio.to_thread(
                     self.client.chat.complete,
@@ -65,7 +91,7 @@ class AIService:
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
-                return response.choices[0].message.content
+                return response.choices[0].message.content or ""
         except Exception as e:
             raise Exception(f"AI Error ({self.provider}): {str(e)}")
     
