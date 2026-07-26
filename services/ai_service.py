@@ -48,8 +48,10 @@ class AIService:
                     ],
                     temperature=temperature,
                     max_tokens=max_tokens,
-                    reasoning_effort="medium",
-                    extra_body={"thinking": {"type": "enabled"}},
+                    extra_body={
+                        "thinking": {"type": "enabled"},
+                        "reasoning_effort": "medium",
+                    },
                 )
                 return response.choices[0].message.content
             else:

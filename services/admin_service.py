@@ -1045,7 +1045,7 @@ class AdminService:
                 system_prompt="Ты — эксперт по математике. Отвечаешь только валидным JSON без markdown.",
                 user_prompt=prompt,
                 temperature=0.1,
-                max_tokens=100,
+                max_tokens=2000,
             )
             m = re.search(r'\{.*\}', response, re.DOTALL)
             if m:
@@ -1081,7 +1081,7 @@ class AdminService:
             + "\n".join(task_blocks)
         )
 
-        max_tokens = max(200, min(len(tasks) * 80, 2000))
+        max_tokens = max(4000, min(len(tasks) * 300, 32000))
 
         try:
             response = await ai._chat_completion(
@@ -1143,7 +1143,7 @@ class AdminService:
         )
 
         # Подбираем max_tokens пропорционально количеству заданий
-        max_tokens = max(200, min(len(tasks) * 60, 2000))
+        max_tokens = max(4000, min(len(tasks) * 300, 32000))
 
         try:
             response = await ai._chat_completion(
@@ -1212,7 +1212,7 @@ class AdminService:
                 system_prompt="Ты — строгий классификатор. Отвечаешь только валидным JSON без markdown.",
                 user_prompt=prompt,
                 temperature=0.1,
-                max_tokens=200,
+                max_tokens=2000,
             )
             m = re.search(r'\{.*\}', response, re.DOTALL)
             if m:
