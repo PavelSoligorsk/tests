@@ -970,7 +970,14 @@ class TeacherService:
             "is_active": True,
         }
 
-        return await self.test_repo.create_test(test_data, sorted_tasks)
+        test = await self.test_repo.create_test(test_data, sorted_tasks)
+        # Перезагружаем с eager-load tasks (после commit объект detached)
+        result = await self.db.execute(
+            select(Test)
+            .options(selectinload(Test.tasks))
+            .where(Test.id == test.id)
+        )
+        return result.scalars().first()
 
     async def _build_ai_test(
         self,
@@ -1010,7 +1017,14 @@ class TeacherService:
             "is_active": True,
         }
 
-        return await self.test_repo.create_test(test_data, sorted_tasks)
+        test = await self.test_repo.create_test(test_data, sorted_tasks)
+        # Перезагружаем с eager-load tasks (после commit объект detached)
+        result = await self.db.execute(
+            select(Test)
+            .options(selectinload(Test.tasks))
+            .where(Test.id == test.id)
+        )
+        return result.scalars().first()
 
     async def _get_tasks_distributed(
         self,
