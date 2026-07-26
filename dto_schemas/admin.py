@@ -116,7 +116,7 @@ class BatchTaskDeleteResponse(BaseModel):
 
 class ClassifyTasksRequest(BaseModel):
     """Запрос на AI-классификацию заданий"""
-    max_count: int = Field(default=50, ge=1, le=200)
+    task_ids: list[int] = Field(default=[], description="Список ID заданий для классификации (без ограничений)")
 
 
 class ClassifyTasksResponse(BaseModel):

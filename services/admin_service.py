@@ -823,7 +823,7 @@ class AdminService:
     # Размеры батчей для этапа решения по уровням сложности
     SOLVE_BATCH_SIZES: dict[int, int] = {1: 20, 2: 10, 3: 7, 4: 3, 5: 1}
 
-    async def classify_tasks(self, max_count: int = 50) -> ClassifyTasksResponse:
+    async def classify_tasks(self, task_ids: list[int] | None = None) -> ClassifyTasksResponse:
         """AI-классификация заданий: сложность → решение → topic/section.
 
         Три фазы, каждая через отдельный AI-вызов:
@@ -835,24 +835,32 @@ class AdminService:
            Ответы сравниваются с эталоном.
         3. Для заданий с верным ответом AI классифицирует topic/section.
 
-        Обрабатываются только задания без section/topic.
+        Если передан task_ids — обрабатываются только указанные задания (без ограничений).
+        Если task_ids пуст/None — обрабатываются все задания без section/topic.
         """
         from services.ai_service import AIService
 
-        ai = AIService()
+        ai = AIService(provider="deepseek")
         log: list[str] = []
         stats = {"difficulty": 0, "solved": 0, "classified": 0, "failed": 0}
 
-        # 1. Получаем неклассифицированные задания
-        result = await self.db.execute(
-            select(Task)
-            .where(
-                (Task.section.is_(None)) | (Task.section == "") |
-                (Task.topic.is_(None)) | (Task.topic == "")
+        # 1. Получаем задания
+        if task_ids:
+            result = await self.db.execute(
+                select(Task).where(Task.id.in_(task_ids))
             )
-            .order_by(Task.task_class, Task.topic_number)
-            .limit(max_count)
-        )
+            log.append(f"🔍 Обработка по ID: {len(task_ids)} шт.")
+        else:
+            result = await self.db.execute(
+                select(Task)
+                .where(
+                    (Task.section.is_(None)) | (Task.section == "") |
+                    (Task.topic.is_(None)) | (Task.topic == "")
+                )
+                .order_by(Task.task_class, Task.topic_number)
+            )
+            log.append("🔍 Обработка всех неклассифицированных заданий")
+
         tasks = list(result.scalars().all())
 
         if not tasks:

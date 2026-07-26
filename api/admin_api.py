@@ -406,10 +406,11 @@ async def classify_tasks(
     2. AI решает → сравниваем с эталоном
     3. Если ответ совпал: AI классифицирует topic/section
     
-    Параметр max_count — максимум обрабатываемых заданий (1-200).
+    Параметр task_ids — массив ID заданий для обработки (без ограничений).
+    Если пустой — обрабатываются все неклассифицированные задания.
     """
     try:
-        result = await service.classify_tasks(payload.max_count)
+        result = await service.classify_tasks(payload.task_ids)
         _invalidate_task_caches()
         return result
     except Exception as e:
