@@ -43,9 +43,11 @@ class AIService:
 
         Args:
             json_mode: If True, sets response_format={'type': 'json_object'} (DeepSeek),
-                       which requires "json" in the prompt and disables thinking.
-            enable_thinking: If True, enables DeepSeek thinking/reasoning.
-                             Implicitly disabled when json_mode=True.
+                       which requires "json" in the prompt. Mutually exclusive with enable_thinking.
+            enable_thinking: If True, enables DeepSeek thinking/reasoning via extra_body.
+                             Use for math solving where step-by-step reasoning improves accuracy.
+                             WARNING: thinking tokens count toward max_tokens — ensure budget is adequate
+                             (~500-1000 tokens per task with thinking enabled).
         """
         try:
             if self.provider == "deepseek":
@@ -59,22 +61,19 @@ class AIService:
                     "max_tokens": max_tokens,
                 }
 
-                # JSON mode: required for reliable structured output.
-                # When json_mode=True, thinking MUST be disabled — the two are
-                # mutually exclusive per DeepSeek docs, and thinking tokens
-                # would otherwise consume the max_tokens budget leaving content empty.
                 if json_mode:
                     kwargs["response_format"] = {"type": "json_object"}
                 elif enable_thinking:
-                    kwargs["extra_body"] = {"thinking": {"type": "enabled"}}
-                    # reasoning_effort is a top-level parameter, not extra_body
-                    kwargs["reasoning_effort"] = "low"
+                    kwargs["extra_body"] = {
+                        "thinking": {"type": "enabled"},
+                        "reasoning_effort": "low",
+                    }
 
                 response = await self.client.chat.completions.create(**kwargs)
 
                 content = response.choices[0].message.content
-                # Fallback: if thinking was enabled and consumed all tokens,
-                # the content may be empty. Try reasoning_content as last resort.
+                # Fallback: если thinking съел все токены, content может быть пустым.
+                # Пробуем reasoning_content как последнее средство.
                 if (not content or not content.strip()) and enable_thinking:
                     reasoning = getattr(response.choices[0].message, "reasoning_content", None)
                     if reasoning:

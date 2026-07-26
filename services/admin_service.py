@@ -823,6 +823,36 @@ class AdminService:
     # Размеры батчей для этапа решения по уровням сложности
     SOLVE_BATCH_SIZES: dict[int, int] = {1: 20, 2: 10, 3: 7, 4: 3, 5: 1}
 
+    # ── Токен-бюджеты (расценки) ──
+    # Фаза 1: оценка сложности. json_mode (без thinking) — дёшево, flat.
+    ESTIMATE_TOKENS_PER_TASK: int = 150
+    ESTIMATE_MIN_TOKENS: int = 2000
+
+    # Фаза 2: решение. thinking включён — дорого, зависит от сложности.
+    # Сложнее задача → больше шагов reasoning → больше токенов.
+    SOLVE_TOKENS_PER_TASK: dict[int, int] = {
+        1: 100,   # устный счёт — почти без reasoning
+        2: 200,   # простое — 1-2 шага
+        3: 400,   # среднее — 2-4 шага
+        4: 800,   # сложное — 5+ шагов
+        5: 1200,  # олимпиадное — много шагов
+    }
+    SOLVE_MIN_TOKENS: int = 2000
+    SOLVE_MAX_TOKENS: int = 32000
+
+    # Фаза 3: классификация topic/section. json_mode — дёшево, flat.
+    CLASSIFY_TOKENS_PER_TASK: int = 200
+    CLASSIFY_MIN_TOKENS: int = 500
+
+    @staticmethod
+    def _solve_tokens_for(tasks: list[Task]) -> int:
+        """Вычислить max_tokens для пакета задач с учётом их сложностей."""
+        total = 0
+        for t in tasks:
+            d = t.difficulty if t.difficulty in AdminService.SOLVE_TOKENS_PER_TASK else 1
+            total += AdminService.SOLVE_TOKENS_PER_TASK[d]
+        return max(AdminService.SOLVE_MIN_TOKENS, min(total, AdminService.SOLVE_MAX_TOKENS))
+
     async def classify_tasks(self, task_ids: list[int] | None = None) -> ClassifyTasksResponse:
         """AI-классификация заданий: сложность → решение → topic/section.
 
@@ -1040,8 +1070,8 @@ class AdminService:
     async def _ai_estimate_difficulty_batch(self, ai, tasks: list[Task]) -> dict[int, int]:
         """AI оценивает сложность пачки заданий (1-5) за один вызов.
 
-        Возвращает {task_id: difficulty}. Если какое-то задание не удалось
-        оценить — его просто нет в словаре (вызывающий код пропустит).
+        Использует json_mode (без thinking) — это классификация, не решение.
+        Возвращает {task_id: difficulty}.
         """
         if not tasks:
             return {}
@@ -1056,9 +1086,9 @@ class AdminService:
             task_blocks.append(block)
 
         prompt = (
-            "Оцени сложность КАЖДОГО задания по шкале 1-5:\n"
+            "Оцени сложность КАЖДОГО задания по шкале 1-5, где:\n"
             "1 — устный счёт / очевидное, 5 — олимпиадное / требует много шагов.\n\n"
-            "В САМОМ КОНЦЕ ответа напиши JSON-массив:\n"
+            "Верни ТОЛЬКО JSON-массив без markdown:\n"
             '[{"task_id": <id>, "difficulty": <1-5>}, ...]\n\n'
             + "\n".join(task_blocks)
         )
@@ -1066,19 +1096,20 @@ class AdminService:
         try:
             response = await ai._chat_completion(
                 system_prompt=(
-                    "Ты — эксперт по математике. Оцени сложность каждого задания. "
-                    "В КОНЦЕ выдай JSON-массив с task_id и difficulty."
+                    "Ты оцениваешь сложность математических заданий. "
+                    "Верни ТОЛЬКО валидный JSON-массив с полями task_id и difficulty (integer 1-5). "
+                    "Никакого текста вне JSON."
                 ),
                 user_prompt=prompt,
                 temperature=0.0,
-                max_tokens=min(2000, len(tasks) * 120),
-                enable_thinking=True,
+                max_tokens=max(self.ESTIMATE_MIN_TOKENS, len(tasks) * self.ESTIMATE_TOKENS_PER_TASK),
+                json_mode=True,
             )
 
-            # Извлекаем JSON из хвоста
-            matches = list(re.finditer(r'\[.*?\]', response, re.DOTALL))
+            # json_mode даёт чистый JSON, пробуем весь ответ как массив
             result: dict[int, int] = {}
-            for m in reversed(matches):
+            m = re.search(r'\[.*\]', response, re.DOTALL)
+            if m:
                 try:
                     items = json.loads(m.group())
                     if isinstance(items, list):
@@ -1087,10 +1118,10 @@ class AdminService:
                             d = item.get("difficulty")
                             if tid is not None and isinstance(d, int) and 1 <= d <= 5:
                                 result[int(tid)] = d
-                        if result:
-                            return result
                 except (json.JSONDecodeError, TypeError, ValueError):
-                    continue
+                    pass
+
+            return result
 
         except Exception as e:
             logger.warning(f"Difficulty batch estimation failed: {e}")
@@ -1123,7 +1154,7 @@ class AdminService:
             + "\n".join(task_blocks)
         )
 
-        max_tokens = max(2000, min(len(tasks) * 800, 32000))
+        max_tokens = self._solve_tokens_for(tasks)
 
         try:
             response = await ai._chat_completion(
@@ -1148,8 +1179,7 @@ class AdminService:
     async def _ai_solve_batch(self, ai, tasks: list[Task]) -> dict[int, str]:
         """Пакетное решение закрытых заданий (выбор варианта) с reasoning.
 
-        НЕ используем json_mode — с thinking модель решает точнее.
-        JSON извлекается из последней части ответа.
+        AI решает ЗНАЧЕНИЕ правильного ответа (текст варианта), а не его номер.
         """
         if not tasks:
             return {}
@@ -1169,21 +1199,22 @@ class AdminService:
             task_blocks.append(block)
 
         prompt = (
-            "Реши КАЖДОЕ задание и выбери НОМЕР правильного варианта. Думай пошагово.\n"
-            "В САМОМ КОНЦЕ ответа напиши JSON-массив:\n"
-            '[{"task_id": <id>, "answer": "<номер варианта>"}, ...]\n'
-            "answer — строка с номером правильного варианта.\n\n"
+            "Реши КАЖДОЕ задание. Думай пошагово, а затем выбери правильный вариант.\n"
+            "В САМОМ КОНЦЕ ответа напиши JSON-массив. В поле answer положи ТОЧНЫЙ ТЕКСТ "
+            "правильного варианта (не номер, а само значение).\n"
+            "Формат:\n"
+            '[{"task_id": <id>, "answer": "<текст правильного варианта>"}, ...]\n\n'
             + "\n".join(task_blocks)
         )
 
-        max_tokens = max(2000, min(len(tasks) * 800, 32000))
+        max_tokens = self._solve_tokens_for(tasks)
 
         try:
             response = await ai._chat_completion(
                 system_prompt=(
                     "Ты — математик. Решай каждую задачу пошагово, объясняй рассуждения. "
                     "В КОНЦЕ ответа выдай JSON-массив с task_id и answer для каждого задания. "
-                    "answer — строка с номером правильного варианта."
+                    "answer — ТОЧНЫЙ ТЕКСТ правильного варианта (не номер, а само значение)."
                 ),
                 user_prompt=prompt,
                 temperature=0.0,
@@ -1311,7 +1342,7 @@ Pick topic and section ONLY from the list above. If no exact match, choose the c
                 system_prompt="You are a strict classifier. Output valid JSON only, no markdown.",
                 user_prompt=prompt,
                 temperature=0.1,
-                max_tokens=500,
+                max_tokens=self.CLASSIFY_TOKENS_PER_TASK,
                 json_mode=True,
             )
             m = re.search(r'\{[^{}]*\}', response, re.DOTALL)
