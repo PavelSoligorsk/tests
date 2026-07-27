@@ -90,16 +90,16 @@ class ResultRepository:
         return []
     
     async def has_incomplete_attempt(self, user_id: int, test_id: int) -> bool:
-        """Проверить, есть ли незавершённая попытка (result без completed_at)"""
+        """True если нет завершённой попытки (нет result, или result без completed_at)"""
         r = await self.db.execute(
             select(TestResult).where(
                 TestResult.user_id == user_id,
                 TestResult.test_id == test_id,
-                TestResult.completed_at == None
+                TestResult.completed_at.is_not(None)
             )
         )
-        result = r.scalars().first()
-        return result is not None
+        completed = r.scalars().first()
+        return completed is None  # True: нет завершённой → incomplete
 
     async def get_incomplete_result(self, user_id: int, test_id: int):
         """Получить незавершённый TestResult (completed_at IS NULL)"""
