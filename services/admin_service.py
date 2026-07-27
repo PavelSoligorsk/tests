@@ -820,34 +820,29 @@ class AdminService:
 
     # ==================== AI-КЛАССИФИКАЦИЯ ЗАДАНИЙ ====================
 
-    # Размеры батчей для этапа решения по уровням сложности
-    SOLVE_BATCH_SIZES: dict[int, int] = {1: 20, 2: 10, 3: 7, 4: 3, 5: 1}
+    # ── Конфигурация классификатора (выверено по test1.py) ──
 
-    # ── Токен-бюджеты (расценки) ──
-    # Фаза 1: оценка сложности. json_mode (без thinking) — дёшево, flat.
-    #   finish_reason=length при заниженном бюджете → JSON обрезается → пустой ответ.
-    #   300 токенов/задачу даёт запас на verbose формулировки AI.
-    ESTIMATE_TOKENS_PER_TASK: int = 300
-    ESTIMATE_MIN_TOKENS: int = 4096
+    # Размеры батчей для решения в зависимости от сложности
+    SOLVE_BATCH_SIZES: dict[int, int] = {1: 10, 2: 5, 3: 3, 4: 2, 5: 1}
 
-    # Фаза 2: решение. json_mode (без thinking) — модель всё равно считает внутри.
-    #   thinking отключён, потому что он съедает бюджет на рассуждения,
-    #   и JSON обрезается (finish_reason=length).
-    #   Бюджет на задачу выше, т.к. модель пишет решение текстом перед JSON.
+    # Фаза 1: Оценка сложности
+    ESTIMATE_BATCH_SIZE = 15  # По сколько заданий отправлять в одном запросе оценки
+    ESTIMATE_TOKENS_PER_TASK: int = 500
+    ESTIMATE_MIN_TOKENS: int = 8100
+    ESTIMATE_MAX_CONCURRENT = 10  # Семафор для оценки сложности
+
+    # Фаза 2: Решение
     SOLVE_TOKENS_PER_TASK: dict[int, int] = {
-        1: 300,
-        2: 600,
-        3: 1000,
-        4: 1500,
-        5: 2500,
+        1: 300, 2: 600, 3: 1000, 4: 1500, 5: 2500,
     }
     SOLVE_MIN_TOKENS: int = 4096
-    SOLVE_MAX_TOKENS: int = 32000
+    SOLVE_MAX_TOKENS: int = 60000
+    SOLVE_MAX_CONCURRENT = 10  # Семафор для решения
 
-    # Фаза 3: классификация topic/section. json_mode — один JSON-объект.
-    #   200 токенов было мало даже на {"topic":"...","section":"..."} — finish_reason=length.
+    # Фаза 3: Классификация
     CLASSIFY_TOKENS_PER_TASK: int = 1024
     CLASSIFY_MIN_TOKENS: int = 1024
+    CLASSIFY_MAX_CONCURRENT = 10  # Семафор для классификации
 
     @staticmethod
     def _solve_tokens_for(tasks: list[Task]) -> int:
@@ -865,8 +860,8 @@ class AdminService:
         1. AI оценивает сложность (1-5) для каждого задания.
            Если AI не смог оценить → задание пропускается (не идёт на следующие этапы).
         2. Задания группируются по сложности и решаются пакетно
-           (20/10/7/3/1 шт. для сложности 1/2/3/4/5).
-           И закрытые, и открытые задания решаются в одном батче.
+           (10/5/3/2/1 шт. для сложности 1/2/3/4/5).
+           ВСЕ батчи запускаются параллельно через asyncio.gather().
            Ответы сравниваются с эталоном.
         3. Для заданий с верным ответом AI классифицирует topic/section.
 
@@ -927,8 +922,8 @@ class AdminService:
         # ═══════════════════════════════════════════
         log.append("\n── ФАЗА 1: оценка сложности ──")
 
-        DIFF_BATCH = 15
-        DIFF_SEMAPHORE = asyncio.Semaphore(3)  # макс 3 одновременных API-вызова
+        DIFF_BATCH = self.ESTIMATE_BATCH_SIZE
+        DIFF_SEMAPHORE = asyncio.Semaphore(self.ESTIMATE_MAX_CONCURRENT)
 
         total_batches = (len(tasks) + DIFF_BATCH - 1) // DIFF_BATCH
         estimated_tasks: list[Task] = []
@@ -988,87 +983,93 @@ class AdminService:
             )
 
         # ═══════════════════════════════════════════
-        # ФАЗА 2: Пакетное решение по уровням сложности (параллельно)
+        # ФАЗА 2: Пакетное решение — ВСЕ батчи параллельно
         # ═══════════════════════════════════════════
         log.append("\n── ФАЗА 2: пакетное решение ──")
 
-        # Группируем задания по сложности
+        # Группируем по сложности
         by_difficulty: dict[int, list[Task]] = {d: [] for d in range(1, 6)}
         for task in estimated_tasks:
             d = task.difficulty if task.difficulty in range(1, 6) else 1
             by_difficulty[d].append(task)
 
-        solved_tasks: list[Task] = []
-        solved_lock = asyncio.Lock()
+        solve_sem = asyncio.Semaphore(self.SOLVE_MAX_CONCURRENT)
 
-        async def _solve_level(diff_level: int):
-            """Решает все задания одного уровня сложности."""
-            batch_tasks = by_difficulty[diff_level]
-            if not batch_tasks:
-                return
+        async def _solve_batch(batch: list[Task], kind: str) -> dict[int, str]:
+            """Решение одного батча (закрытого или открытого)."""
+            async with solve_sem:
+                if kind == "closed":
+                    return await self._ai_solve_batch(ai, batch)
+                else:
+                    return await self._ai_solve_open_batch(ai, batch)
+
+        # Формируем ВСЕ корутины для ВСЕХ батчей
+        all_coroutines: list = []
+        batch_info: list[str] = []
+
+        for diff_level in range(1, 6):
+            diff_tasks = by_difficulty[diff_level]
+            if not diff_tasks:
+                continue
 
             batch_size = self.SOLVE_BATCH_SIZES[diff_level]
-            log.append(f"  Сложность {diff_level}: {len(batch_tasks)} заданий, батч по {batch_size}")
 
-            level_solved: list[Task] = []
+            for i in range(0, len(diff_tasks), batch_size):
+                batch = diff_tasks[i:i + batch_size]
 
-            for batch_num, i in enumerate(range(0, len(batch_tasks), batch_size), 1):
-                batch = batch_tasks[i:i + batch_size]
                 closed = [t for t in batch if not t.is_open_answer]
                 open_list = [t for t in batch if t.is_open_answer]
 
-                # Решаем закрытые и открытые параллельно в одном батче
-                coros = []
                 if closed:
-                    coros.append(("closed", self._ai_solve_batch(ai, closed)))
+                    all_coroutines.append(_solve_batch(closed, "closed"))
+                    batch_info.append(f"сложность {diff_level}, закрытые x{len(closed)}")
                 if open_list:
-                    coros.append(("open", self._ai_solve_open_batch(ai, open_list)))
+                    all_coroutines.append(_solve_batch(open_list, "open"))
+                    batch_info.append(f"сложность {diff_level}, открытые x{len(open_list)}")
 
-                if coros:
-                    results = await asyncio.gather(*(c[1] for c in coros), return_exceptions=True)
-                    for (kind, _), answers_map in zip(coros, results):
-                        if isinstance(answers_map, Exception):
-                            logger.error(
-                                f"Phase2 {kind} solve batch crashed for diff={diff_level}, "
-                                f"batch={batch_num}: {type(answers_map).__name__}: {answers_map}"
-                            )
-                            log.append(f"  💥 [{kind}] batch {batch_num} (сл.{diff_level}) ошибка: {answers_map}")
-                            continue
-                        if not isinstance(answers_map, dict):
-                            logger.warning(
-                                f"Phase2 {kind} solve batch returned non-dict: {type(answers_map).__name__}"
-                            )
-                            continue
-                        task_list = closed if kind == "closed" else open_list
-                        for task in task_list:
-                            ai_answer = answers_map.get(task.id, "")
-                            kind_tag = "открытый" if kind == "open" else ""
-                            if self._compare_answer(ai_answer, task):
-                                level_solved.append(task)
-                                stats["solved"] += 1
-                                tag = f", {kind_tag}" if kind_tag else ""
-                                log.append(f"  ✅ #{task.id} (сл.{diff_level}{tag}) ответ совпал: «{ai_answer}»")
-                            else:
-                                stats["failed"] += 1
-                                tag = f", {kind_tag}" if kind_tag else ""
-                                log.append(f"  ❌ #{task.id} (сл.{diff_level}{tag}) ответ не совпал: AI=«{ai_answer}», эталон=«{task.answer}»")
+        log.append(f"  📤 Запуск {len(all_coroutines)} батчей решения параллельно...")
+        for info in batch_info:
+            log.append(f"     • {info}")
 
-            async with solved_lock:
-                solved_tasks.extend(level_solved)
+        # 🔥 КЛЮЧЕВОЙ МОМЕНТ: asyncio.gather() — ждём ВСЕ батчи решения!
+        batch_results = await asyncio.gather(
+            *all_coroutines,
+            return_exceptions=True,
+        )
 
-        # Запускаем все 5 уровней сложности параллельно
-        await asyncio.gather(*(_solve_level(d) for d in range(1, 6)))
+        # Собираем все ответы
+        all_answers: dict[int, str] = {}
+        failed_batches = 0
+        for i, res in enumerate(batch_results):
+            if isinstance(res, Exception):
+                logger.error(f"Батч решения {i + 1} упал: {res}")
+                log.append(f"  💥 батч {i + 1} ошибка: {res}")
+                failed_batches += 1
+            elif isinstance(res, dict):
+                all_answers.update(res)
 
+        # Сравниваем ответы
+        solved_tasks: list[Task] = []
+        for task in estimated_tasks:
+            ai_answer = all_answers.get(task.id, "")
+            if self._compare_answer(ai_answer, task):
+                solved_tasks.append(task)
+                stats["solved"] += 1
+                log.append(f"  ✅ #{task.id} (сл.{task.difficulty}) ответ совпал: «{ai_answer}»")
+            else:
+                stats["failed"] += 1
+                log.append(f"  ❌ #{task.id} (сл.{task.difficulty}) ответ не совпал: AI=«{ai_answer}», эталон=«{task.answer}»")
 
-        log.append(f"📊 Фаза 2: решено верно={stats['solved']}, не совпало={stats['failed'] - (len(tasks) - len(estimated_tasks))}")
+        log.append(f"📊 Фаза 2: решено верно={stats['solved']}, не совпало={stats['failed']}")
+        if failed_batches:
+            log.append(f"  ⚠️  {failed_batches} батчей не решено из-за ошибок")
 
         # ═══════════════════════════════════════════
-        # ФАЗА 3: Классификация topic/section (параллельно, до 10 одновременных)
+        # ФАЗА 3: Классификация topic/section (параллельно)
         # ═══════════════════════════════════════════
         log.append("\n── ФАЗА 3: классификация topic/section ──")
 
-        CLASSIFY_CONCURRENCY = 10
-        classify_semaphore = asyncio.Semaphore(CLASSIFY_CONCURRENCY)
+        classify_semaphore = asyncio.Semaphore(self.CLASSIFY_MAX_CONCURRENT)
 
         async def _classify_one(task: Task, idx: int) -> str:
             prefix = f"[Phase3 {idx}/{len(solved_tasks)}] #{task.id} (сл.{task.difficulty})"
@@ -1127,8 +1128,12 @@ class AdminService:
 
         prompt = (
             "Оцени сложность КАЖДОГО задания по шкале 1-5, где:\n"
-            "1 — устный счёт / очевидное, 5 — олимпиадное / требует много шагов.\n\n"
-            "Верни ТОЛЬКО JSON-массив без markdown:\n"
+            "1 — устный счёт / очевидное\n"
+            "2 — базовое, в 1-2 действия\n"
+            "3 — среднее, требует нескольких шагов\n"
+            "4 — сложное, требует хорошего понимания темы\n"
+            "5 — олимпиадное / требует много шагов и нестандартного подхода\n\n"
+            "Верни ТОЛЬКО JSON-массив:\n"
             '[{"task_id": <id>, "difficulty": <1-5>}, ...]\n\n'
             + "\n".join(task_blocks)
         )
@@ -1137,8 +1142,7 @@ class AdminService:
             response = await ai._chat_completion(
                 system_prompt=(
                     "Ты оцениваешь сложность математических заданий. "
-                    "Верни ТОЛЬКО валидный JSON-массив с полями task_id и difficulty (integer 1-5). "
-                    "Никакого текста вне JSON."
+                    "Верни ТОЛЬКО валидный JSON-массив."
                 ),
                 user_prompt=prompt,
                 temperature=0.0,
@@ -1377,6 +1381,7 @@ class AdminService:
         - Убирает пробелы, префиксы (x=, ответ:)
         - Нормализует десятичные разделители
         - Пробует числовое сравнение (float)
+        - Сравнивает множества чисел (для комбинаторных ответов типа «1,3»)
         """
         def _norm(s: str) -> str:
             s = s.strip().lower()
@@ -1408,35 +1413,35 @@ class AdminService:
         if a_nobraces == b_nobraces:
             return True
 
+        # Сравнение множеств чисел — для ответов типа "1,3" где порядок не важен
+        a_set = set(re.findall(r'-?\d+', a))
+        b_set = set(re.findall(r'-?\d+', b))
+        if a_set and b_set and a_set == b_set:
+            return True
+
         return False
 
     async def _ai_classify_task(self, ai, task: Task, topics_structure: dict) -> dict | None:
         """AI классифицирует задание → {topic, section}."""
-        hierarchy = []
-        for topic_name, sections in topics_structure.items():
-            hierarchy.append(f"- {topic_name}")
-            if sections:
-                for s in sorted(sections):
-                    hierarchy.append(f"    - {s}")
+        task_type = "open answer" if task.is_open_answer else "multiple choice"
 
-        prompt = f"""Classify this math task by topic and section from the list below.
+        prompt = f"""Classify this math task by topic and section.
 Output ONLY a JSON object: {{"topic": "...", "section": "..."}}
 
-=== AVAILABLE TOPICS ===
-{chr(10).join(hierarchy)}
-
-=== TASK ===
-Class: {task.task_class}
-Topic number: {task.topic_number}
-Type: {'open answer' if task.is_open_answer else 'multiple choice'}
+=== TASK INFO ===
+Type: {task_type}
+Difficulty: {task.difficulty}/5
 Problem:
 {task.content[:600]}
 
-Pick topic and section ONLY from the list above. If no exact match, choose the closest.
-"""
+=== CLASSIFICATION GUIDELINES ===
+topic - broad category (e.g., "Алгебра", "Геометрия", "Тригонометрия", "Логарифмы", "Прогрессии", "Функции", "Неравенства")
+section - specific subtopic (e.g., "Квадратные уравнения", "Площади фигур", "Тригонометрические уравнения", "Стереометрия")
+
+Choose the most specific topic and section that matches this problem."""
         try:
             response = await ai._chat_completion(
-                system_prompt="You are a strict classifier. Output valid JSON only, no markdown.",
+                system_prompt="You are a strict classifier of math problems. Output valid JSON only, no markdown.",
                 user_prompt=prompt,
                 temperature=0.1,
                 max_tokens=self.CLASSIFY_TOKENS_PER_TASK,
