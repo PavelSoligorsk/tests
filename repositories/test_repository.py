@@ -174,14 +174,17 @@ class TestRepository:
         return max_points
     
     async def get_ai_tests_by_user(self, user_id: int):
-        """Получить AI-тесты, созданные пользователем"""
+        """Получить AI-тесты, созданные пользователем (с eager load tasks)"""
+        from sqlalchemy.orm import selectinload
         result = await self.db.execute(
-            select(Test).where(
+            select(Test)
+            .options(selectinload(Test.tasks))
+            .where(
                 Test.creator_id == user_id,
                 Test.is_ai_generated == True
             ).order_by(Test.id.desc())
         )
-        return result.scalars().all()
+        return result.unique().scalars().all()
 
     async def get_test_ids_by_creator(self, creator_id: int) -> List[int]:
         """Получить IDs всех тестов создателя"""
