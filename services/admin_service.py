@@ -923,42 +923,55 @@ class AdminService:
         log.append(f"📚 Тем в базе: {len(topics_structure)}")
 
         # ═══════════════════════════════════════════
-        # ФАЗА 1: AI-оценка сложности (батчевая)
+        # ФАЗА 1: AI-оценка сложности (параллельные батчи)
         # ═══════════════════════════════════════════
         log.append("\n── ФАЗА 1: оценка сложности ──")
-        estimated_tasks: list[Task] = []
 
-        # Батчами по 15 заданий — json_mode, без thinking, не перегружаем модель
         DIFF_BATCH = 15
+        DIFF_SEMAPHORE = asyncio.Semaphore(3)  # макс 3 одновременных API-вызова
+
         total_batches = (len(tasks) + DIFF_BATCH - 1) // DIFF_BATCH
-        for batch_num in range(total_batches):
+        estimated_tasks: list[Task] = []
+        estimated_tasks_lock = asyncio.Lock()
+
+        async def _estimate_batch(batch_num: int):
             batch = tasks[batch_num * DIFF_BATCH : (batch_num + 1) * DIFF_BATCH]
             prefix = f"[Phase1 batch {batch_num + 1}/{total_batches}]"
             ids_str = ", ".join(str(t.id) for t in batch)
-            log.append(f"{prefix} #{ids_str} ({len(batch)} шт.)")
+            async with DIFF_SEMAPHORE:
+                log.append(f"{prefix} #{ids_str} ({len(batch)} шт.)")
+                try:
+                    diff_map = await self._ai_estimate_difficulty_batch(ai, batch)
+                except Exception as e:
+                    diff_map = {}
+                    logger.error(f"Difficulty batch {batch_num + 1} failed: {e}")
+                    log.append(f"{prefix} 💥 ошибка: {e}")
 
-            try:
-                diff_map = await self._ai_estimate_difficulty_batch(ai, batch)
-            except Exception as e:
-                diff_map = {}
-                logger.error(f"Difficulty batch {batch_num + 1} failed: {e}")
-                log.append(f"{prefix} 💥 ошибка: {e}")
+                batch_local: list[Task] = []
+                for task in batch:
+                    est_diff = diff_map.get(task.id)
+                    if est_diff is None:
+                        stats["failed"] += 1
+                        log.append(f"  ❌ #{task.id} AI не смог оценить сложность — пропущено")
+                        continue
 
-            for task in batch:
-                est_diff = diff_map.get(task.id)
-                if est_diff is None:
-                    stats["failed"] += 1
-                    log.append(f"  ❌ #{task.id} AI не смог оценить сложность — пропущено")
-                    continue
+                    if est_diff != task.difficulty:
+                        task.difficulty = est_diff
+                        stats["difficulty"] += 1
+                        log.append(f"  🎯 #{task.id} сложность={est_diff}")
+                    else:
+                        log.append(f"  🎯 #{task.id} сложность={task.difficulty} (не изменилась)")
 
-                if est_diff != task.difficulty:
-                    task.difficulty = est_diff
-                    stats["difficulty"] += 1
-                    log.append(f"  🎯 #{task.id} сложность={est_diff}")
-                else:
-                    log.append(f"  🎯 #{task.id} сложность={task.difficulty} (не изменилась)")
+                    batch_local.append(task)
 
-                estimated_tasks.append(task)
+                async with estimated_tasks_lock:
+                    estimated_tasks.extend(batch_local)
+
+        await asyncio.gather(*(_estimate_batch(i) for i in range(total_batches)))
+
+        # Сохраняем порядок как в исходном списке tasks
+        estimated_ids = {t.id for t in estimated_tasks}
+        estimated_tasks = [t for t in tasks if t.id in estimated_ids]
 
         if estimated_tasks:
             await self.db.flush()
@@ -975,7 +988,7 @@ class AdminService:
             )
 
         # ═══════════════════════════════════════════
-        # ФАЗА 2: Пакетное решение по уровням сложности
+        # ФАЗА 2: Пакетное решение по уровням сложности (параллельно)
         # ═══════════════════════════════════════════
         log.append("\n── ФАЗА 2: пакетное решение ──")
 
@@ -986,14 +999,18 @@ class AdminService:
             by_difficulty[d].append(task)
 
         solved_tasks: list[Task] = []
+        solved_lock = asyncio.Lock()
 
-        for diff_level in range(1, 6):
+        async def _solve_level(diff_level: int):
+            """Решает все задания одного уровня сложности."""
             batch_tasks = by_difficulty[diff_level]
             if not batch_tasks:
-                continue
+                return
 
             batch_size = self.SOLVE_BATCH_SIZES[diff_level]
             log.append(f"  Сложность {diff_level}: {len(batch_tasks)} заданий, батч по {batch_size}")
+
+            level_solved: list[Task] = []
 
             for batch_num, i in enumerate(range(0, len(batch_tasks), batch_size), 1):
                 batch = batch_tasks[i:i + batch_size]
@@ -1027,7 +1044,7 @@ class AdminService:
                             ai_answer = answers_map.get(task.id, "")
                             kind_tag = "открытый" if kind == "open" else ""
                             if self._compare_answer(ai_answer, task):
-                                solved_tasks.append(task)
+                                level_solved.append(task)
                                 stats["solved"] += 1
                                 tag = f", {kind_tag}" if kind_tag else ""
                                 log.append(f"  ✅ #{task.id} (сл.{diff_level}{tag}) ответ совпал: «{ai_answer}»")
@@ -1036,40 +1053,46 @@ class AdminService:
                                 tag = f", {kind_tag}" if kind_tag else ""
                                 log.append(f"  ❌ #{task.id} (сл.{diff_level}{tag}) ответ не совпал: AI=«{ai_answer}», эталон=«{task.answer}»")
 
+            async with solved_lock:
+                solved_tasks.extend(level_solved)
+
+        # Запускаем все 5 уровней сложности параллельно
+        await asyncio.gather(*(_solve_level(d) for d in range(1, 6)))
+
 
         log.append(f"📊 Фаза 2: решено верно={stats['solved']}, не совпало={stats['failed'] - (len(tasks) - len(estimated_tasks))}")
 
         # ═══════════════════════════════════════════
-        # ФАЗА 3: Классификация topic/section (параллельно по 10)
+        # ФАЗА 3: Классификация topic/section (параллельно, до 10 одновременных)
         # ═══════════════════════════════════════════
         log.append("\n── ФАЗА 3: классификация topic/section ──")
 
-        # Параллелим по 10 — DeepSeek API выдерживает такой параллелизм
         CLASSIFY_CONCURRENCY = 10
+        classify_semaphore = asyncio.Semaphore(CLASSIFY_CONCURRENCY)
 
         async def _classify_one(task: Task, idx: int) -> str:
             prefix = f"[Phase3 {idx}/{len(solved_tasks)}] #{task.id} (сл.{task.difficulty})"
-            try:
-                classification = await self._ai_classify_task(ai, task, topics_structure)
-                if classification and classification.get("topic"):
-                    task.topic = classification["topic"]
-                    task.section = classification.get("section", "")
-                    stats["classified"] += 1
-                    return f"{prefix} 🏷️  topic={task.topic}, section={task.section}"
-                else:
+            async with classify_semaphore:
+                try:
+                    classification = await self._ai_classify_task(ai, task, topics_structure)
+                    if classification and classification.get("topic"):
+                        task.topic = classification["topic"]
+                        task.section = classification.get("section", "")
+                        stats["classified"] += 1
+                        return f"{prefix} 🏷️  topic={task.topic}, section={task.section}"
+                    else:
+                        stats["failed"] += 1
+                        return f"{prefix} ⚠️ AI не вернул topic/section"
+                except Exception as e:
                     stats["failed"] += 1
-                    return f"{prefix} ⚠️ AI не вернул topic/section"
-            except Exception as e:
-                stats["failed"] += 1
-                logger.error(f"Classify failed for task {task.id}: {e}")
-                return f"{prefix} 💥 ошибка: {e}"
+                    logger.error(f"Classify failed for task {task.id}: {e}")
+                    return f"{prefix} 💥 ошибка: {e}"
 
-        for chunk_start in range(0, len(solved_tasks), CLASSIFY_CONCURRENCY):
-            chunk = list(enumerate(solved_tasks[chunk_start : chunk_start + CLASSIFY_CONCURRENCY], chunk_start + 1))
-            chunk_results = await asyncio.gather(*(_classify_one(task, idx) for idx, task in chunk))
-            log.extend(chunk_results)
-            if chunk_start + CLASSIFY_CONCURRENCY < len(solved_tasks):
-                await asyncio.sleep(0.1)  # микро-пауза между пачками чтобы не забить API
+        chunk_results = await asyncio.gather(*(
+            _classify_one(task, idx)
+            for idx, task in enumerate(solved_tasks, 1)
+        ))
+        log.extend(chunk_results)
 
         await self.db.commit()
         log.append(f"\n📊 Итого: сложность={stats['difficulty']}, решено={stats['solved']}, "
