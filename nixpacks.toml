@@ -1,0 +1,12 @@
+# Nixpacks configuration for Railway
+# Позволяет точечно управлять этапом сборки
+
+[phases.setup]
+# Системные зависимости (нужны для psycopg2-binary, хотя с binary-версией обычно не нужны)
+# nixPkgs = ["postgresql.lib"]
+
+[phases.install]
+cmds = [
+    "pip install -r requirements.txt",
+    # Миграции НЕ запускаем здесь — база данных недоступна на этапе сборки
+]

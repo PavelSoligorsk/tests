@@ -85,6 +85,14 @@ class Test(Base):
     target_topic = Column(String(50), nullable=True)
     is_autocompile = Column(Boolean, default=True)
     is_ai_generated = Column(Boolean, default=False)
+
+    # ── Правила прохождения ──
+    # NULL = unlimited attempts (for auto-compile / AI tests)
+    max_attempts = Column(Integer, nullable=True, default=None)
+    time_limit_minutes = Column(Integer, nullable=True, default=None)
+    allow_interruptions = Column(Boolean, default=True)
+    exam_start = Column(DateTime, nullable=True, default=None)
+    exam_end = Column(DateTime, nullable=True, default=None)
     
     creator = relationship("User", back_populates="created_tests")
     tasks = relationship("Task", secondary="test_task_association")
@@ -102,6 +110,10 @@ class TestResult(Base):
     test = relationship("Test", back_populates="results")
     user = relationship("User", back_populates="test_results") 
     answers = relationship("UserAnswer", back_populates="result")
+
+    # ── Timer tracking ──
+    started_at = Column(DateTime, nullable=True, default=None)
+    time_spent_seconds = Column(Integer, default=0)
 
 
 class UserAnswer(Base):

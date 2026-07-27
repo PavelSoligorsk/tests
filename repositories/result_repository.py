@@ -115,6 +115,18 @@ class ResultRepository:
         )
         return r.unique().scalars().first()
 
+    async def count_completed_attempts(self, user_id: int, test_id: int) -> int:
+        """Count completed attempts for a user on a test."""
+        from sqlalchemy import func
+        r = await self.db.execute(
+            select(func.count(TestResult.id)).where(
+                TestResult.user_id == user_id,
+                TestResult.test_id == test_id,
+                TestResult.completed_at.is_not(None)
+            )
+        )
+        return r.scalar() or 0
+
     async def get_incomplete_ai_results(self, user_id: int):
         """Получить все незавершённые TestResult для AI-тестов пользователя"""
         r = await self.db.execute(

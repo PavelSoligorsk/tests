@@ -116,7 +116,9 @@ class TeacherService:
     
     async def create_test(self, title: str, creator_id: int, target_class=None,
                     target_topic=None, is_autocompile: bool = False,
-                    task_ids=None):
+                    task_ids=None, max_attempts=None, time_limit_minutes=None,
+                    allow_interruptions: bool = True,
+                    exam_start=None, exam_end=None):
         """Создать новый тест с предварительной загрузкой"""
         try:
             test_data = {
@@ -125,7 +127,12 @@ class TeacherService:
                 "target_topic": str(target_topic) if target_topic else None,
                 "is_autocompile": is_autocompile,
                 "creator_id": creator_id,
-                "is_active": True
+                "is_active": True,
+                "max_attempts": max_attempts,
+                "time_limit_minutes": time_limit_minutes,
+                "allow_interruptions": allow_interruptions,
+                "exam_start": exam_start,
+                "exam_end": exam_end,
             }
             
             # Логируем данные для отладки
@@ -172,7 +179,10 @@ class TeacherService:
     
     async def update_test(self, test_id: int, teacher_id: int, title: str,
                     target_class=None, target_topic=None,
-                    is_autocompile: bool = False, task_ids=None):
+                    is_autocompile: bool = False, task_ids=None,
+                    max_attempts=None, time_limit_minutes=None,
+                    allow_interruptions=None,
+                    exam_start=None, exam_end=None):
         """Обновить тест"""
         test = await self.test_repo.check_test_owner(test_id, teacher_id)
         if not test:
@@ -184,7 +194,12 @@ class TeacherService:
             "title": title,
             "target_class": str(target_class) if target_class else test.target_class,
             "target_topic": str(target_topic) if target_topic else test.target_topic,
-            "is_autocompile": is_autocompile
+            "is_autocompile": is_autocompile,
+            "max_attempts": max_attempts,
+            "time_limit_minutes": time_limit_minutes,
+            "allow_interruptions": allow_interruptions,
+            "exam_start": exam_start,
+            "exam_end": exam_end,
         }
         
         tasks = None

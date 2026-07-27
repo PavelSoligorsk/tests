@@ -69,8 +69,8 @@ class StudentService:
         return await self.test_repo.get_available_tests()
     
     async def get_test_for_passing(self, test_id: int):
-        """Получить тест для прохождения"""
-        test = await self.test_repo.get_test_by_id(test_id)
+        """Получить тест для прохождения (без проверки лимитов — они в API)"""
+        test = await self.test_repo.get_test_with_tasks(test_id)
         if not test:
             raise ValueError("Тест не найден")
         return test
@@ -81,21 +81,41 @@ class StudentService:
         if not test:
             raise ValueError("Тест не найден")
         
-        total_points = 0
+        now = datetime.utcnow()
 
-        # Для AI-тестов переиспользуем незавершённую попытку, если она есть
-        if test.is_ai_generated:
-            result = await self.result_repo.get_incomplete_result(user_id, test_id)
-            if result:
-                # Удаляем старые ответы, чтобы не было дубликатов
-                old_answers = await self.result_repo.get_user_answers_for_result(result.id)
-                for oa in old_answers:
-                    await self.db.delete(oa)
-                await self.db.flush()
-            else:
-                result = await self.result_repo.create_result(test_id, user_id)
+        # ── 1. Проверка лимитов (экз. окно + кол-во попыток) ──
+        await self._check_attempt_limits(user_id, test)
+
+        # Reuse incomplete attempt if one exists (for all test types, not just AI)
+        result = await self.result_repo.get_incomplete_result(user_id, test_id)
+        if result:
+            # ── 3. Проверка истечения времени ──
+            if test.time_limit_minutes:
+                current_elapsed = (
+                    int((now - result.started_at).total_seconds()) / 60
+                    if result.started_at else 0
+                )
+                total_elapsed = (result.time_spent_seconds or 0) / 60 + current_elapsed
+                if total_elapsed > test.time_limit_minutes:
+                    raise ValueError(
+                        f"Время вышло ({test.time_limit_minutes} мин). "
+                        f"Ответы не приняты — истекло {int(total_elapsed)} мин."
+                    )
+
+            # Удаляем старые ответы, чтобы не было дубликатов
+            old_answers = await self.result_repo.get_user_answers_for_result(result.id)
+            for oa in old_answers:
+                await self.db.delete(oa)
+            await self.db.flush()
+            # Track accumulated time
+            if result.started_at:
+                elapsed = int((now - result.started_at).total_seconds())
+                result.time_spent_seconds = (result.time_spent_seconds or 0) + elapsed
+                result.started_at = now  # reset for this "segment"
         else:
             result = await self.result_repo.create_result(test_id, user_id)
+            result.started_at = now
+            result.time_spent_seconds = 0
         
         for ans in answers:
             task = await self.task_repo.get_task_by_id(ans['task_id'])
@@ -238,25 +258,11 @@ class StudentService:
         test = await self.test_repo.get_test_with_tasks(test_id)
         if not test or not test.tasks:
             raise ValueError("Тест не содержит заданий")
-        
-        result = await self.result_repo.create_result(test_id, user_id)
-        
-        tasks = []
-        for task in test.tasks:
-            tasks.append(StartTestTaskItem(
-                id=task.id,
-                content=task.content,
-                options=task.options,
-                is_open_answer=task.is_open_answer,
-                difficulty=task.difficulty,
-            ))
-        
-        return StartAssignedTestResponse(
-            result_id=result.id,
-            test_title=test.title,
-            tasks=tasks,
-            time_limit=None,
-        )
+
+        # Validate attempt / exam limits
+        await self._check_attempt_limits(user_id, test)
+
+        return await self._build_test_start_response(user_id, test)
     
     async def get_ai_hint(self, task_id: int, user_id: int):
         """Получить AI подсказку для задания"""
@@ -562,6 +568,11 @@ class StudentService:
                 is_ai_generated=test.is_ai_generated,
                 tasks_count=len(test.tasks) if test.tasks else 0,
                 is_active=test.is_active,
+                max_attempts=test.max_attempts,
+                time_limit_minutes=test.time_limit_minutes,
+                exam_start=test.exam_start,
+                exam_end=test.exam_end,
+                allow_interruptions=test.allow_interruptions if test.allow_interruptions is not None else True,
             ))
         return result
     
@@ -608,8 +619,13 @@ class StudentService:
                 has_incomplete_attempt=has_incomplete,
                 result_id=None,
                 created_at=test.created_at if hasattr(test, 'created_at') else None,
+                max_attempts=test.max_attempts,
+                time_limit_minutes=test.time_limit_minutes,
+                exam_start=test.exam_start,
+                exam_end=test.exam_end,
+                allow_interruptions=test.allow_interruptions if test.allow_interruptions is not None else True,
             ))
-        
+
         return result
 
     async def start_ai_test(self, test_id: int, user_id: int):
@@ -624,45 +640,10 @@ class StudentService:
         if test.creator_id != user_id:
             raise ValueError("Этот тест создан не вами")
 
-        # Проверяем, нет ли уже незавершённой попытки
-        existing = await self.result_repo.get_incomplete_result(user_id, test_id)
-        if existing:
-            tasks = [
-                StartTestTaskItem(
-                    id=task.id,
-                    content=task.content,
-                    options=task.options,
-                    is_open_answer=task.is_open_answer,
-                    difficulty=task.difficulty,
-                )
-                for task in test.tasks
-            ]
-            return StartAssignedTestResponse(
-                result_id=existing.id,
-                test_title=test.title,
-                tasks=tasks,
-                time_limit=None,
-            )
+        # Validate attempt / exam limits
+        await self._check_attempt_limits(user_id, test)
 
-        result = await self.result_repo.create_result(test_id, user_id)
-
-        tasks = [
-            StartTestTaskItem(
-                id=task.id,
-                content=task.content,
-                options=task.options,
-                is_open_answer=task.is_open_answer,
-                difficulty=task.difficulty,
-            )
-            for task in test.tasks
-        ]
-
-        return StartAssignedTestResponse(
-            result_id=result.id,
-            test_title=test.title,
-            tasks=tasks,
-            time_limit=None,
-        )
+        return await self._build_test_start_response(user_id, test)
 
     async def get_incomplete_ai_tests(self, user_id: int):
         """Получить AI-тесты студента, которые он начал но не завершил"""
@@ -683,9 +664,123 @@ class StudentService:
                 has_incomplete_attempt=True,
                 result_id=res.id,
                 created_at=test.created_at if hasattr(test, 'created_at') else None,
+                max_attempts=test.max_attempts,
+                time_limit_minutes=test.time_limit_minutes,
+                exam_start=test.exam_start,
+                exam_end=test.exam_end,
+                allow_interruptions=test.allow_interruptions if test.allow_interruptions is not None else True,
             ))
 
         return result
+
+    async def _check_attempt_limits(self, user_id: int, test) -> None:
+        """Validate attempt count and exam time window for a test.
+
+        Raises ValueError with a human-readable message if any limit is exceeded.
+        Does NOT check for incomplete attempts — callers handle that separately.
+        """
+        now = datetime.utcnow()
+
+        # ── Exam window ──
+        if test.exam_start and now < test.exam_start:
+            raise ValueError(
+                f"Экзамен ещё не начался. Начало: {test.exam_start.strftime('%d.%m.%Y %H:%M')}"
+            )
+        if test.exam_end and now > test.exam_end:
+            raise ValueError(
+                f"Экзамен уже завершён. Окончание: {test.exam_end.strftime('%d.%m.%Y %H:%M')}"
+            )
+
+        # ── Attempt count ──
+        if test.max_attempts is not None:
+            completed = await self.result_repo.count_completed_attempts(user_id, test.id)
+            if completed >= test.max_attempts:
+                raise ValueError(
+                    f"Вы исчерпали лимит попыток ({test.max_attempts}). "
+                    f"У вас уже {completed} завершённых попыток."
+                )
+
+    async def _build_test_start_response(self, user_id: int, test, force_new: bool = False):
+        """Build a StartAssignedTestResponse, handling timer/interruption logic.
+
+        - allow_interruptions=True  → accumulative: reuse incomplete, track time_spent
+        - allow_interruptions=False → continuous: discard old incomplete, fresh start
+        - force_new=True            → always create a fresh attempt (used by retake)
+        """
+        test_id = test.id
+        now = datetime.utcnow()
+
+        existing = await self.result_repo.get_incomplete_result(user_id, test_id)
+
+        if not force_new and (test.allow_interruptions is None or test.allow_interruptions) and existing:
+            # ── Accumulative mode: resume existing attempt ──
+            result = existing
+            # time_spent_seconds already tracks accumulated time
+        else:
+            # ── Continuous mode (or no existing): fresh start ──
+            if test.allow_interruptions is not None and not test.allow_interruptions and existing:
+                # Discard old incomplete — timer is continuous, restart is fresh
+                old_answers = await self.result_repo.get_user_answers_for_result(existing.id)
+                for oa in old_answers:
+                    await self.db.delete(oa)
+                await self.db.delete(existing)
+                await self.db.flush()
+
+            result = await self.result_repo.create_result(test_id, user_id)
+            result.started_at = now
+            result.time_spent_seconds = 0
+            await self.db.commit()
+
+        attempts_used = await self.result_repo.count_completed_attempts(user_id, test_id)
+
+        tasks = [
+            StartTestTaskItem(
+                id=task.id,
+                content=task.content,
+                options=task.options,
+                is_open_answer=task.is_open_answer,
+                difficulty=task.difficulty,
+            )
+            for task in test.tasks
+        ]
+
+        return StartAssignedTestResponse(
+            result_id=result.id,
+            test_title=test.title,
+            tasks=tasks,
+            time_limit=None,
+            time_limit_minutes=test.time_limit_minutes,
+            allow_interruptions=test.allow_interruptions if test.allow_interruptions is not None else True,
+            time_spent_seconds=result.time_spent_seconds or 0,
+            attempts_used=attempts_used,
+            max_attempts=test.max_attempts,
+        )
+    async def retake_test(self, result_id: int, user_id: int):
+        """Пересдать тест — создать новую попытку на основе предыдущего result_id.
+
+        result_id — ID любого (обычно последнего) TestResult этого пользователя
+        для того же теста. Сервер находит test_id по этому result_id,
+        проверяет права и лимиты, затем создаёт новый TestResult.
+        """
+        # 1. Find the original result to identify which test
+        old_result = await self.result_repo.get_result_by_id(result_id)
+        if not old_result:
+            raise ValueError("Результат не найден")
+        if old_result.user_id != user_id:
+            raise ValueError("Это не ваш результат")
+
+        test_id = old_result.test_id
+        test = await self.test_repo.get_test_with_tasks(test_id)
+        if not test:
+            raise ValueError("Тест не найден или удалён")
+        if not test.is_active:
+            raise ValueError("Тест деактивирован")
+
+        # 2. Check limits (attempts, exam window)
+        await self._check_attempt_limits(user_id, test)
+
+        # 3. Build fresh start (retake always creates new, never resumes)
+        return await self._build_test_start_response(user_id, test, force_new=True)
 
     def _check_answer(self, task, user_answer) -> bool:
         """Проверить правильность ответа"""

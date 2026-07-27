@@ -212,7 +212,12 @@ async def create_test(
             target_class=payload.target_class,
             target_topic=payload.target_topic,
             is_autocompile=payload.is_autocompile,
-            task_ids=payload.task_ids
+            task_ids=payload.task_ids,
+            max_attempts=payload.max_attempts,
+            time_limit_minutes=payload.time_limit_minutes,
+            allow_interruptions=payload.allow_interruptions,
+            exam_start=payload.exam_start,
+            exam_end=payload.exam_end,
         )
         
         # Инвалидируем кеш тестов учителя
@@ -309,7 +314,12 @@ async def update_test(
             target_class=payload.target_class,
             target_topic=payload.target_topic,
             is_autocompile=payload.is_autocompile,
-            task_ids=payload.task_ids
+            task_ids=payload.task_ids,
+            max_attempts=payload.max_attempts,
+            time_limit_minutes=payload.time_limit_minutes,
+            allow_interruptions=payload.allow_interruptions,
+            exam_start=payload.exam_start,
+            exam_end=payload.exam_end,
         )
         
         # Инвалидируем кеш

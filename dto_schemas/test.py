@@ -11,6 +11,11 @@ class TestCreate(BaseModel):
     is_autocompile: bool = False
     task_ids: Optional[List[int]] = None
     is_active: bool = True
+    max_attempts: Optional[int] = None
+    time_limit_minutes: Optional[int] = None
+    allow_interruptions: bool = True
+    exam_start: Optional[datetime] = None
+    exam_end: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -32,6 +37,11 @@ class TestResponse(BaseModel):
     hint: Optional[str] = None
     total_score: Optional[int] = 0 
     answers: List[AnswerResponse] = [] 
+    max_attempts: Optional[int] = None
+    time_limit_minutes: Optional[int] = None
+    allow_interruptions: Optional[bool] = None
+    exam_start: Optional[datetime] = None
+    exam_end: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
 

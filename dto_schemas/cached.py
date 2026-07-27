@@ -124,6 +124,11 @@ class StudentAITestItemResponse(BaseModel):
     has_incomplete_attempt: bool = False
     result_id: Optional[int] = None
     created_at: Optional[datetime] = None
+    max_attempts: Optional[int] = None
+    time_limit_minutes: Optional[int] = None
+    exam_start: Optional[datetime] = None
+    exam_end: Optional[datetime] = None
+    allow_interruptions: Optional[bool] = True
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -137,6 +142,11 @@ class AvailableTestMetaResponse(BaseModel):
     is_ai_generated: bool = False
     tasks_count: int = 0
     is_active: bool = True
+    max_attempts: Optional[int] = None
+    time_limit_minutes: Optional[int] = None
+    exam_start: Optional[datetime] = None
+    exam_end: Optional[datetime] = None
+    allow_interruptions: Optional[bool] = True
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -311,7 +321,17 @@ class StartAssignedTestResponse(BaseModel):
     test_title: str
     tasks: list[StartTestTaskItem] = Field(default_factory=list)
     time_limit: Optional[str] = None
+    time_limit_minutes: Optional[int] = None
+    allow_interruptions: bool = True
+    time_spent_seconds: int = 0
+    attempts_used: int = 0
+    max_attempts: Optional[int] = None
 
+    model_config = ConfigDict(from_attributes=True)
+
+
+class RetakeTestResponse(StartAssignedTestResponse):
+    """Ответ на запрос пересдачи теста."""
     model_config = ConfigDict(from_attributes=True)
 
 

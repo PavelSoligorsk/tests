@@ -59,6 +59,7 @@ from dto_schemas.cached import (
     TeacherTaskDetailResponse,
     StartTestTaskItem,
     StartAssignedTestResponse,
+    RetakeTestResponse,
     SubmitTestResponse,
     AIHintContext,
     AIHintResponse,
@@ -101,7 +102,7 @@ __all__ = [
     "TeacherTaskMetaResponse", "TeacherTaskSectionResponse", "TeacherTasksByClassTopicResponse",
     "TeacherStudentProfileResponse", "TestCacheResponse", "UserCacheResponse",
     "GroupAssignResponse", "AddStudentsToGroupResponse", "TeacherTaskDetailResponse",
-    "StartTestTaskItem", "StartAssignedTestResponse", "SubmitTestResponse",
+    "StartTestTaskItem", "StartAssignedTestResponse", "RetakeTestResponse", "SubmitTestResponse",
     "AIHintContext", "AIHintResponse", "AISolutionContext", "AISolutionResponse",
     "AITheoryContext", "AITheoryResponse",
 ]

@@ -9,6 +9,7 @@ from dto_schemas import (
     TheorySectionSummaryResponse, StudentAssignmentMetaItemResponse,
     StudentAITestItemResponse, AvailableTestMetaResponse,
     TheoryQuestionRequest, TestAnswerSubmission, StartAssignedTestResponse,
+    RetakeTestResponse,
 )
 from core import auth
 from core.database import get_db
@@ -83,7 +84,7 @@ async def get_test_for_passing(
 ):
     """Получить тест для прохождения"""
     try:
-        return await async_cache_result(
+        test = await async_cache_result(
             "test_details",
             None,
             lambda: service.get_test_for_passing(test_id),
@@ -91,8 +92,11 @@ async def get_test_for_passing(
             ttl=300,
             entity_id=test_id
         )
+        # Проверка лимитов per-user (не кешируется)
+        await service._check_attempt_limits(current_user.id, test)
+        return test
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.post("/tests/{test_id}/submit")
@@ -414,3 +418,32 @@ async def start_ai_test(
         return result
     except ValueError as e:
         raise HTTPException(status_code=400 if "деактивирован" in str(e) or "не AI" in str(e) else 403, detail=str(e))
+
+
+@router.post("/retake/{result_id}", response_model=RetakeTestResponse)
+async def retake_test(
+    result_id: int,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """Пересдать тест — создать новую попытку по предыдущему result_id.
+
+    result_id — ID любого завершённого TestResult пользователя.
+    Сервер находит test_id, проверяет лимиты попыток, экзаменационное окно
+    и создаёт новый TestResult с заданиями.
+    """
+    try:
+        result = await service.retake_test(result_id, current_user.id)
+
+        invalidate_user_cache(
+            current_user.id,
+            "student_profile",
+            "my_history",
+            "my_assignments",
+            "my_assignments_meta",
+            "my_ai_tests",
+        )
+
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
