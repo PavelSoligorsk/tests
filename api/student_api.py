@@ -8,7 +8,7 @@ from dto_schemas import (
     StudentAssignmentItemResponse, TheoryTopicSummaryResponse,
     TheorySectionSummaryResponse, StudentAssignmentMetaItemResponse,
     StudentAITestItemResponse, AvailableTestMetaResponse,
-    TheoryQuestionRequest, TestAnswerSubmission
+    TheoryQuestionRequest, TestAnswerSubmission, StartAssignedTestResponse,
 )
 from core import auth
 from core.database import get_db
@@ -385,3 +385,32 @@ async def get_my_ai_tests(
         model_class=StudentAITestItemResponse,
         ttl=120
     )
+
+
+@router.get("/ai-tests/incomplete", response_model=list[StudentAITestItemResponse])
+async def get_incomplete_ai_tests(
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """Получить AI-тесты, которые студент начал но не завершил"""
+    return await service.get_incomplete_ai_tests(current_user.id)
+
+
+@router.post("/start-ai-test/{test_id}", response_model=StartAssignedTestResponse)
+async def start_ai_test(
+    test_id: int,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """Начать AI-тест — получить задания и result_id"""
+    try:
+        result = await service.start_ai_test(test_id, current_user.id)
+
+        invalidate_user_cache(
+            current_user.id,
+            "my_ai_tests",
+        )
+
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400 if "деактивирован" in str(e) or "не AI" in str(e) else 403, detail=str(e))

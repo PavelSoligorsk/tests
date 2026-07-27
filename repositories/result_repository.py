@@ -3,6 +3,7 @@ from sqlalchemy.orm import joinedload
 from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List
+import datetime
 
 from core.models import TestResult, UserAnswer, Task, Test
 
@@ -36,6 +37,7 @@ class ResultRepository:
         result = await self.get_result_by_id(result_id)
         if result:
             result.total_points = total_points
+            result.completed_at = datetime.datetime.utcnow()
             await self.db.commit()
         return result
     
@@ -98,6 +100,34 @@ class ResultRepository:
         )
         result = r.scalars().first()
         return result is not None
+
+    async def get_incomplete_result(self, user_id: int, test_id: int):
+        """Получить незавершённый TestResult (completed_at IS NULL)"""
+        r = await self.db.execute(
+            select(TestResult).options(
+                selectinload(TestResult.test).selectinload(Test.tasks),
+                selectinload(TestResult.answers),
+            ).where(
+                TestResult.user_id == user_id,
+                TestResult.test_id == test_id,
+                TestResult.completed_at == None
+            )
+        )
+        return r.unique().scalars().first()
+
+    async def get_incomplete_ai_results(self, user_id: int):
+        """Получить все незавершённые TestResult для AI-тестов пользователя"""
+        r = await self.db.execute(
+            select(TestResult).options(
+                selectinload(TestResult.test).selectinload(Test.tasks),
+            ).join(Test, TestResult.test_id == Test.id).where(
+                TestResult.user_id == user_id,
+                TestResult.completed_at == None,
+                Test.is_ai_generated == True,
+                Test.is_active == True,
+            ).order_by(TestResult.id.desc())
+        )
+        return r.unique().scalars().all()
 
     async def get_result_ids_by_user(self, user_id: int) -> List[int]:
         """Получить IDs всех результатов пользователя"""

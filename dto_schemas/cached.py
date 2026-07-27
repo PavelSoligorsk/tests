@@ -122,6 +122,7 @@ class StudentAITestItemResponse(BaseModel):
     is_active: bool = True
     is_completed: bool = False
     has_incomplete_attempt: bool = False
+    result_id: Optional[int] = None
     created_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)

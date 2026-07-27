@@ -63,3 +63,4 @@ mistralai
 redis
 asyncpg
 openai
+alembic

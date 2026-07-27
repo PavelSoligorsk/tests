@@ -97,7 +97,7 @@ class TestResult(Base):
     test_id = Column(Integer, ForeignKey("tests.id"))
     user_id = Column(Integer, ForeignKey("users.id"))
     total_points = Column(Integer, default=0)
-    completed_at = Column(DateTime, default=datetime.datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True, default=None)
     
     test = relationship("Test", back_populates="results")
     user = relationship("User", back_populates="test_results") 

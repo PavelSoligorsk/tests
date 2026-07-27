@@ -82,7 +82,20 @@ class StudentService:
             raise ValueError("Тест не найден")
         
         total_points = 0
-        result = await self.result_repo.create_result(test_id, user_id)
+
+        # Для AI-тестов переиспользуем незавершённую попытку, если она есть
+        if test.is_ai_generated:
+            result = await self.result_repo.get_incomplete_result(user_id, test_id)
+            if result:
+                # Удаляем старые ответы, чтобы не было дубликатов
+                old_answers = await self.result_repo.get_user_answers_for_result(result.id)
+                for oa in old_answers:
+                    await self.db.delete(oa)
+                await self.db.flush()
+            else:
+                result = await self.result_repo.create_result(test_id, user_id)
+        else:
+            result = await self.result_repo.create_result(test_id, user_id)
         
         for ans in answers:
             task = await self.task_repo.get_task_by_id(ans['task_id'])
@@ -593,9 +606,85 @@ class StudentService:
                 is_active=test.is_active,
                 is_completed=not has_incomplete,
                 has_incomplete_attempt=has_incomplete,
+                result_id=None,
                 created_at=test.created_at if hasattr(test, 'created_at') else None,
             ))
         
+        return result
+
+    async def start_ai_test(self, test_id: int, user_id: int):
+        """Начать AI-тест — создать незавершённый TestResult"""
+        test = await self.test_repo.get_test_with_tasks(test_id)
+        if not test:
+            raise ValueError("Тест не найден")
+        if not test.is_ai_generated:
+            raise ValueError("Это не AI-тест")
+        if not test.is_active:
+            raise ValueError("Тест уже пройден или деактивирован")
+        if test.creator_id != user_id:
+            raise ValueError("Этот тест создан не вами")
+
+        # Проверяем, нет ли уже незавершённой попытки
+        existing = await self.result_repo.get_incomplete_result(user_id, test_id)
+        if existing:
+            tasks = [
+                StartTestTaskItem(
+                    id=task.id,
+                    content=task.content,
+                    options=task.options,
+                    is_open_answer=task.is_open_answer,
+                    difficulty=task.difficulty,
+                )
+                for task in test.tasks
+            ]
+            return StartAssignedTestResponse(
+                result_id=existing.id,
+                test_title=test.title,
+                tasks=tasks,
+                time_limit=None,
+            )
+
+        result = await self.result_repo.create_result(test_id, user_id)
+
+        tasks = [
+            StartTestTaskItem(
+                id=task.id,
+                content=task.content,
+                options=task.options,
+                is_open_answer=task.is_open_answer,
+                difficulty=task.difficulty,
+            )
+            for task in test.tasks
+        ]
+
+        return StartAssignedTestResponse(
+            result_id=result.id,
+            test_title=test.title,
+            tasks=tasks,
+            time_limit=None,
+        )
+
+    async def get_incomplete_ai_tests(self, user_id: int):
+        """Получить AI-тесты студента, которые он начал но не завершил"""
+        incomplete_results = await self.result_repo.get_incomplete_ai_results(user_id)
+
+        result = []
+        for res in incomplete_results:
+            test = res.test
+            result.append(StudentAITestItemResponse(
+                id=test.id,
+                title=test.title,
+                target_class=test.target_class,
+                target_topic=test.target_topic,
+                is_ai_generated=True,
+                tasks_count=len(test.tasks) if test.tasks else 0,
+                is_active=test.is_active,
+                is_completed=False,
+                has_incomplete_attempt=True,
+                result_id=res.id,
+                created_at=test.created_at if hasattr(test, 'created_at') else None,
+            ))
+
         return result
 
     def _check_answer(self, task, user_answer) -> bool:
