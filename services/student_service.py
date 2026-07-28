@@ -83,14 +83,15 @@ class StudentService:
         
         now = datetime.utcnow()
 
-        # ── 1. Проверка лимитов (экз. окно + кол-во попыток) ──
-        await self._check_attempt_limits(user_id, test)
+        # ── 1. Проверка лимитов (только для учительских тестов) ──
+        if not test.is_ai_generated and not test.is_autocompile:
+            await self._check_attempt_limits(user_id, test)
 
         # Reuse incomplete attempt if one exists (for all test types, not just AI)
         result = await self.result_repo.get_incomplete_result(user_id, test_id)
         if result:
-            # ── 3. Проверка истечения времени ──
-            if test.time_limit_minutes:
+            # ── 3. Проверка истечения времени (только для учительских тестов) ──
+            if not test.is_ai_generated and not test.is_autocompile and test.time_limit_minutes:
                 current_elapsed = (
                     int((now - result.started_at).total_seconds()) / 60
                     if result.started_at else 0
@@ -260,8 +261,9 @@ class StudentService:
         if not test or not test.tasks:
             raise ValueError("Тест не содержит заданий")
 
-        # Validate attempt / exam limits
-        await self._check_attempt_limits(user_id, test)
+        # Только для учительских тестов (не AI, не autocompile)
+        if not test.is_ai_generated and not test.is_autocompile:
+            await self._check_attempt_limits(user_id, test)
 
         return await self._build_test_start_response(user_id, test)
     
@@ -641,8 +643,8 @@ class StudentService:
         if test.creator_id != user_id:
             raise ValueError("Этот тест создан не вами")
 
-        # Validate attempt / exam limits
-        await self._check_attempt_limits(user_id, test)
+        # AI-тесты и autocompile: лимитов нет
+        # (start_ai_test вызывается только для AI-тестов, но оставляем общую проверку)
 
         return await self._build_test_start_response(user_id, test)
 
@@ -777,8 +779,9 @@ class StudentService:
         if not test.is_active:
             raise ValueError("Тест деактивирован")
 
-        # 2. Check limits (attempts, exam window)
-        await self._check_attempt_limits(user_id, test)
+        # 2. Check limits (только для учительских тестов: не AI, не autocompile)
+        if not test.is_ai_generated and not test.is_autocompile:
+            await self._check_attempt_limits(user_id, test)
 
         # 3. Build fresh start (retake always creates new, never resumes)
         return await self._build_test_start_response(user_id, test, force_new=True)
