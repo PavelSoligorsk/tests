@@ -249,18 +249,20 @@ class StudentService:
         return result
     
     async def start_assigned_test(self, test_id: int, user_id: int):
-        """Начать выполнение назначенного теста"""
-        assignment = await self.assignment_repo.get_assignment(test_id, user_id)
-        if not assignment:
-            raise ValueError("Тест не назначен вам или уже выполнен")
-        
-        if not await self.assignment_repo.check_deadline(assignment):
-            raise ValueError("Срок выполнения теста истёк")
-        
+        """Начать выполнение назначенного теста (или autocompile)"""
         test = await self.test_repo.get_test_with_tasks(test_id)
         if not test or not test.tasks:
             raise ValueError("Тест не содержит заданий")
-
+        
+        # autocompile-тесты доступны всем без назначения
+        if not test.is_autocompile:
+            assignment = await self.assignment_repo.get_assignment(test_id, user_id)
+            if not assignment:
+                raise ValueError("Тест не назначен вам или уже выполнен")
+            
+            if not await self.assignment_repo.check_deadline(assignment):
+                raise ValueError("Срок выполнения теста истёк")
+        
         # Только для учительских тестов (не AI, не autocompile)
         if not test.is_ai_generated and not test.is_autocompile:
             await self._check_attempt_limits(user_id, test)

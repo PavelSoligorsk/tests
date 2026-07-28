@@ -1421,20 +1421,39 @@ class AdminService:
         return False
 
     async def _ai_classify_task(self, ai, task: Task, topics_structure: dict) -> dict | None:
-        """AI классифицирует задание → {topic, section}, выбирая только из существующих в БД тем."""
+        """AI классифицирует задание → {topic, section}, выбирая только из существующих в БД тем.
+        
+        Если БД пустая (бутстрап) — AI классифицирует свободно, без ограничений.
+        """
         task_type = "open answer" if task.is_open_answer else "multiple choice"
 
-        # Формируем список доступных тем и разделов из БД
-        available_lines = []
-        for topic in sorted(topics_structure.keys()):
-            sections = topics_structure[topic]
-            if sections:
-                available_lines.append(f'  - "{topic}": разделы: {", ".join(f"\"{s}\"" for s in sorted(sections))}')
-            else:
-                available_lines.append(f'  - "{topic}" (без разделов)')
-        available_str = "\n".join(available_lines)
+        # Бутстрап: если в БД ещё нет тем — AI классифицирует свободно
+        if not topics_structure:
+            prompt = f"""Classify this math task by topic and section.
+Output ONLY a JSON object: {{"topic": "...", "section": "..."}}
 
-        prompt = f"""Classify this math task by topic and section.
+=== TASK INFO ===
+Type: {task_type}
+Difficulty: {task.difficulty}/5
+Problem:
+{task.content[:600]}
+
+=== CLASSIFICATION GUIDELINES ===
+- topic - broad category (e.g., "Алгебра", "Геометрия", "Тригонометрия", "Логарифмы", "Прогрессии", "Функции", "Неравенства")
+- section - specific subtopic (e.g., "Квадратные уравнения", "Площади фигур", "Тригонометрические уравнения", "Стереометрия")
+- Choose the most specific topic and section that matches this problem."""
+        else:
+            # Нормальный режим: список тем из БД
+            available_lines = []
+            for topic in sorted(topics_structure.keys()):
+                sections = topics_structure[topic]
+                if sections:
+                    available_lines.append(f'  - "{topic}": разделы: {", ".join(f"\"{s}\"" for s in sorted(sections))}')
+                else:
+                    available_lines.append(f'  - "{topic}" (без разделов)')
+            available_str = "\n".join(available_lines)
+
+            prompt = f"""Classify this math task by topic and section.
 Output ONLY a JSON object: {{"topic": "...", "section": "..."}}
 
 === TASK INFO ===
@@ -1473,11 +1492,12 @@ Problem:
                 section = data.get("section", "")
                 if topic:
                     # Валидация: тема должна быть среди существующих в БД
-                    if topic not in topics_structure:
+                    # Но если БД пустая — доверяем AI (бутстрап)
+                    if topics_structure and topic not in topics_structure:
                         logger.warning(f"Classify task #{task.id}: AI вернул тему '{topic}', которой нет в БД (доступны: {list(topics_structure.keys())})")
                         return None
                     # Валидация: раздел (если указан) должен быть среди разделов этой темы
-                    if section and section not in topics_structure.get(topic, set()):
+                    if topics_structure and section and section not in topics_structure.get(topic, set()):
                         logger.warning(f"Classify task #{task.id}: AI вернул раздел '{section}' для темы '{topic}', но такого раздела нет в БД (доступны: {topics_structure.get(topic, set())})")
                         return None
                     return data
