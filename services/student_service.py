@@ -117,6 +117,7 @@ class StudentService:
             result.started_at = now
             result.time_spent_seconds = 0
         
+        total_points = 0
         for ans in answers:
             task = await self.task_repo.get_task_by_id(ans['task_id'])
             if not task:
