@@ -1421,8 +1421,18 @@ class AdminService:
         return False
 
     async def _ai_classify_task(self, ai, task: Task, topics_structure: dict) -> dict | None:
-        """AI классифицирует задание → {topic, section}."""
+        """AI классифицирует задание → {topic, section}, выбирая только из существующих в БД тем."""
         task_type = "open answer" if task.is_open_answer else "multiple choice"
+
+        # Формируем список доступных тем и разделов из БД
+        available_lines = []
+        for topic in sorted(topics_structure.keys()):
+            sections = topics_structure[topic]
+            if sections:
+                available_lines.append(f'  - "{topic}": разделы: {", ".join(f"\"{s}\"" for s in sorted(sections))}')
+            else:
+                available_lines.append(f'  - "{topic}" (без разделов)')
+        available_str = "\n".join(available_lines)
 
         prompt = f"""Classify this math task by topic and section.
 Output ONLY a JSON object: {{"topic": "...", "section": "..."}}
@@ -1433,11 +1443,14 @@ Difficulty: {task.difficulty}/5
 Problem:
 {task.content[:600]}
 
-=== CLASSIFICATION GUIDELINES ===
-topic - broad category (e.g., "Алгебра", "Геометрия", "Тригонометрия", "Логарифмы", "Прогрессии", "Функции", "Неравенства")
-section - specific subtopic (e.g., "Квадратные уравнения", "Площади фигур", "Тригонометрические уравнения", "Стереометрия")
+=== AVAILABLE TOPICS & SECTIONS (choose ONLY from these) ===
+{available_str}
 
-Choose the most specific topic and section that matches this problem."""
+=== CLASSIFICATION GUIDELINES ===
+- topic MUST be one of the listed topics above.
+- section MUST be one of the listed sections under that topic (or "" if none listed or none applies).
+- Choose the most specific match. If nothing fits, pick the closest topic from the list.
+- Do NOT invent topics or sections that are not in the list above."""
         try:
             response = await ai._chat_completion(
                 system_prompt="You are a strict classifier of math problems. Output valid JSON only, no markdown.",
@@ -1456,7 +1469,17 @@ Choose the most specific topic and section that matches this problem."""
             m = re.search(r'\{[^{}]*\}', response, re.DOTALL)
             if m:
                 data = json.loads(m.group())
-                if data.get("topic"):
+                topic = data.get("topic")
+                section = data.get("section", "")
+                if topic:
+                    # Валидация: тема должна быть среди существующих в БД
+                    if topic not in topics_structure:
+                        logger.warning(f"Classify task #{task.id}: AI вернул тему '{topic}', которой нет в БД (доступны: {list(topics_structure.keys())})")
+                        return None
+                    # Валидация: раздел (если указан) должен быть среди разделов этой темы
+                    if section and section not in topics_structure.get(topic, set()):
+                        logger.warning(f"Classify task #{task.id}: AI вернул раздел '{section}' для темы '{topic}', но такого раздела нет в БД (доступны: {topics_structure.get(topic, set())})")
+                        return None
                     return data
                 else:
                     logger.warning(f"Classify task #{task.id}: JSON parsed but no 'topic' field: {data}")

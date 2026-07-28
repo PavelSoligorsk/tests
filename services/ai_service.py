@@ -143,7 +143,7 @@ class AIService:
         )
     
     async def classify_topics(self, user_prompt: str, topics_structure: Dict[str, set]) -> List[Dict]:
-        """Классифицировать запрос студента по темам и разделам"""
+        """Классифицировать запрос студента по темам и разделам, только из существующих в БД."""
         hierarchy_context = self._build_hierarchy_context(topics_structure)
         
         prompt = self._build_classification_prompt(user_prompt, hierarchy_context)
@@ -155,7 +155,34 @@ class AIService:
             max_tokens=500
         )
         
-        return self._parse_classification_response(response)
+        topics = self._parse_classification_response(response)
+        
+        # Пост-валидация: отбрасываем темы, которых нет в БД
+        validated = []
+        for item in topics:
+            name = item.get("name")
+            if name and name in topics_structure:
+                sections = item.get("sections", [])
+                # Фильтруем разделы: оставляем только те, что есть в БД
+                valid_sections = [s for s in sections if s in topics_structure[name]] if sections else []
+                validated.append({"name": name, "sections": valid_sections})
+            else:
+                logger.warning("classify_topics: AI вернул тему '%s', которой нет в БД — отбрасываем", name)
+        
+        if validated:
+            return validated
+        
+        # Fallback: если все темы отброшены, ищем по совпадению ключевых слов в названиях
+        prompt_lower = user_prompt.lower()
+        fallback = []
+        for topic_name in topics_structure:
+            if any(word in prompt_lower for word in topic_name.lower().split()):
+                fallback.append({"name": topic_name, "sections": []})
+        if fallback:
+            logger.info("classify_topics: fallback по ключевым словам: %s", [t["name"] for t in fallback])
+            return fallback
+        
+        return []
     
     async def select_tasks(self, user_prompt: str, available_tasks: List[Dict], task_count: int, 
                      difficulty_text: str, topics_count: int, topic_stats: Dict[str, int]) -> List[int]:
