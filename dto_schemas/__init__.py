@@ -69,6 +69,17 @@ from dto_schemas.cached import (
     AITheoryResponse,
 )
 
+from dto_schemas.schedule import (
+    ParentCreate, ParentUpdate, ParentResponse,
+    ScheduleCreate, ScheduleUpdate, ScheduleResponse,
+    LessonCreate, LessonReschedule, LessonUpdate, LessonResponse,
+    PaymentCreate, PaymentUpdate, PaymentResponse,
+    CalendarDayResponse, CalendarResponse,
+    TelegramPaymentRequest, TelegramPaymentResponse,
+    TelegramWhoamiResponse, TelegramStudentBrief,
+    TelegramBalanceResponse, TelegramPaymentBrief,
+)
+
 __all__ = [
     "TaskBase", "TaskResponse", "TaskCreate", "TaskCreateRequest", "TaskUpdateRequest",
     "AnswerSubmitRequest", "AnswerResponse", "TestAnswerSubmission",
@@ -106,4 +117,13 @@ __all__ = [
     "StartTestTaskItem", "StartAssignedTestResponse", "RetakeTestResponse", "SubmitTestResponse",
     "AIHintContext", "AIHintResponse", "AISolutionContext", "AISolutionResponse",
     "AITheoryContext", "AITheoryResponse",
+    # Schedule / Payments / Telegram
+    "ParentCreate", "ParentUpdate", "ParentResponse",
+    "ScheduleCreate", "ScheduleUpdate", "ScheduleResponse",
+    "LessonCreate", "LessonReschedule", "LessonUpdate", "LessonResponse",
+    "PaymentCreate", "PaymentUpdate", "PaymentResponse",
+    "CalendarDayResponse", "CalendarResponse",
+    "TelegramPaymentRequest", "TelegramPaymentResponse",
+    "TelegramWhoamiResponse", "TelegramStudentBrief",
+    "TelegramBalanceResponse", "TelegramPaymentBrief",
 ]

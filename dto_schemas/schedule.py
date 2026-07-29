@@ -227,3 +227,51 @@ class TelegramPaymentResponse(BaseModel):
     error: Optional[str] = None  # заполняется только при ошибке
 
     model_config = ConfigDict(from_attributes=True)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Telegram Bot — whoami, parent, student info
+# ═══════════════════════════════════════════════════════════════
+
+
+class TelegramWhoamiResponse(BaseModel):
+    """Информация о пользователе по tg_username."""
+    found: bool
+    role: Optional[str] = None              # "parent" | "teacher" | "student" | None
+    name: Optional[str] = None               # Имя (для parent — имя родителя, для teacher/student — из User)
+    tg_username: str                         # очищенный @username
+    # Для parent — список детей
+    children: Optional[List["TelegramStudentBrief"]] = None
+    # Для teacher — краткая инфа
+    students_count: Optional[int] = None
+    # Для student — заглушка
+    message: Optional[str] = None
+
+
+class TelegramStudentBrief(BaseModel):
+    """Краткая информация об ученике (для родителя)."""
+    id: int
+    name: str                                # "Иван Петров"
+    tg_username: Optional[str] = None
+    balance: int = 0                         # копейки BYN
+    teacher_name: Optional[str] = None        # Имя учителя
+
+
+class TelegramBalanceResponse(BaseModel):
+    """Баланс ученика + последние операции."""
+    student_id: int
+    student_name: str
+    balance: int                             # копейки BYN
+    currency: str = "BYN"
+    last_operations: List["TelegramPaymentBrief"] = []
+
+
+class TelegramPaymentBrief(BaseModel):
+    """Краткая запись платежа."""
+    id: int
+    type: str                                # "deposit" | "withdrawal"
+    amount: int                              # копейки
+    payment_type: str                        # "per_lesson" | "monthly" | "package"
+    status: str
+    comment: Optional[str] = None
+    created_at: Optional[datetime] = None
