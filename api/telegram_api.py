@@ -36,6 +36,12 @@ TG_BOT_API_KEY = os.getenv("TELEGRAM_BOT_TOKEN", "tg-bot-secret-change-me")
 def verify_bot_key(x_telegram_bot_key: str = Header(...)) -> str:
     """Проверяет, что запрос пришёл от нашего ТГ-бота."""
     if x_telegram_bot_key != TG_BOT_API_KEY:
+        import logging
+        _log = logging.getLogger(__name__)
+        _log.warning(
+            f"Key mismatch! Received: ...{x_telegram_bot_key[-8:]}, "
+            f"Expected: ...{TG_BOT_API_KEY[-8:] if len(TG_BOT_API_KEY) >= 8 else TG_BOT_API_KEY}"
+        )
         raise HTTPException(status_code=403, detail="Неверный ключ Telegram-бота")
     return x_telegram_bot_key
 
