@@ -14,6 +14,9 @@ from dto_schemas import (
     TeacherTaskMetaResponse, TeacherTaskMetaByTopicSectionResponse,
     TeacherAITestRequest,
 )
+from dto_schemas.user import UserUpdate
+from repositories.user_repository import UserRepository
+
 from core import auth
 from core.database import get_db
 from services.teacher_service import TeacherService, PermissionError
@@ -21,12 +24,31 @@ from core.cache import async_cache_result, invalidate_user_cache, invalidate_cac
 
 router = APIRouter(prefix="/teacher", tags=["Teacher API"])
 
-
 def check_teacher(user: User = Depends(auth.get_current_user)):
     """Проверяет, что пользователь — учитель или админ"""
     if user.role not in ["teacher", "admin"]:
         raise HTTPException(status_code=403, detail="Доступ запрещён. Требуется роль teacher или admin")
     return user
+
+@router.put("/profile", response_model=UserResponse)
+async def update_teacher_profile(
+    obj_in: UserUpdate,
+    current_user: User = Depends(check_teacher),
+    db: AsyncSession = Depends(get_db),
+):
+    """Обновить профиль учителя (tg_username, phone, first_name, last_name)."""
+    repo = UserRepository(db)
+    update_data = obj_in.model_dump(exclude_unset=True)
+    if not update_data:
+        raise HTTPException(status_code=400, detail="Нет полей для обновления")
+    try:
+        updated = await repo.update_user(current_user, update_data)
+        return updated
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Ошибка при обновлении профиля: {str(e)}")
+
+
+
 
 
 def get_teacher_service(db: AsyncSession = Depends(get_db)) -> TeacherService:
