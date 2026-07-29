@@ -58,7 +58,7 @@ class ScheduleService:
         if not parent:
             raise ValueError("Родитель не найден")
         await self.parent_repo.update(parent, data.model_dump(exclude_unset=True))
-        resp = self._parent_to_response(parent)
+        resp = await self._parent_to_response(parent)
         await self.db.commit()
         return resp
 
@@ -66,11 +66,11 @@ class ScheduleService:
         parent = await self.parent_repo.get_by_id(parent_id)
         if not parent:
             raise ValueError("Родитель не найден")
-        return self._parent_to_response(parent)
+        return await self._parent_to_response(parent)
 
     async def list_parents(self, teacher_id: int) -> List[ParentResponse]:
         parents = await self.parent_repo.list_by_teacher(teacher_id)
-        return [self._parent_to_response(p) for p in parents]
+        return [await self._parent_to_response(p) for p in parents]
 
     async def link_parent_student(self, parent_id: int, student_id: int) -> bool:
         ok = await self.parent_repo.link_student(parent_id, student_id)
@@ -91,11 +91,16 @@ class ScheduleService:
         await self.parent_repo.delete(parent)
         await self.db.commit()
 
-    def _parent_to_response(self, parent) -> ParentResponse:
-        try:
-            student_ids = [s.id for s in (parent.students or [])]
-        except Exception:
-            student_ids = []
+    async def _parent_to_response(self, parent) -> ParentResponse:
+        # force‑load students (backref может не работать в async без явной загрузки)
+        if hasattr(parent, "students") and parent.students is not None:
+            try:
+                student_ids = [s.id for s in parent.students]
+            except Exception as exc:
+                logger.warning("parent.students access failed for %s: %s", parent.id, exc)
+                student_ids = await self.parent_repo.get_student_ids(parent.id)
+        else:
+            student_ids = await self.parent_repo.get_student_ids(parent.id)
         return ParentResponse(
             id=parent.id,
             name=parent.name,

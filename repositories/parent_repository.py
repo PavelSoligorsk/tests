@@ -84,3 +84,10 @@ class ParentRepository:
         student.parent_id = None
         await self.db.flush()
         return True
+
+    async def get_student_ids(self, parent_id: int) -> list[int]:
+        """Возвращает ID студентов родителя (прямой запрос, без backref)."""
+        r = await self.db.execute(
+            select(User.id).where(User.parent_id == parent_id)
+        )
+        return [row[0] for row in r.all()]
