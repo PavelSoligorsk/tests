@@ -14,6 +14,7 @@ from repositories.lesson_repository import LessonRepository
 from repositories.payment_repository import PaymentRepository
 from repositories.group_repository import GroupRepository
 from repositories.teacher_student_repository import TeacherStudentRepository
+from repositories.user_repository import UserRepository
 
 from dto_schemas.schedule import (
     ParentCreate, ParentUpdate, ParentResponse,
@@ -21,6 +22,7 @@ from dto_schemas.schedule import (
     LessonCreate, LessonReschedule, LessonUpdate, LessonResponse,
     PaymentCreate, PaymentUpdate, PaymentResponse,
     CalendarDayResponse, CalendarResponse,
+    TelegramPaymentRequest, TelegramPaymentResponse,
 )
 
 logger = logging.getLogger("schedule_service")
@@ -34,6 +36,7 @@ class ScheduleService:
         self.payment_repo = PaymentRepository(db)
         self.group_repo = GroupRepository(db)
         self.ts_repo = TeacherStudentRepository(db)
+        self.user_repo = UserRepository(db)
         self.db = db
 
     # ═══════════════════════════════════════════════════════════
@@ -508,6 +511,77 @@ class ScheduleService:
                              to_date: Optional[datetime] = None,
                              student_id: Optional[int] = None) -> dict:
         return await self.payment_repo.stats_for_teacher(teacher_id, from_date, to_date, student_id)
+
+    async def confirm_payment_via_telegram(self, data: TelegramPaymentRequest) -> TelegramPaymentResponse:
+        """Подтверждение оплаты, пришедшей через Telegram-бота.
+
+        Учитель в ТГ-боте проверяет чек от родителя, вводит сумму и username ученика.
+        ТГ-бот вызывает этот метод.
+        """
+        # 1. Ищем учителя по tg_username
+        teacher = await self.user_repo.get_user_by_tg_username(data.teacher_tg_username)
+        if not teacher:
+            raise ValueError(f"Учитель с Telegram @{data.teacher_tg_username.lstrip('@')} не найден")
+        if teacher.role not in ("teacher", "admin"):
+            raise ValueError(f"Пользователь @{data.teacher_tg_username} не является учителем")
+
+        # 2. Ищем ученика по tg_username
+        student = await self.user_repo.get_user_by_tg_username(data.student_tg_username)
+        if not student:
+            raise ValueError(f"Ученик с Telegram @{data.student_tg_username.lstrip('@')} не найден")
+        if student.role != "student":
+            raise ValueError(f"Пользователь @{data.student_tg_username} не является учеником")
+
+        # 3. Проверяем, что студент привязан к этому учителю
+        if not await self.ts_repo.check_student_belongs_to_teacher(student.id, teacher.id):
+            raise ValueError(f"Ученик @{data.student_tg_username} не привязан к вам")
+
+        # 4. Создаём платёж (per_lesson по умолчанию, сразу paid)
+        payment_data = {
+            "student_id": student.id,
+            "payment_type": data.payment_type,
+            "amount": data.amount,
+            "lesson_id": None,
+            "package_total": data.package_total,
+            "valid_from": data.valid_from,
+            "valid_until": data.valid_until,
+            "status": "paid",
+            "comment": data.comment or f"Оплата через Telegram (подтвердил @{data.teacher_tg_username.lstrip('@')})",
+        }
+        payment = await self.payment_repo.create(payment_data)
+
+        # 5. Пополняем баланс для per_lesson
+        if data.payment_type == "per_lesson":
+            student.balance = (student.balance or 0) + data.amount
+
+        await self.db.commit()
+
+        student_name = f"{student.first_name or ''} {student.last_name or ''}".strip() or student.username
+
+        return TelegramPaymentResponse(
+            payment_id=payment.id,
+            student_id=student.id,
+            student_name=student_name,
+            amount=data.amount,
+            payment_type=data.payment_type,
+            status="paid",
+            comment=data.comment,
+        )
+
+    async def reject_payment_via_telegram(self, data: TelegramPaymentRequest) -> dict:
+        """Отклонение платежа, пришедшего через Telegram-бота.
+
+        Просто логирует факт отклонения — баланс не меняется.
+        """
+        logger.info(
+            f"Telegram payment rejected: teacher=@{data.teacher_tg_username}, "
+            f"student=@{data.student_tg_username}, amount={data.amount}, "
+            f"reason={data.comment}"
+        )
+        return {
+            "ok": True,
+            "detail": "Платёж отклонён (баланс не менялся)",
+        }
 
     def _payment_to_response(self, payment, student_balance: int = None) -> PaymentResponse:
         if student_balance is None:

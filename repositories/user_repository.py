@@ -31,6 +31,14 @@ class UserRepository:
         result = await self.db.execute(select(User).where(User.username == email))
         return result.scalars().first()
 
+    async def get_user_by_tg_username(self, tg_username: str):
+        """Найти пользователя по Telegram username (с @ или без)."""
+        clean = tg_username.lstrip("@")
+        result = await self.db.execute(
+            select(User).where(User.tg_username.in_([clean, f"@{clean}"]))
+        )
+        return result.scalars().first()
+
     async def create_user(self, username: str, password: str, role: str,
                     first_name: str = None, last_name: str = None,
                     phone: str = None, tg_username: str = None):

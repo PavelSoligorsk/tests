@@ -196,3 +196,34 @@ class CalendarDayResponse(BaseModel):
 
 class CalendarResponse(BaseModel):
     days: List[CalendarDayResponse] = []
+
+
+# ═══════════════════════════════════════════════════════════════
+# Telegram Payment (вызывается из ТГ-бота)
+# ═══════════════════════════════════════════════════════════════
+
+
+class TelegramPaymentRequest(BaseModel):
+    """Запрос от ТГ-бота: учитель подтверждает платёж родителя."""
+    teacher_tg_username: str   # @username учителя в Telegram
+    student_tg_username: str   # @username ученика, за которого платит родитель
+    amount: int                # сумма в копейках BYN
+    payment_type: str = "per_lesson"  # "per_lesson" | "monthly" | "package"
+    package_total: Optional[int] = None   # для пакетов
+    valid_from: Optional[datetime] = None   # для monthly
+    valid_until: Optional[datetime] = None  # для monthly
+    comment: Optional[str] = None  # пояснение
+
+
+class TelegramPaymentResponse(BaseModel):
+    """Ответ для ТГ-бота."""
+    payment_id: int
+    student_id: int
+    student_name: Optional[str] = None
+    amount: int
+    payment_type: str
+    status: str
+    comment: Optional[str] = None
+    error: Optional[str] = None  # заполняется только при ошибке
+
+    model_config = ConfigDict(from_attributes=True)
