@@ -90,15 +90,8 @@ class ScheduleService:
         await self.db.commit()
 
     async def _parent_to_response(self, parent) -> ParentResponse:
-        # force‑load students (backref может не работать в async без явной загрузки)
-        if hasattr(parent, "students") and parent.students is not None:
-            try:
-                student_ids = [s.id for s in parent.students]
-            except Exception as exc:
-                logger.warning("parent.students access failed for %s: %s", parent.id, exc)
-                student_ids = await self.parent_repo.get_student_ids(parent.id)
-        else:
-            student_ids = await self.parent_repo.get_student_ids(parent.id)
+        # always use direct SQL — async backref unreliable with SQLAlchemy
+        student_ids = await self.parent_repo.get_student_ids(parent.id)
         return ParentResponse(
             id=parent.id,
             name=parent.name,
