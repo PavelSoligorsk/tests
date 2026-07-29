@@ -16,6 +16,7 @@ class ParentCreate(BaseModel):
     phone: Optional[str] = None
     tg_username: Optional[str] = None
     comment: Optional[str] = None
+    student_ids: List[int] = []   # ID учеников, которых сразу привязать
 
 
 class ParentUpdate(BaseModel):

@@ -45,13 +45,11 @@ class ScheduleService:
 
     async def create_parent(self, data: ParentCreate) -> ParentResponse:
         parent = await self.parent_repo.create(data.model_dump())
+        # Сразу привязываем учеников
+        for sid in (data.student_ids or []):
+            await self.parent_repo.link_student(parent.id, sid)
         await self.db.commit()
-        # У нового родителя нет студентов
-        return ParentResponse(
-            id=parent.id, name=parent.name, phone=parent.phone,
-            tg_username=parent.tg_username, comment=parent.comment,
-            student_ids=[], created_at=parent.created_at,
-        )
+        return await self._parent_to_response(parent)
 
     async def update_parent(self, parent_id: int, data: ParentUpdate) -> ParentResponse:
         parent = await self.parent_repo.get_by_id(parent_id)
