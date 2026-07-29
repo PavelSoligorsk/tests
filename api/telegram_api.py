@@ -61,25 +61,28 @@ async def whoami(
 
     clean = tg_username.lstrip("@")
 
-    # 1. Ищем родителя (по Parent.tg_username) — с eager load детей
-    from sqlalchemy import select
-    from sqlalchemy.orm import selectinload
+    # 1. Ищем родителя (по Parent.tg_username) — без backref, через прямой SQL
+    from sqlalchemy import select as sa_select
+    parent_repo = ParentRepository(db)
     r = await db.execute(
-        select(Parent)
-        .options(selectinload(Parent.students))
-        .where(Parent.tg_username.in_([clean, f"@{clean}"]))
+        sa_select(Parent).where(Parent.tg_username.in_([clean, f"@{clean}"]))
     )
     parent = r.scalars().first()
 
     if parent:
-        # Собираем детей родителя
+        # Получаем ID студентов родителя прямым запросом (не через backref)
+        student_ids = await parent_repo.get_student_ids(parent.id)
         children: List[TelegramStudentBrief] = []
-        # Собираем ID всех учеников для batch-запроса учителей
-        student_ids = [s.id for s in parent.students]
+
         if student_ids:
+            # Загружаем студентов по ID
+            user_repo_temp = UserRepository(db)
+            students = await user_repo_temp.get_users_by_ids(student_ids)
+            student_map: dict[int, User] = {s.id: s for s in students}
+
+            # Связи с учителями
             ts_repo = TeacherStudentRepository(db)
             links = await ts_repo.get_links_by_student_ids(student_ids)
-            # Map: student_id → [teacher_id, ...]
             student_teacher_map: dict[int, list[int]] = {}
             for link in links:
                 student_teacher_map.setdefault(link.student_id, []).append(link.teacher_id)
@@ -88,12 +91,14 @@ async def whoami(
             all_teacher_ids = [tid for tids in student_teacher_map.values() for tid in tids]
             teacher_map: dict[int, User] = {}
             if all_teacher_ids:
-                user_repo_temp = UserRepository(db)
                 teachers = await user_repo_temp.get_teachers_by_ids(all_teacher_ids)
                 teacher_map = {t.id: t for t in teachers}
 
-            for student in parent.students:
-                teacher_ids_for_student = student_teacher_map.get(student.id, [])
+            for sid in student_ids:
+                student = student_map.get(sid)
+                if not student:
+                    continue
+                teacher_ids_for_student = student_teacher_map.get(sid, [])
                 teacher_name = None
                 if teacher_ids_for_student:
                     t = teacher_map.get(teacher_ids_for_student[0])
@@ -107,8 +112,6 @@ async def whoami(
                     balance=student.balance or 0,
                     teacher_name=teacher_name,
                 ))
-        else:
-            children = []
 
         return TelegramWhoamiResponse(
             found=True,
