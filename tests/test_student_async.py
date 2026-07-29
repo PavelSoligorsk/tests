@@ -872,6 +872,471 @@ async def test_teacher_full_journey(
     assert assigns.status_code == 200
 
 
+# ═══════════════════════════════════════════════════════════════
+# Autocompile tests — без назначения, без лимитов
+# ═══════════════════════════════════════════════════════════════
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_autocompile_start_without_assignment(
+    async_client: AsyncClient, admin_token: str, student_token: str
+) -> None:
+    """БТ: Autocompile-тест можно начать без назначения (было 403)."""
+    task = await async_create_task(async_client, admin_token, {
+        "task_class": "10", "topic_number": "1",
+        "topic": "algebra", "section": "equations",
+        "content": "x + 1 = 2", "answer": "1", "is_open_answer": True,
+        "difficulty": 1, "hint": "h", "solution": "x=1"})
+    test = (await async_client.post(
+        "/teacher/tests",
+        json={"title": "AutoCompilePub", "target_class": "10",
+              "target_topic": "1", "is_autocompile": True,
+              "task_ids": [task["id"]]},
+        headers=_bearer(admin_token))).json()
+
+    # Студент НЕ назначен — но autocompile должен пускать
+    resp = await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(student_token))
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert data["test_title"] == "AutoCompilePub"
+    assert len(data["tasks"]) == 1
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_autocompile_submit_no_limits(
+    async_client: AsyncClient, admin_token: str, student_token: str
+) -> None:
+    """БТ: Autocompile-тест можно сдавать сколько угодно раз без ограничений."""
+    task = await async_create_task(async_client, admin_token, {
+        "task_class": "10", "topic_number": "1",
+        "topic": "algebra", "section": "equations",
+        "content": "2 + 2 = ?", "answer": "4", "is_open_answer": False,
+        "options": ["3", "4", "5", "6"],
+        "difficulty": 1, "hint": "h", "solution": "4"})
+    test = (await async_client.post(
+        "/teacher/tests",
+        json={"title": "AutoCompileNoLim", "target_class": "10",
+              "target_topic": "1", "is_autocompile": True,
+              "task_ids": [task["id"]]},
+        headers=_bearer(admin_token))).json()
+
+    # Start + submit 3 раза подряд
+    for attempt in range(3):
+        start = await async_client.post(
+            f"/student/start-test/{test['id']}", headers=_bearer(student_token))
+        assert start.status_code == 200, f"Attempt {attempt}: start {start.text}"
+
+        submit = await async_client.post(
+            f"/student/tests/{test['id']}/submit",
+            json=[{"task_id": task["id"], "user_answer": "4"}],
+            headers=_bearer(student_token))
+        assert submit.status_code == 200, f"Attempt {attempt}: submit {submit.text}"
+        assert submit.json()["status"] == "success"
+
+    # Проверяем: в истории 3 записи
+    hist = await async_client.get("/student/history", headers=_bearer(student_token))
+    assert hist.status_code == 200
+    test_results = [h for h in hist.json() if h["test_title"] == "AutoCompileNoLim"]
+    assert len(test_results) == 3
+
+
+# ═══════════════════════════════════════════════════════════════
+# AI tests — без лимитов
+# ═══════════════════════════════════════════════════════════════
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_ai_test_submit_no_limits(
+    async_client: AsyncClient, student_token: str, admin_token: str
+) -> None:
+    """БТ: AI-тест: submit работает без проверки лимитов попыток."""
+    # Создаём задания
+    await async_create_task(async_client, admin_token, {
+        "task_class": "10", "topic_number": "1",
+        "topic": "algebra", "section": "equations",
+        "content": "x + 2 = 5", "answer": "3", "is_open_answer": True,
+        "difficulty": 1, "hint": "h", "solution": "x=3"})
+    await async_create_task(async_client, admin_token, {
+        "task_class": "10", "topic_number": "1",
+        "topic": "algebra", "section": "expressions",
+        "content": "2 + 3", "answer": "5", "is_open_answer": False,
+        "options": ["4", "5", "6"], "difficulty": 1,
+        "hint": "h", "solution": "5"})
+
+    from unittest.mock import AsyncMock, patch
+    with patch("services.ai_service.AIService.classify_topics",
+               new_callable=AsyncMock) as mock_classify, \
+         patch("services.ai_service.AIService.select_tasks",
+               new_callable=AsyncMock) as mock_select:
+        mock_classify.return_value = [
+            {"name": "algebra", "sections": ["equations"]}]
+        mock_select.return_value = []
+
+        gen = await async_client.post(
+            "/student/generate-test",
+            json={"prompt": "уравнения", "task_count": 2, "difficulty": "easy"},
+            headers=_bearer(student_token))
+        assert gen.status_code == 200, gen.text
+        ai_test = gen.json()
+        assert ai_test["is_ai_generated"] is True
+
+    # Start AI тест
+    start = await async_client.post(
+        f"/student/start-ai-test/{ai_test['id']}",
+        headers=_bearer(student_token))
+    assert start.status_code == 200, start.text
+    tasks = start.json()["tasks"]
+    assert len(tasks) >= 1
+
+    # Submit 3 раза — все должны пройти без ошибок
+    for attempt in range(3):
+        submit = await async_client.post(
+            f"/student/tests/{ai_test['id']}/submit",
+            json=[{"task_id": t["id"], "user_answer": "5"} for t in tasks],
+            headers=_bearer(student_token))
+        assert submit.status_code == 200, \
+            f"Attempt {attempt}: {submit.status_code} {submit.text}"
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_ai_test_retake_no_limits(
+    async_client: AsyncClient, student_token: str, admin_token: str
+) -> None:
+    """БТ: AI-тест: retake не проверяет лимиты (но AI-тесты одноразовые)."""
+    await async_create_task(async_client, admin_token, {
+        "task_class": "10", "topic_number": "1",
+        "topic": "algebra", "section": "equations",
+        "content": "x + 3 = 7", "answer": "4", "is_open_answer": True,
+        "difficulty": 1, "hint": "h", "solution": "x=4"})
+
+    from unittest.mock import AsyncMock, patch
+    with patch("services.ai_service.AIService.classify_topics",
+               new_callable=AsyncMock) as mock_classify, \
+         patch("services.ai_service.AIService.select_tasks",
+               new_callable=AsyncMock) as mock_select:
+        mock_classify.return_value = [
+            {"name": "algebra", "sections": ["equations"]}]
+        mock_select.return_value = []
+
+        gen = await async_client.post(
+            "/student/generate-test",
+            json={"prompt": "уравнения", "task_count": 1, "difficulty": "easy"},
+            headers=_bearer(student_token))
+        ai_test = gen.json()
+
+    # Start + submit (AI тест одноразовый, после submit деактивируется)
+    start = await async_client.post(
+        f"/student/start-ai-test/{ai_test['id']}",
+        headers=_bearer(student_token))
+    assert start.status_code == 200
+    task_id = start.json()["tasks"][0]["id"]
+
+    await async_client.post(
+        f"/student/tests/{ai_test['id']}/submit",
+        json=[{"task_id": task_id, "user_answer": "4"}],
+        headers=_bearer(student_token))
+
+    # Берём result_id из истории
+    hist = await async_client.get("/student/history", headers=_bearer(student_token))
+    results = [h for h in hist.json() if h.get("test_title", "").startswith("AI")]
+    assert len(results) >= 1
+    result_id = results[0]["id"]
+
+    # Retake одноразового AI-теста → ожидаемо падает с "деактивирован"
+    # Но НЕ с лимитами попыток — это ключевое
+    retake = await async_client.post(
+        f"/student/retake/{result_id}", headers=_bearer(student_token))
+    assert retake.status_code == 400, \
+        f"Expected 400 (test deactivated), got {retake.status_code}: {retake.text}"
+    # Убедимся что ошибка про деактивацию, а не про лимиты
+    detail_lower = retake.json()["detail"].lower()
+    assert "деактивирован" in detail_lower or "deactivated" in detail_lower, \
+        f"Expected 'деактивирован' in error, got: {retake.text}"
+
+
+# ═══════════════════════════════════════════════════════════════
+# Teacher tests — ограничения (только для учительских)
+# ═══════════════════════════════════════════════════════════════
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_teacher_test_max_attempts_block(
+    async_client: AsyncClient, admin_token: str, teacher_token: str,
+    student_token: str
+) -> None:
+    """БТ: Учительский тест с max_attempts=1 блокирует второй старт."""
+    test = await _setup_teacher_test_with_limits(
+        async_client, admin_token, teacher_token, student_token,
+        max_attempts=1)
+
+    # Start + первый submit (должен пройти)
+    await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(student_token))
+    task = test["tasks"][0]
+
+    first = await async_client.post(
+        f"/student/tests/{test['id']}/submit",
+        json=[{"task_id": task["id"], "user_answer": "4"}],
+        headers=_bearer(student_token))
+    assert first.status_code == 200, first.text
+
+    # Второй старт — должен быть заблокирован (лимит исчерпан)
+    second = await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(student_token))
+    assert second.status_code == 403, \
+        f"Expected 403, got {second.status_code}: {second.text}"
+    assert "лимит" in second.json()["detail"].lower()
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_teacher_test_exam_start_future(
+    async_client: AsyncClient, admin_token: str, teacher_token: str,
+    student_token: str
+) -> None:
+    """БТ: Учительский тест с exam_start в будущем блокирует старт."""
+    from datetime import datetime, timedelta
+    future = (datetime.utcnow() + timedelta(days=30)).isoformat()
+
+    test = await _setup_teacher_test_with_limits(
+        async_client, admin_token, teacher_token, student_token,
+        exam_start=future)
+
+    resp = await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(student_token))
+    assert resp.status_code == 403, \
+        f"Expected 403, got {resp.status_code}: {resp.text}"
+    assert "не начался" in resp.json()["detail"].lower() \
+        or "экзамен" in resp.json()["detail"].lower()
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_teacher_test_exam_end_past(
+    async_client: AsyncClient, admin_token: str, teacher_token: str,
+    student_token: str
+) -> None:
+    """БТ: Учительский тест с exam_end в прошлом блокирует старт."""
+    from datetime import datetime, timedelta
+    past = (datetime.utcnow() - timedelta(days=1)).isoformat()
+
+    test = await _setup_teacher_test_with_limits(
+        async_client, admin_token, teacher_token, student_token,
+        exam_end=past)
+
+    resp = await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(student_token))
+    assert resp.status_code == 403, \
+        f"Expected 403, got {resp.status_code}: {resp.text}"
+    assert "завершён" in resp.json()["detail"].lower() \
+        or "экзамен" in resp.json()["detail"].lower()
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_teacher_test_retake_after_max_attempts(
+    async_client: AsyncClient, admin_token: str, teacher_token: str,
+    student_token: str
+) -> None:
+    """БТ: Retake учительского теста после исчерпания попыток → 400."""
+    test = await _setup_teacher_test_with_limits(
+        async_client, admin_token, teacher_token, student_token,
+        max_attempts=1)
+
+    task = test["tasks"][0]
+
+    # Start + submit (единственная попытка)
+    await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(student_token))
+    await async_client.post(
+        f"/student/tests/{test['id']}/submit",
+        json=[{"task_id": task["id"], "user_answer": "4"}],
+        headers=_bearer(student_token))
+
+    # Получаем result_id
+    hist = await async_client.get("/student/history", headers=_bearer(student_token))
+    results = [h for h in hist.json() if h["test_title"] == "TeacherWithLimits"]
+    assert len(results) >= 1
+    result_id = results[0]["id"]
+
+    # Retake — должен быть заблокирован
+    retake = await async_client.post(
+        f"/student/retake/{result_id}", headers=_bearer(student_token))
+    assert retake.status_code == 400, \
+        f"Expected 400, got {retake.status_code}: {retake.text}"
+    assert "лимит" in retake.json()["detail"].lower()
+
+
+# ═══════════════════════════════════════════════════════════════
+# Scoring / total_points
+# ═══════════════════════════════════════════════════════════════
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_total_points_calculation_mixed_tasks(
+    async_client: AsyncClient, admin_token: str, teacher_token: str,
+    student_token: str
+) -> None:
+    """БТ: total_points корректно суммируется: открытые = 2 балла, закрытые = 1."""
+    # Создаём закрытое задание (1 балл за правильный)
+    closed_task = await async_create_task(async_client, admin_token, {
+        "task_class": "10", "topic_number": "1",
+        "topic": "algebra", "section": "equations",
+        "content": "2 + 2 = ?", "answer": "4", "is_open_answer": False,
+        "options": ["3", "4", "5", "6"],
+        "difficulty": 1, "hint": "h", "solution": "4"})
+    # Создаём открытое задание (2 балла за правильный)
+    open_task = await async_create_task(async_client, admin_token, {
+        "task_class": "10", "topic_number": "1",
+        "topic": "algebra", "section": "equations",
+        "content": "Реши: x + 5 = 10", "answer": "5", "is_open_answer": True,
+        "difficulty": 2, "hint": "h", "solution": "x=5"})
+
+    # Получаем teacher_id и student_id
+    teacher_id, student_id = await _get_ids_for_teacher_test(
+        async_client, admin_token, teacher_token, student_token)
+
+    # Создаём тест с двумя заданиями
+    test = (await async_client.post(
+        "/teacher/tests",
+        json={"title": "TeacherWithLimits", "target_class": "10",
+              "target_topic": "1", "is_autocompile": False,
+              "task_ids": [closed_task["id"], open_task["id"]]},
+        headers=_bearer(teacher_token))).json()
+    await async_client.post(
+        "/teacher/assign-test",
+        json={"test_id": test["id"], "user_ids": [student_id]},
+        headers=_bearer(teacher_token))
+
+    # Start
+    await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(student_token))
+
+    # Submit: оба правильных
+    submit = await async_client.post(
+        f"/student/tests/{test['id']}/submit",
+        json=[
+            {"task_id": closed_task["id"], "user_answer": "4"},
+            {"task_id": open_task["id"], "user_answer": "5"},
+        ],
+        headers=_bearer(student_token))
+    assert submit.status_code == 200, submit.text
+    data = submit.json()
+    # Закрытое правильно = 1, открытое правильно = 2 → итого 3
+    assert data["score"] == 3, f"Expected score=3, got {data['score']}"
+    assert data["max_score_possible"] == 3, \
+        f"Expected max=3, got {data['max_score_possible']}"
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_total_points_zero_for_wrong_answers(
+    async_client: AsyncClient, admin_token: str, teacher_token: str,
+    student_token: str
+) -> None:
+    """БТ: total_points = 0 когда все ответы неправильные."""
+    test = await _setup_teacher_test_with_limits(
+        async_client, admin_token, teacher_token, student_token)
+
+    await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(student_token))
+    task = test["tasks"][0]
+    submit = await async_client.post(
+        f"/student/tests/{test['id']}/submit",
+        json=[{"task_id": task["id"], "user_answer": "999"}],
+        headers=_bearer(student_token))
+    assert submit.status_code == 200, submit.text
+    assert submit.json()["score"] == 0
+
+
+# ═══════════════════════════════════════════════════════════════
+# Helpers for teacher test with limits
+# ═══════════════════════════════════════════════════════════════
+
+
+async def _get_ids_for_teacher_test(
+    ac: AsyncClient, admin_token: str, teacher_token: str, student_token: str,
+) -> tuple[int, int]:
+    """Return (teacher_id, student_id) for the linked teacher-student pair."""
+    me_resp = await ac.get("/student/me", headers=_bearer(student_token))
+    student_id = me_resp.json()["user"]["id"]
+
+    users_resp = await ac.get("/admin/users", headers=_bearer(admin_token))
+    users = users_resp.json()
+    teacher = next((u for u in users if u["role"] == "teacher"), None)
+    assert teacher is not None
+
+    await ac.post(
+        "/admin/assign-student-to-teacher",
+        json={"teacher_id": teacher["id"], "student_id": student_id},
+        headers=_bearer(admin_token))
+
+    return teacher["id"], student_id
+
+
+async def _setup_teacher_test_with_limits(
+    ac: AsyncClient, admin_token: str, teacher_token: str, student_token: str,
+    max_attempts: int | None = None,
+    time_limit_minutes: int | None = None,
+    exam_start: str | None = None,
+    exam_end: str | None = None,
+    extra_tasks: list[int] | None = None,
+) -> dict:
+    """Создать учительский тест с ограничениями, назначить студенту. Возвращает test dict."""
+    # Создаём базовое задание
+    task = await async_create_task(ac, admin_token, {
+        "task_class": "10", "topic_number": "1",
+        "topic": "algebra", "section": "equations",
+        "content": "2 + 2 = ?", "answer": "4", "is_open_answer": False,
+        "options": ["3", "4", "5", "6"],
+        "difficulty": 1, "hint": "Think simple", "solution": "2 + 2 = 4"})
+
+    # Получаем teacher_id и student_id
+    teacher_id, student_id = await _get_ids_for_teacher_test(
+        ac, admin_token, teacher_token, student_token)
+
+    task_ids = [task["id"]]
+    if extra_tasks:
+        task_ids.extend(extra_tasks)
+
+    payload: dict = {
+        "title": "TeacherWithLimits",
+        "target_class": "10",
+        "target_topic": "1",
+        "is_autocompile": False,
+        "task_ids": task_ids,
+    }
+    if max_attempts is not None:
+        payload["max_attempts"] = max_attempts
+    if time_limit_minutes is not None:
+        payload["time_limit_minutes"] = time_limit_minutes
+    if exam_start is not None:
+        payload["exam_start"] = exam_start
+    if exam_end is not None:
+        payload["exam_end"] = exam_end
+
+    test_resp = await ac.post(
+        "/teacher/tests", json=payload, headers=_bearer(teacher_token))
+    assert test_resp.status_code == 200, f"Create test failed: {test_resp.text}"
+    test = test_resp.json()
+
+    # Назначаем студенту
+    assign = await ac.post(
+        "/teacher/assign-test",
+        json={"test_id": test["id"], "user_ids": [student_id]},
+        headers=_bearer(teacher_token))
+    assert assign.status_code == 200, f"Assign failed: {assign.text}"
+
+    return test
+
+
 @pytest.mark.admin
 @pytest.mark.asyncio
 async def test_admin_full_journey(

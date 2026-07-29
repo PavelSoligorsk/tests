@@ -21,6 +21,13 @@ class User(Base):
     phone = Column(String, nullable=True)
     tg_username = Column(String, nullable=True)
 
+    # ── Баланс (в копейках BYN) ──
+    balance = Column(Integer, default=0)
+
+    # ── Родитель ──
+    parent_id = Column(Integer, ForeignKey("parents.id", ondelete="SET NULL"), nullable=True)
+    parent = relationship("Parent", backref="students")
+
     test_results = relationship("TestResult", back_populates="user")
     created_tests = relationship("Test", back_populates="creator")
     my_students = relationship("TeacherStudent", foreign_keys="TeacherStudent.teacher_id", back_populates="teacher")
@@ -32,6 +39,18 @@ class User(Base):
     
     # Назначения тестов
     test_assignments = relationship("TestAssignment", back_populates="user", foreign_keys="TestAssignment.user_id")
+
+
+class Parent(Base):
+    """Родитель студента (один родитель → много студентов)"""
+    __tablename__ = "parents"
+
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String(255), nullable=False)
+    phone = Column(String(50), nullable=True)
+    tg_username = Column(String(255), nullable=True)
+    comment = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
 class Group(Base):
@@ -192,3 +211,129 @@ class PasswordResetToken(Base):
     expires_at = Column(DateTime, nullable=False)
     is_used = Column(Boolean, default=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+# ═══════════════════════════════════════════════════════════════
+# Расписание, занятия, оплата
+# ═══════════════════════════════════════════════════════════════
+
+
+class LessonSchedule(Base):
+    """Шаблон повторяющегося занятия (еженедельно по дням недели)."""
+    __tablename__ = "lesson_schedules"
+
+    id = Column(Integer, primary_key=True, index=True)
+    teacher_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(255), nullable=False)
+    description = Column(Text, nullable=True)
+
+    # Тип: индивидуальное или групповое
+    schedule_type = Column(String(20), nullable=False, default="individual")  # "individual" | "group"
+
+    # Для индивидуального — student_id, для группового — group_id
+    student_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    group_id = Column(Integer, ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
+
+    # Дни недели: JSON массив, например ["mon", "wed", "fri"]
+    days_of_week = Column(JSON, nullable=False)
+
+    # Время занятия
+    time_start = Column(String(5), nullable=False)  # "14:30"
+    duration_minutes = Column(Integer, nullable=False, default=60)
+
+    # Стоимость одного занятия
+    price_per_lesson = Column(Integer, nullable=True, default=None)
+
+    # Активен ли шаблон (false = отменён, больше не генерирует)
+    is_active = Column(Boolean, default=True)
+
+    # До какой даты генерировать (NULL = бессрочно)
+    recur_until = Column(DateTime, nullable=True)
+
+    # Когда создан / остановлен
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    stopped_at = Column(DateTime, nullable=True)
+
+    # Relationships
+    teacher = relationship("User", foreign_keys=[teacher_id])
+    student = relationship("User", foreign_keys=[student_id])
+    group = relationship("Group")
+    lessons = relationship("Lesson", back_populates="schedule", order_by="Lesson.scheduled_date")
+
+
+class Lesson(Base):
+    """Конкретное проведённое/запланированное занятие."""
+    __tablename__ = "lessons"
+
+    id = Column(Integer, primary_key=True, index=True)
+    schedule_id = Column(Integer, ForeignKey("lesson_schedules.id", ondelete="SET NULL"), nullable=True)
+
+    teacher_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+    title = Column(String(255), nullable=False)
+
+    # Тип
+    lesson_type = Column(String(20), nullable=False, default="individual")
+    student_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    group_id = Column(Integer, ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
+
+    # Дата и время
+    scheduled_date = Column(DateTime, nullable=False)
+    duration_minutes = Column(Integer, nullable=False, default=60)
+    actual_start = Column(DateTime, nullable=True)
+    actual_end = Column(DateTime, nullable=True)
+
+    # Статус
+    status = Column(String(20), nullable=False, default="scheduled")
+    # "scheduled" | "completed" | "cancelled" | "rescheduled"
+
+    # Ссылка на занятие, из которого перенесли (если rescheduled)
+    rescheduled_from_id = Column(Integer, ForeignKey("lessons.id", ondelete="SET NULL"), nullable=True)
+    rescheduled_to_id = Column(Integer, ForeignKey("lessons.id", ondelete="SET NULL"), nullable=True)
+
+    # Заметка учителя
+    teacher_note = Column(Text, nullable=True)
+
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    # Relationships
+    schedule = relationship("LessonSchedule", back_populates="lessons", foreign_keys=[schedule_id])
+    teacher = relationship("User", foreign_keys=[teacher_id])
+    student = relationship("User", foreign_keys=[student_id])
+    group = relationship("Group")
+    payments = relationship("Payment", back_populates="lesson")
+    rescheduled_from = relationship("Lesson", foreign_keys=[rescheduled_from_id], remote_side=[id])
+    rescheduled_to = relationship("Lesson", foreign_keys=[rescheduled_to_id], remote_side=[id])
+
+
+class Payment(Base):
+    """Оплата занятия или абонемента."""
+    __tablename__ = "payments"
+
+    id = Column(Integer, primary_key=True, index=True)
+    lesson_id = Column(Integer, ForeignKey("lessons.id", ondelete="SET NULL"), nullable=True)
+    student_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
+
+    # Тип оплаты
+    payment_type = Column(String(30), nullable=False)
+    # "per_lesson" | "monthly" | "package"
+
+    amount = Column(Integer, nullable=False)
+    status = Column(String(20), nullable=False, default="pending")
+    # "pending" | "paid" | "cancelled"
+
+    # Для абонементов: сколько занятий оплачено / использовано
+    package_total = Column(Integer, nullable=True)   # всего занятий в пакете
+    package_used = Column(Integer, nullable=True, default=0)    # уже проведено
+
+    # Для месячных: период действия
+    valid_from = Column(DateTime, nullable=True)
+    valid_until = Column(DateTime, nullable=True)
+
+    comment = Column(Text, nullable=True)
+
+    paid_at = Column(DateTime, nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    # Relationships
+    lesson = relationship("Lesson", back_populates="payments", foreign_keys=[lesson_id])
+    student = relationship("User", foreign_keys=[student_id])
