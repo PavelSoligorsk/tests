@@ -29,8 +29,10 @@ from dto_schemas.schedule import (
 router = APIRouter(prefix="/telegram", tags=["Telegram Bot"])
 
 # Ключ, который ТГ-бот передаёт в заголовке X-Telegram-Bot-Key
-# Берётся из .env → TELEGRAM_BOT_TOKEN
-TG_BOT_API_KEY = os.getenv("TELEGRAM_BOT_TOKEN", "tg-bot-secret-change-me")
+# Пробуем все возможные имена переменной на Railway
+TG_BOT_API_KEY = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN") or ""
+if not TG_BOT_API_KEY:
+    TG_BOT_API_KEY = "tg-bot-secret-change-me"
 
 
 def verify_bot_key(x_telegram_bot_key: str = Header(...)) -> str:
