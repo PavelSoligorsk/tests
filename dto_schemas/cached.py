@@ -326,6 +326,7 @@ class StartAssignedTestResponse(BaseModel):
     time_spent_seconds: int = 0
     attempts_used: int = 0
     max_attempts: Optional[int] = None
+    previous_answers: list[dict] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 

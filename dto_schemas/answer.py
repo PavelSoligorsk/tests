@@ -8,6 +8,28 @@ class TestAnswerSubmission(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
+class SaveProgressRequest(BaseModel):
+    """Ответы для инкрементального сохранения (без финализации теста)."""
+    answers: list[TestAnswerSubmission]
+
+    model_config = ConfigDict(from_attributes=True)
+
+class SavedAnswerItem(BaseModel):
+    """Ранее сохранённый ответ (для возобновления теста)."""
+    task_id: int
+    user_answer: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+class SaveProgressResponse(BaseModel):
+    """Ответ на сохранение прогресса."""
+    status: str
+    saved_count: int
+    result_id: int
+    total_tasks_in_test: int
+
+    model_config = ConfigDict(from_attributes=True)
+
 class AnswerSubmitRequest(BaseModel):
     task_id: int
     user_id: int

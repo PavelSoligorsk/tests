@@ -10,6 +10,7 @@ from dto_schemas import (
     StudentAITestItemResponse, AvailableTestMetaResponse,
     TheoryQuestionRequest, TestAnswerSubmission, StartAssignedTestResponse,
     RetakeTestResponse,
+    SaveProgressRequest, SaveProgressResponse,
 )
 from core import auth
 from core.database import get_db
@@ -121,6 +122,35 @@ async def submit_test_results(
             "detailed_result"
         )
         
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.post("/tests/{test_id}/save-progress", response_model=SaveProgressResponse)
+async def save_test_progress(
+    test_id: int,
+    request: SaveProgressRequest,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """Сохранить прогресс без завершения теста.
+
+    Позволяет студенту выйти из теста без потери ответов.
+    Фронтенд может вызывать этот эндпоинт когда студент:
+    - Закрывает вкладку
+    - Переходит на другую страницу
+    - Нажимает «Выйти» (но не «Завершить»)
+    - Периодически (автосохранение)
+
+    При возобновлении теста (start-test) сервер вернёт previous_answers.
+    """
+    try:
+        result = await service.save_progress(
+            test_id,
+            current_user.id,
+            [ans.model_dump() for ans in request.answers]
+        )
         return result
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))

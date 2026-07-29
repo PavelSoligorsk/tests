@@ -1,5 +1,5 @@
 from dto_schemas.task import TaskBase, TaskResponse, TaskCreate, TaskCreateRequest, TaskUpdateRequest
-from dto_schemas.answer import AnswerSubmitRequest, AnswerResponse, TestAnswerSubmission
+from dto_schemas.answer import AnswerSubmitRequest, AnswerResponse, TestAnswerSubmission, SaveProgressRequest, SavedAnswerItem, SaveProgressResponse
 from dto_schemas.test import TestCreate, TestCreateRequest, TestResponse, TestResultResponse
 from dto_schemas.user import UserRegister, UserResponse, UserUpdate, ForgotPasswordRequest, ResetPasswordRequest, AssignStudentRequest, LoginResponse, TokenVerifyResponse, MessageResponse
 from dto_schemas.stats import (
@@ -72,6 +72,7 @@ from dto_schemas.cached import (
 __all__ = [
     "TaskBase", "TaskResponse", "TaskCreate", "TaskCreateRequest", "TaskUpdateRequest",
     "AnswerSubmitRequest", "AnswerResponse", "TestAnswerSubmission",
+    "SaveProgressRequest", "SavedAnswerItem", "SaveProgressResponse",
     "TestCreate", "TestCreateRequest", "TestResponse", "TestResultResponse",
     "UserRegister", "UserResponse", "UserUpdate",
     "ForgotPasswordRequest", "ResetPasswordRequest", "AssignStudentRequest",

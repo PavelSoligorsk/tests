@@ -29,6 +29,7 @@ from dto_schemas.cached import (
     AITheoryResponse,
     AITheoryContext,
 )
+from dto_schemas.answer import SaveProgressResponse
 from dto_schemas.stats import UserStats
 from datetime import datetime  # Add this import
 
@@ -76,7 +77,12 @@ class StudentService:
         return test
     
     async def submit_test(self, test_id: int, user_id: int, answers: List[dict]):
-        """Отправить ответы на тест"""
+        """Отправить ответы на тест (или финализировать ранее сохранённые).
+
+        - Если answers не пуст — проверяет и сохраняет их (как раньше).
+        - Если answers пуст — финализирует результат на основе уже сохранённых
+          через save_progress ответов.
+        """
         test = await self.test_repo.get_test_with_tasks(test_id)
         if not test:
             raise ValueError("Тест не найден")
@@ -87,50 +93,77 @@ class StudentService:
         if not test.is_ai_generated and not test.is_autocompile:
             await self._check_attempt_limits(user_id, test)
 
-        # Reuse incomplete attempt if one exists (for all test types, not just AI)
+        # Get or create result
         result = await self.result_repo.get_incomplete_result(user_id, test_id)
-        if result:
-            # ── 3. Проверка истечения времени (только для учительских тестов) ──
-            if not test.is_ai_generated and not test.is_autocompile and test.time_limit_minutes:
-                current_elapsed = (
-                    int((now - result.started_at).total_seconds()) / 60
-                    if result.started_at else 0
-                )
-                total_elapsed = (result.time_spent_seconds or 0) / 60 + current_elapsed
-                if total_elapsed > test.time_limit_minutes:
-                    raise ValueError(
-                        f"Время вышло ({test.time_limit_minutes} мин). "
-                        f"Ответы не приняты — истекло {int(total_elapsed)} мин."
-                    )
 
-            # Удаляем старые ответы, чтобы не было дубликатов
-            old_answers = await self.result_repo.get_user_answers_for_result(result.id)
-            for oa in old_answers:
-                await self.db.delete(oa)
-            await self.db.flush()
-            # Track accumulated time
+        if answers:
+            # ── Full submit with new answers ──
+            if result:
+                # ── 3. Проверка истечения времени (только для учительских тестов) ──
+                if not test.is_ai_generated and not test.is_autocompile and test.time_limit_minutes:
+                    current_elapsed = (
+                        int((now - result.started_at).total_seconds()) / 60
+                        if result.started_at else 0
+                    )
+                    total_elapsed = (result.time_spent_seconds or 0) / 60 + current_elapsed
+                    if total_elapsed > test.time_limit_minutes:
+                        raise ValueError(
+                            f"Время вышло ({test.time_limit_minutes} мин). "
+                            f"Ответы не приняты — истекло {int(total_elapsed)} мин."
+                        )
+
+                # Удаляем старые ответы, чтобы не было дубликатов
+                old_answers = await self.result_repo.get_user_answers_for_result(result.id)
+                for oa in old_answers:
+                    await self.db.delete(oa)
+                await self.db.flush()
+                if result.started_at:
+                    elapsed = int((now - result.started_at).total_seconds())
+                    result.time_spent_seconds = (result.time_spent_seconds or 0) + elapsed
+                    result.started_at = now
+            else:
+                result = await self.result_repo.create_result(test_id, user_id)
+                result.started_at = now
+                result.time_spent_seconds = 0
+            
+            total_points = 0
+            for ans in answers:
+                task = await self.task_repo.get_task_by_id(ans['task_id'])
+                if not task:
+                    continue
+                
+                is_correct = self._check_answer(task, ans['user_answer'])
+                current_points = 2 if (is_correct and task.is_open_answer) else (1 if is_correct else 0)
+                total_points += current_points
+                
+                await self.result_repo.save_answer(
+                    result.id, task.id, str(ans['user_answer']), is_correct, current_points
+                )
+        else:
+            # ── Finalize-only: score previously saved answers ──
+            if not result:
+                raise ValueError("Нет незавершённой попытки. Сначала начните тест.")
+
+            saved_answers = await self.result_repo.get_user_answers_for_result(result.id)
+            if not saved_answers:
+                raise ValueError("Нет сохранённых ответов для финализации.")
+
+            # Re-score all saved answers
+            total_points = 0
+            for ua in saved_answers:
+                task = await self.task_repo.get_task_by_id(ua.task_id)
+                if not task:
+                    continue
+                is_correct = self._check_answer(task, ua.user_text_answer)
+                current_points = 2 if (is_correct and task.is_open_answer) else (1 if is_correct else 0)
+                ua.is_correct = is_correct
+                ua.points_earned = current_points
+                total_points += current_points
+
+            # Update timer
             if result.started_at:
                 elapsed = int((now - result.started_at).total_seconds())
                 result.time_spent_seconds = (result.time_spent_seconds or 0) + elapsed
-                result.started_at = now  # reset for this "segment"
-        else:
-            result = await self.result_repo.create_result(test_id, user_id)
-            result.started_at = now
-            result.time_spent_seconds = 0
-        
-        total_points = 0
-        for ans in answers:
-            task = await self.task_repo.get_task_by_id(ans['task_id'])
-            if not task:
-                continue
-            
-            is_correct = self._check_answer(task, ans['user_answer'])
-            current_points = 2 if (is_correct and task.is_open_answer) else (1 if is_correct else 0)
-            total_points += current_points
-            
-            await self.result_repo.save_answer(
-                result.id, task.id, str(ans['user_answer']), is_correct, current_points
-            )
         
         # Деактивируем AI-тест после прохождения
         if test.is_ai_generated:
@@ -142,6 +175,63 @@ class StudentService:
             status="success",
             score=total_points,
             max_score_possible=sum(2 if t.is_open_answer else 1 for t in test.tasks),
+        )
+    
+    async def save_progress(self, test_id: int, user_id: int, answers: List[dict]):
+        """Инкрементально сохранить ответы без завершения теста.
+
+        Можно вызывать многократно — последние ответы по каждому task_id
+        перезаписывают предыдущие. Тест остаётся незавершённым (completed_at = NULL).
+        Студент может выйти из теста и позже возобновить — ответы сохранятся.
+        """
+        test = await self.test_repo.get_test_with_tasks(test_id)
+        if not test:
+            raise ValueError("Тест не найден")
+
+        now = datetime.utcnow()
+
+        # Find or create an incomplete result
+        result = await self.result_repo.get_incomplete_result(user_id, test_id)
+
+        if result:
+            # Track accumulated time
+            if result.started_at:
+                elapsed = int((now - result.started_at).total_seconds())
+                result.time_spent_seconds = (result.time_spent_seconds or 0) + elapsed
+                result.started_at = now
+
+            # Remove previous answers for these task_ids to avoid duplicates
+            submitted_task_ids = [ans['task_id'] for ans in answers]
+            existing_answers = await self.result_repo.get_user_answers_for_result(result.id)
+            for ea in existing_answers:
+                if ea.task_id in submitted_task_ids:
+                    await self.db.delete(ea)
+            await self.db.flush()
+        else:
+            result = await self.result_repo.create_result(test_id, user_id)
+            result.started_at = now
+            result.time_spent_seconds = 0
+
+        # Save each answer (no correctness check — that's done at final submit)
+        saved_count = 0
+        for ans in answers:
+            task = await self.task_repo.get_task_by_id(ans['task_id'])
+            if not task:
+                continue
+            # Save with is_correct=False / points=0 for now —
+            # real scoring happens on final submit()
+            await self.result_repo.save_answer(
+                result.id, task.id, str(ans['user_answer']), False, 0
+            )
+            saved_count += 1
+
+        await self.db.commit()
+
+        return SaveProgressResponse(
+            status="saved",
+            saved_count=saved_count,
+            result_id=result.id,
+            total_tasks_in_test=len(test.tasks),
         )
     
     async def get_history(self, user_id: int):
@@ -714,6 +804,7 @@ class StudentService:
         """
         test_id = test.id
         now = datetime.utcnow()
+        previous_answers = []
 
         existing = await self.result_repo.get_incomplete_result(user_id, test_id)
 
@@ -721,6 +812,13 @@ class StudentService:
             # ── Accumulative mode: resume existing attempt ──
             result = existing
             # time_spent_seconds already tracks accumulated time
+
+            # Restore previously saved answers so the frontend can pre-fill them
+            saved = await self.result_repo.get_user_answers_for_result(result.id)
+            previous_answers = [
+                {"task_id": sa.task_id, "user_answer": sa.user_text_answer}
+                for sa in saved
+            ]
         else:
             # ── Continuous mode (or no existing): fresh start ──
             if test.allow_interruptions is not None and not test.allow_interruptions and existing:
@@ -759,6 +857,7 @@ class StudentService:
             time_spent_seconds=result.time_spent_seconds or 0,
             attempts_used=attempts_used,
             max_attempts=test.max_attempts,
+            previous_answers=previous_answers,
         )
     async def retake_test(self, result_id: int, user_id: int):
         """Пересдать тест — создать новую попытку на основе предыдущего result_id.
