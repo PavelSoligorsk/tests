@@ -296,3 +296,22 @@ class TelegramTeacherChatResponse(BaseModel):
     teacher_tg_username: Optional[str] = None
     chat_id: Optional[int] = None
     found: bool = False
+
+
+# ═══════════════════════════════════════════════════════════════
+# Payment Stats for Parent (Telegram)
+# ═══════════════════════════════════════════════════════════════
+
+
+class TelegramPaymentStatsResponse(BaseModel):
+    """Статистика оплат ученика (для родителя в ТГ-боте)."""
+    student_id: int
+    student_name: str
+    balance: int                             # текущий баланс в копейках
+    total_deposited: int                     # всего пополнено
+    total_spent: int                         # всего списано
+    payments: List["TelegramPaymentBrief"] = []  # последние платежи (страница)
+    page: int = 1
+    total_pages: int = 1
+    has_next: bool = False
+    has_prev: bool = False

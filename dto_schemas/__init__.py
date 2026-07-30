@@ -78,6 +78,7 @@ from dto_schemas.schedule import (
     TelegramPaymentRequest, TelegramPaymentResponse,
     TelegramWhoamiResponse, TelegramStudentBrief,
     TelegramBalanceResponse, TelegramPaymentBrief,
+    TelegramPaymentStatsResponse,
 )
 
 __all__ = [
@@ -126,4 +127,5 @@ __all__ = [
     "TelegramPaymentRequest", "TelegramPaymentResponse",
     "TelegramWhoamiResponse", "TelegramStudentBrief",
     "TelegramBalanceResponse", "TelegramPaymentBrief",
+    "TelegramPaymentStatsResponse",
 ]

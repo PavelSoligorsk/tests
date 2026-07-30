@@ -24,6 +24,7 @@ from dto_schemas.schedule import (
     TelegramStudentBrief,
     TelegramBalanceResponse,
     TelegramPaymentBrief,
+    TelegramPaymentStatsResponse,
     TelegramRegisterChatRequest,
     TelegramTeacherChatResponse,
 )
@@ -306,6 +307,93 @@ async def get_student_balance(
         "student_name": student_name,
         "balance": student.balance or 0,
     }
+
+
+# ═══════════════════════════════════════════════════════════════
+# Статистика оплат для родителя (с пагинацией)
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.get("/student/{student_id}/payment-stats", response_model=TelegramPaymentStatsResponse)
+async def get_payment_stats(
+    student_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=5, ge=1, le=20),
+    _api_key: str = Depends(verify_bot_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Статистика оплат ученика: сводка + пагинированный список.
+
+    Используется родителем в боте — кнопка «📊 Статистика».
+    """
+    from math import ceil
+    from repositories.user_repository import UserRepository
+    from repositories.payment_repository import PaymentRepository
+
+    user_repo = UserRepository(db)
+    student = await user_repo.get_user_by_id(student_id)
+    if not student:
+        raise HTTPException(status_code=404, detail="Ученик не найден")
+    if student.role != "student":
+        raise HTTPException(status_code=400, detail="Пользователь не является учеником")
+
+    student_name = f"{student.first_name or ''} {student.last_name or ''}".strip() or student.username
+
+    payment_repo = PaymentRepository(db)
+    all_payments = await payment_repo.list_by_student(student_id)
+
+    # Считаем сводку
+    total_deposited = 0
+    total_spent = 0
+    operations: List[TelegramPaymentBrief] = []
+    for p in all_payments:
+        if p.status != "paid":
+            continue
+        if p.payment_type == "per_lesson":
+            if p.lesson_id:
+                op_type = "withdrawal"
+                total_spent += p.amount
+            else:
+                op_type = "deposit"
+                total_deposited += p.amount
+        else:
+            op_type = "deposit"
+            total_deposited += p.amount
+
+        operations.append(TelegramPaymentBrief(
+            id=p.id,
+            type=op_type,
+            amount=p.amount,
+            payment_type=p.payment_type,
+            status=p.status,
+            comment=p.comment,
+            created_at=p.created_at,
+        ))
+
+    # Сортируем по дате (свежие сверху) и пагинируем
+    ops_sorted = sorted(
+        operations,
+        key=lambda o: o.created_at or _dt.datetime.min,
+        reverse=True,
+    )
+    total_items = len(ops_sorted)
+    total_pages = max(1, ceil(total_items / page_size))
+    page = min(page, total_pages)  # не выходим за границы
+    start = (page - 1) * page_size
+    page_ops = ops_sorted[start:start + page_size]
+
+    return TelegramPaymentStatsResponse(
+        student_id=student.id,
+        student_name=student_name,
+        balance=student.balance or 0,
+        total_deposited=total_deposited,
+        total_spent=total_spent,
+        payments=page_ops,
+        page=page,
+        total_pages=total_pages,
+        has_next=(page < total_pages),
+        has_prev=(page > 1),
+    )
 
 
 @router.post("/reject-payment")
