@@ -50,6 +50,31 @@ class UserRepository:
         )
         return result.scalars().first()
 
+    async def is_tg_username_taken(self, tg_username: str, exclude_user_id: int | None = None) -> bool:
+        """Проверить, занят ли tg_username другим пользователем.
+
+        Нормализует @username → username перед проверкой.
+        Если exclude_user_id передан — исключает этого пользователя из проверки
+        (нужно при обновлении профиля).
+        """
+        if not tg_username:
+            return False
+        clean = tg_username.lstrip("@")
+        stmt = select(func.count()).select_from(User).where(
+            User.tg_username.in_([clean, f"@{clean}"])
+        )
+        if exclude_user_id is not None:
+            stmt = stmt.where(User.id != exclude_user_id)
+        result = await self.db.execute(stmt)
+        return result.scalar() > 0
+
+    @staticmethod
+    def _normalize_tg_username(tg_username: str | None) -> str | None:
+        """Убрать @ из начала tg_username, если он есть."""
+        if tg_username is None:
+            return None
+        return tg_username.lstrip("@") or None
+
     async def create_user(self, username: str, password: str, role: str,
                     first_name: str = None, last_name: str = None,
                     phone: str = None, tg_username: str = None):
@@ -60,7 +85,7 @@ class UserRepository:
             first_name=first_name,
             last_name=last_name,
             phone=phone,
-            tg_username=tg_username
+            tg_username=self._normalize_tg_username(tg_username)
         )
         self.db.add(user)
         await self.db.commit()
@@ -69,6 +94,8 @@ class UserRepository:
 
     async def update_user(self, user: User, update_data: dict):
         for field, value in update_data.items():
+            if field == "tg_username":
+                value = self._normalize_tg_username(value)
             setattr(user, field, value)
         try:
             self.db.add(user)

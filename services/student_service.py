@@ -63,6 +63,13 @@ class StudentService:
         if not user:
             raise ValueError("Пользователь не найден")
         
+        # Проверяем уникальность tg_username, если он передан
+        tg_username = update_data.get("tg_username")
+        if tg_username and await self.user_repo.is_tg_username_taken(
+            str(tg_username), exclude_user_id=user_id
+        ):
+            raise ValueError("Пользователь с таким Telegram username уже зарегистрирован")
+        
         return await self.user_repo.update_user(user, update_data)
     
     async def get_available_tests(self):

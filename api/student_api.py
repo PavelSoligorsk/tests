@@ -58,7 +58,10 @@ async def update_student_profile(
         
         return await service.update_profile(current_user.id, update_data)
     except ValueError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        msg = str(e)
+        if "Telegram username" in msg:
+            raise HTTPException(status_code=409, detail=msg)
+        raise HTTPException(status_code=404, detail=msg)
     except Exception as e:
         raise HTTPException(status_code=400, detail="Ошибка при обновлении профиля")
 

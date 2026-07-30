@@ -41,6 +41,13 @@ async def update_teacher_profile(
     update_data = obj_in.model_dump(exclude_unset=True)
     if not update_data:
         raise HTTPException(status_code=400, detail="Нет полей для обновления")
+
+    # Проверяем уникальность tg_username, если он передан
+    if update_data.get("tg_username") and await repo.is_tg_username_taken(
+        str(update_data["tg_username"]), exclude_user_id=current_user.id
+    ):
+        raise HTTPException(status_code=409, detail="Пользователь с таким Telegram username уже зарегистрирован")
+
     try:
         updated = await repo.update_user(current_user, update_data)
         return updated

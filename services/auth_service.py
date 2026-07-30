@@ -31,6 +31,10 @@ class AuthService:
         if await self.user_repo.get_user_by_email(user_data.username):
             raise ValueError("Пользователь с таким Email уже существует")
         
+        # Проверяем уникальность tg_username
+        if user_data.tg_username and await self.user_repo.is_tg_username_taken(user_data.tg_username):
+            raise ValueError("Пользователь с таким Telegram username уже зарегистрирован")
+        
         # Создаем пользователя
         role = "admin" if user_data.username == "admin@gmail.com" else "student"
         

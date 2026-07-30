@@ -72,16 +72,16 @@ async def whoami(
 
     clean = tg_username.lstrip("@")
 
-    # 1. Ищем учителя или ученика (по User.tg_username) — учителя в приоритете
+    # 1. Ищем учителя (приоритет!)
     user_repo = UserRepository(db)
-    user = await user_repo.get_user_by_tg_username(tg_username)
-
-    if user:
-        name = f"{user.first_name or ''} {user.last_name or ''}".strip() or user.username
-
-        if user.role == "teacher":
+    teacher = await user_repo.get_user_by_tg_username_and_roles(
+        tg_username, roles=("teacher", "admin")
+    )
+    if teacher:
+        name = f"{teacher.first_name or ''} {teacher.last_name or ''}".strip() or teacher.username
+        if teacher.role == "teacher":
             ts_repo = TeacherStudentRepository(db)
-            students = await ts_repo.get_teacher_students(user.id)
+            students = await ts_repo.get_teacher_students(teacher.id)
             return TelegramWhoamiResponse(
                 found=True,
                 role="teacher",
@@ -89,27 +89,31 @@ async def whoami(
                 tg_username=clean,
                 students_count=len(students),
             )
-
-        elif user.role == "student":
-            return TelegramWhoamiResponse(
-                found=True,
-                role="student",
-                name=name,
-                tg_username=clean,
-                message="Функционал для учеников скоро появится! 🚀",
-            )
-
         else:
-            # admin — не поддерживается через бота
+            # admin
             return TelegramWhoamiResponse(
                 found=True,
-                role=user.role,
+                role=teacher.role,
                 name=name,
                 tg_username=clean,
                 message="Администраторы работают через веб-интерфейс.",
             )
 
-    # 2. Ищем родителя (по Parent.tg_username) — без backref, через прямой SQL
+    # 2. Ищем ученика (если учитель не найден)
+    student = await user_repo.get_user_by_tg_username_and_roles(
+        tg_username, roles=("student",)
+    )
+    if student:
+        name = f"{student.first_name or ''} {student.last_name or ''}".strip() or student.username
+        return TelegramWhoamiResponse(
+            found=True,
+            role="student",
+            name=name,
+            tg_username=clean,
+            message="Функционал для учеников скоро появится! 🚀",
+        )
+
+    # 3. Ищем родителя (по Parent.tg_username) — без backref, через прямой SQL
     from sqlalchemy import select as sa_select
     parent_repo = ParentRepository(db)
     r = await db.execute(
@@ -169,7 +173,7 @@ async def whoami(
             children=children,
         )
 
-    # 3. Не найден
+    # 4. Не найден
     return TelegramWhoamiResponse(
         found=False,
         tg_username=clean,
