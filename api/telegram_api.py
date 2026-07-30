@@ -294,11 +294,11 @@ async def get_student_balance(
     from repositories.user_repository import UserRepository
 
     user_repo = UserRepository(db)
-    student = await user_repo.get_user_by_tg_username(student_tg_username)
+    student = await user_repo.get_user_by_tg_username_and_roles(
+        student_tg_username, roles=("student",)
+    )
     if not student:
         raise HTTPException(status_code=404, detail="Ученик не найден")
-    if student.role != "student":
-        raise HTTPException(status_code=400, detail="Пользователь не является учеником")
 
     student_name = f"{student.first_name or ''} {student.last_name or ''}".strip() or student.username
     return {

@@ -221,6 +221,7 @@ class TelegramPaymentResponse(BaseModel):
     payment_id: int
     student_id: int
     student_name: Optional[str] = None
+    student_tg_username: Optional[str] = None  # @username ученика в Telegram
     amount: int
     payment_type: str
     status: str

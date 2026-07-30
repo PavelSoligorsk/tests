@@ -534,10 +534,19 @@ class ScheduleService:
         if not teacher:
             raise ValueError(f"Пользователь @{clean_teacher} не является учителем")
 
-        # 2. Ищем ученика по tg_username — ТОЛЬКО student
+        # 2. Ищем ученика — сначала по tg_username, потом по ID (если передан числовой ID)
         student = await self.user_repo.get_user_by_tg_username_and_roles(
             data.student_tg_username, roles=("student",)
         )
+        if not student:
+            # Бот может передать числовой ID вместо tg_username, если username отсутствует
+            try:
+                numeric_id = int(data.student_tg_username.lstrip("@"))
+                student = await self.user_repo.get_user_by_id(numeric_id)
+                if student and student.role != "student":
+                    student = None
+            except (ValueError, TypeError):
+                pass
         if not student:
             raise ValueError(f"Ученик @{clean_student} не найден")
 
@@ -571,6 +580,7 @@ class ScheduleService:
             payment_id=payment.id,
             student_id=student.id,
             student_name=student_name,
+            student_tg_username=student.tg_username,
             amount=data.amount,
             payment_type=data.payment_type,
             status="paid",
