@@ -524,19 +524,18 @@ class ScheduleService:
         Учитель в ТГ-боте проверяет чек от родителя, вводит сумму и username ученика.
         ТГ-бот вызывает этот метод.
         """
-        # 1. Ищем учителя по tg_username
-        teacher = await self.user_repo.get_user_by_tg_username(data.teacher_tg_username)
-        if not teacher:
-            raise ValueError(f"Учитель с Telegram @{data.teacher_tg_username.lstrip('@')} не найден")
-        if teacher.role not in ("teacher", "admin"):
-            raise ValueError(f"Пользователь @{data.teacher_tg_username} не является учителем")
+        clean_teacher = data.teacher_tg_username.lstrip("@")
+        clean_student = data.student_tg_username.lstrip("@")
 
-        # 2. Ищем ученика по tg_username
-        student = await self.user_repo.get_user_by_tg_username(data.student_tg_username)
+        # 1. Ищем учителя по tg_username (строго с ролью teacher/admin)
+        teacher = await self.user_repo.get_user_by_tg_username(data.teacher_tg_username, role=None)
+        if not teacher or teacher.role not in ("teacher", "admin"):
+            raise ValueError(f"Пользователь @{clean_teacher} не является учителем")
+
+        # 2. Ищем ученика по tg_username (строго с ролью student)
+        student = await self.user_repo.get_user_by_tg_username(data.student_tg_username, role="student")
         if not student:
-            raise ValueError(f"Ученик с Telegram @{data.student_tg_username.lstrip('@')} не найден")
-        if student.role != "student":
-            raise ValueError(f"Пользователь @{data.student_tg_username} не является учеником")
+            raise ValueError(f"Ученик @{clean_student} не найден")
 
         # 3. Проверяем, что студент привязан к этому учителю
         if not await self.ts_repo.check_student_belongs_to_teacher(student.id, teacher.id):

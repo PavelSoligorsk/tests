@@ -31,12 +31,13 @@ class UserRepository:
         result = await self.db.execute(select(User).where(User.username == email))
         return result.scalars().first()
 
-    async def get_user_by_tg_username(self, tg_username: str):
-        """Найти пользователя по Telegram username (с @ или без)."""
+    async def get_user_by_tg_username(self, tg_username: str, role: str = None):
+        """Найти пользователя по Telegram username (с @ или без). Опционально фильтровать по роли."""
         clean = tg_username.lstrip("@")
-        result = await self.db.execute(
-            select(User).where(User.tg_username.in_([clean, f"@{clean}"]))
-        )
+        stmt = select(User).where(User.tg_username.in_([clean, f"@{clean}"]))
+        if role:
+            stmt = stmt.where(User.role == role)
+        result = await self.db.execute(stmt)
         return result.scalars().first()
 
     async def create_user(self, username: str, password: str, role: str,
