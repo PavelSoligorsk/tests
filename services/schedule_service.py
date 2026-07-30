@@ -527,6 +527,12 @@ class ScheduleService:
         clean_teacher = data.teacher_tg_username.lstrip("@")
         clean_student = data.student_tg_username.lstrip("@")
 
+        logger.info(
+            f"confirm_payment_via_telegram: teacher=@{clean_teacher}, "
+            f"student_tg_username='{data.student_tg_username}', "
+            f"amount={data.amount}, raw_data={data.model_dump()}"
+        )
+
         # 1. Ищем учителя по tg_username — ТОЛЬКО teacher/admin, иначе ошибка
         teacher = await self.user_repo.get_user_by_tg_username_and_roles(
             data.teacher_tg_username, roles=("teacher", "admin")
