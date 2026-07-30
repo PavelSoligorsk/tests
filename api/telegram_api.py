@@ -341,8 +341,11 @@ async def register_chat(
     from repositories.user_repository import UserRepository
 
     user_repo = UserRepository(db)
-    user = await user_repo.get_user_by_tg_username(data.tg_username)
-    if not user or user.role != "teacher":
+    # Ищем только среди учителей (приоритет, если такой же tg_username есть у ученика)
+    user = await user_repo.get_user_by_tg_username_and_roles(
+        data.tg_username, roles=("teacher",)
+    )
+    if not user:
         raise HTTPException(status_code=404, detail="Учитель не найден")
 
     await user_repo.update_chat_id(user.id, data.chat_id)
