@@ -106,6 +106,22 @@ class TeacherStudentRepository:
             return True
         return False
 
+    async def get_teacher_students_for_student(self, student_id: int) -> List[User]:
+        """Получить учителей ученика (через TeacherStudent)."""
+        r = await self.db.execute(
+            select(TeacherStudent.teacher_id).where(TeacherStudent.student_id == student_id)
+        )
+        teacher_ids = [row[0] for row in r.all()]
+        if not teacher_ids:
+            return []
+        r2 = await self.db.execute(
+            select(User).where(
+                User.id.in_(teacher_ids),
+                User.role == "teacher"
+            )
+        )
+        return r2.scalars().all()
+
     async def create_link(self, teacher_id: int, student_id: int):
         """Создать связь учитель-ученик"""
         # Удаляем старую связь

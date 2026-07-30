@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Column, Integer, String, Boolean, JSON, ForeignKey, Enum, Text, DateTime, UniqueConstraint
+from sqlalchemy import Column, Integer, BigInteger, String, Boolean, JSON, ForeignKey, Enum, Text, DateTime, UniqueConstraint
 from sqlalchemy.orm import relationship
 from core.database import Base
 import datetime
@@ -20,6 +20,9 @@ class User(Base):
     last_name = Column(String, nullable=True)
     phone = Column(String, nullable=True)
     tg_username = Column(String, nullable=True)
+
+    # ── Telegram chat_id (для отправки уведомлений учителю) ──
+    tg_chat_id = Column(BigInteger, nullable=True)
 
     # ── Баланс (в копейках BYN) ──
     balance = Column(Integer, default=0)

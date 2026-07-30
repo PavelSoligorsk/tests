@@ -76,9 +76,13 @@ class UserRepository:
         user.hashed_password = get_password_hash(new_password)
         await self.db.commit()
 
-    async def delete_user(self, user: User):
-        await self.db.delete(user)
-        await self.db.commit()
+    async def update_chat_id(self, user_id: int, chat_id: int) -> None:
+        """Сохранить tg_chat_id пользователя (для учителей)."""
+        r = await self.db.execute(select(User).where(User.id == user_id))
+        user = r.scalars().first()
+        if user:
+            user.tg_chat_id = chat_id
+            await self.db.flush()
 
     async def get_user_stats(self, user_id: int):
         task_points_expr = case(

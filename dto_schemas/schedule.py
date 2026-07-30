@@ -276,3 +276,22 @@ class TelegramPaymentBrief(BaseModel):
     status: str
     comment: Optional[str] = None
     created_at: Optional[datetime] = None
+
+
+# ═══════════════════════════════════════════════════════════════
+# Telegram Chat Registration (для маршрутизации чеков учителю)
+# ═══════════════════════════════════════════════════════════════
+
+
+class TelegramRegisterChatRequest(BaseModel):
+    """Запрос от ТГ-бота: сохранить chat_id учителя."""
+    tg_username: str
+    chat_id: int
+
+
+class TelegramTeacherChatResponse(BaseModel):
+    """Ответ для ТГ-бота: chat_id учителя ученика."""
+    student_id: int
+    teacher_tg_username: Optional[str] = None
+    chat_id: Optional[int] = None
+    found: bool = False

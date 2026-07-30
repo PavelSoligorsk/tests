@@ -24,6 +24,8 @@ from dto_schemas.schedule import (
     TelegramStudentBrief,
     TelegramBalanceResponse,
     TelegramPaymentBrief,
+    TelegramRegisterChatRequest,
+    TelegramTeacherChatResponse,
 )
 
 router = APIRouter(prefix="/telegram", tags=["Telegram Bot"])
@@ -318,3 +320,68 @@ async def reject_payment_via_telegram(
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
+
+
+# ═══════════════════════════════════════════════════════════════
+# Chat registration — маршрутизация чеков учителю
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.post("/register-chat", response_model=TelegramTeacherChatResponse)
+async def register_chat(
+    data: TelegramRegisterChatRequest,
+    _api_key: str = Depends(verify_bot_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Сохраняет tg_chat_id учителя. Вызывается ботом при /start."""
+    from repositories.user_repository import UserRepository
+
+    user_repo = UserRepository(db)
+    user = await user_repo.get_user_by_tg_username(data.tg_username)
+    if not user or user.role != "teacher":
+        raise HTTPException(status_code=404, detail="Учитель не найден")
+
+    await user_repo.update_chat_id(user.id, data.chat_id)
+    await db.commit()
+
+    return TelegramTeacherChatResponse(
+        student_id=0,
+        teacher_tg_username=data.tg_username,
+        chat_id=data.chat_id,
+        found=True,
+    )
+
+
+@router.get("/student/{student_id}/teacher-chat", response_model=TelegramTeacherChatResponse)
+async def get_teacher_chat(
+    student_id: int,
+    _api_key: str = Depends(verify_bot_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Возвращает chat_id учителя ученика. Вызывается ботом для маршрутизации чеков."""
+    from repositories.user_repository import UserRepository
+    from repositories.teacher_student_repository import TeacherStudentRepository
+
+    user_repo = UserRepository(db)
+    student = await user_repo.get_user_by_id(student_id)
+    if not student or student.role != "student":
+        raise HTTPException(status_code=404, detail="Ученик не найден")
+
+    # Находим учителя через связь TeacherStudent
+    ts_repo = TeacherStudentRepository(db)
+    teachers = await ts_repo.get_teacher_students_for_student(student_id)
+    if not teachers:
+        return TelegramTeacherChatResponse(
+            student_id=student_id,
+            found=False,
+        )
+
+    teacher = teachers[0]  # берём первого учителя
+    teacher_tg = teacher.tg_username
+
+    return TelegramTeacherChatResponse(
+        student_id=student_id,
+        teacher_tg_username=teacher_tg,
+        chat_id=teacher.tg_chat_id if teacher.tg_chat_id else None,
+        found=teacher.tg_chat_id is not None,
+    )
