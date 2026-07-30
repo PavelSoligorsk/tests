@@ -527,13 +527,17 @@ class ScheduleService:
         clean_teacher = data.teacher_tg_username.lstrip("@")
         clean_student = data.student_tg_username.lstrip("@")
 
-        # 1. Ищем учителя по tg_username (строго с ролью teacher/admin)
-        teacher = await self.user_repo.get_user_by_tg_username(data.teacher_tg_username, role=None)
-        if not teacher or teacher.role not in ("teacher", "admin"):
+        # 1. Ищем учителя по tg_username — ТОЛЬКО teacher/admin, иначе ошибка
+        teacher = await self.user_repo.get_user_by_tg_username_and_roles(
+            data.teacher_tg_username, roles=("teacher", "admin")
+        )
+        if not teacher:
             raise ValueError(f"Пользователь @{clean_teacher} не является учителем")
 
-        # 2. Ищем ученика по tg_username (строго с ролью student)
-        student = await self.user_repo.get_user_by_tg_username(data.student_tg_username, role="student")
+        # 2. Ищем ученика по tg_username — ТОЛЬКО student
+        student = await self.user_repo.get_user_by_tg_username_and_roles(
+            data.student_tg_username, roles=("student",)
+        )
         if not student:
             raise ValueError(f"Ученик @{clean_student} не найден")
 
