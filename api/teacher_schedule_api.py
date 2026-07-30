@@ -119,6 +119,19 @@ async def unlink_parent_student(
     return {"ok": True}
 
 
+@router.get("/students/{student_id}/parents", response_model=List[ParentResponse])
+async def get_parents_by_student(
+    student_id: int,
+    current_user: User = Depends(check_teacher),
+    service: ScheduleService = Depends(get_schedule_service),
+):
+    """Возвращает всех родителей, привязанных к ученику."""
+    try:
+        return await service.get_parents_by_student(student_id, current_user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
+
 # ═══════════════════════════════════════════════════════════
 # Schedules
 # ═══════════════════════════════════════════════════════════

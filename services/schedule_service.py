@@ -70,6 +70,16 @@ class ScheduleService:
         parents = await self.parent_repo.list_by_teacher(teacher_id)
         return [await self._parent_to_response(p) for p in parents]
 
+    async def get_parents_by_student(self, student_id: int, teacher_id: int) -> List[ParentResponse]:
+        """Возвращает родителей ученика. Проверяет, что ученик привязан к учителю."""
+        from repositories.teacher_student_repository import TeacherStudentRepository
+        ts_repo = TeacherStudentRepository(self.db)
+        belongs = await ts_repo.check_student_belongs_to_teacher(student_id, teacher_id)
+        if not belongs:
+            raise ValueError("Ученик не найден или не привязан к вам")
+        parents = await self.parent_repo.get_by_student_id(student_id)
+        return [await self._parent_to_response(p) for p in parents]
+
     async def link_parent_student(self, parent_id: int, student_id: int) -> bool:
         ok = await self.parent_repo.link_student(parent_id, student_id)
         if ok:

@@ -91,3 +91,13 @@ class ParentRepository:
             select(User.id).where(User.parent_id == parent_id)
         )
         return [row[0] for row in r.all()]
+
+    async def get_by_student_id(self, student_id: int) -> List[Parent]:
+        """Возвращает родителей ученика по его ID (через parent_id на User)."""
+        r = await self.db.execute(
+            select(Parent)
+            .options(selectinload(Parent.students))
+            .join(User, User.parent_id == Parent.id)
+            .where(User.id == student_id)
+        )
+        return r.scalars().all()
