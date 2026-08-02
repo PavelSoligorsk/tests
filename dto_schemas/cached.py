@@ -310,6 +310,7 @@ class StartTestTaskItem(BaseModel):
     id: int
     content: str
     options: Optional[list[str]] = None
+    answer: Optional[str] = None
     is_open_answer: bool = False
     difficulty: Optional[int] = None
 

@@ -848,6 +848,7 @@ class StudentService:
                 id=task.id,
                 content=task.content,
                 options=task.options,
+                answer=task.answer,
                 is_open_answer=task.is_open_answer,
                 difficulty=task.difficulty,
             )

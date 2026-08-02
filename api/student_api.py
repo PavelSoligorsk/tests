@@ -100,7 +100,10 @@ async def get_test_for_passing(
         await service._check_attempt_limits(current_user.id, test)
         return test
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        msg = str(e)
+        if "не найден" in msg:
+            raise HTTPException(status_code=404, detail=msg)
+        raise HTTPException(status_code=400, detail=msg)
 
 
 @router.post("/tests/{test_id}/submit")

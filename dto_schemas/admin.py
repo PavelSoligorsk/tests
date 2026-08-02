@@ -120,10 +120,8 @@ class ClassifyTasksRequest(BaseModel):
 
 
 class ClassifyTasksResponse(BaseModel):
-    """Результат AI-классификации"""
+    """Результат AI-классификации (topic/section)"""
     total_processed: int
-    difficulty_assigned: int
-    solved_correctly: int
     classified: int
     failed: int
     log: list[str] = []

@@ -399,13 +399,8 @@ async def classify_tasks(
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
-    """AI-классификация заданий: сложность → решение → topic/section.
-    
-    Три этапа, каждый через отдельный AI-вызов:
-    1. AI оценивает сложность (1-5)
-    2. AI решает → сравниваем с эталоном
-    3. Если ответ совпал: AI классифицирует topic/section
-    
+    """AI-классификация заданий: определение topic/section.
+
     Параметр task_ids — массив ID заданий для обработки (без ограничений).
     Если пустой — обрабатываются все неклассифицированные задания.
     """

@@ -275,6 +275,13 @@ async def test_student_start_assigned_test(
     )
     assert resp.status_code == 200, resp.text
 
+    # Каждое задание должно содержать правильный ответ (answer)
+    data = resp.json()
+    assert len(data["tasks"]) >= 1
+    for task_item in data["tasks"]:
+        assert "answer" in task_item, f"Missing 'answer' in task item: {task_item}"
+        assert task_item["answer"] is not None
+
 
 # ═══════════════════════════════════════════════════════════════
 # Теория

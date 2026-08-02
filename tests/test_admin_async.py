@@ -1719,8 +1719,8 @@ async def test_admin_classify_tasks_with_ids(
 
     Проверяем:
     - Эндпоинт принимает task_ids и возвращает ClassifyTasksResponse.
-    - С мокнутым AI все три фазы проходят без ошибок.
-    - В ответе есть корректные счётчики processed/difficulty/solved/classified.
+    - С мокнутым AI классификация topic/section проходит без ошибок.
+    - В ответе есть корректные счётчики processed/classified/failed.
     """
     from unittest.mock import AsyncMock, patch
 
@@ -1756,15 +1756,7 @@ async def test_admin_classify_tasks_with_ids(
         json_mode: bool = False,
         enable_thinking: bool = False,
     ) -> str:
-        if "difficulty" in system_prompt.lower() or "Rate the difficulty" in user_prompt:
-            return '{"difficulty": 3}'
-        if "Solve EACH task" in user_prompt or "solve" in system_prompt.lower():
-            import re as _re
-            items = []
-            for tid_str in _re.findall(r"id=(\d+)", user_prompt):
-                tid = int(tid_str)
-                items.append(f'{{"task_id": {tid}, "answer": "4"}}')
-            return "[" + ", ".join(items) + "]"
+        # Классификация topic/section
         if "classifier" in system_prompt.lower() or "Classify this math task" in user_prompt:
             return '{"topic": "algebra", "section": "equations"}'
         return "{}"
@@ -1804,8 +1796,6 @@ async def test_admin_classify_tasks_with_ids(
     assert resp.status_code == 200, f"classify-tasks failed: {resp.text}"
     data = resp.json()
     assert data["total_processed"] == 2
-    assert data["difficulty_assigned"] >= 1
-    assert data["solved_correctly"] >= 1
     assert data["classified"] >= 1
     assert len(data["log"]) > 0
     assert data["failed"] >= 0

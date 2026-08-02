@@ -820,50 +820,13 @@ class AdminService:
 
     # ==================== AI-КЛАССИФИКАЦИЯ ЗАДАНИЙ ====================
 
-    # ── Конфигурация классификатора (выверено по test1.py) ──
-
-    # Размеры батчей для решения в зависимости от сложности
-    SOLVE_BATCH_SIZES: dict[int, int] = {1: 10, 2: 5, 3: 3, 4: 2, 5: 1}
-
-    # Фаза 1: Оценка сложности
-    ESTIMATE_BATCH_SIZE = 15  # По сколько заданий отправлять в одном запросе оценки
-    ESTIMATE_TOKENS_PER_TASK: int = 500
-    ESTIMATE_MIN_TOKENS: int = 8100
-    ESTIMATE_MAX_CONCURRENT = 10  # Семафор для оценки сложности
-
-    # Фаза 2: Решение
-    SOLVE_TOKENS_PER_TASK: dict[int, int] = {
-        1: 300, 2: 600, 3: 1000, 4: 1500, 5: 2500,
-    }
-    SOLVE_MIN_TOKENS: int = 4096
-    SOLVE_MAX_TOKENS: int = 60000
-    SOLVE_MAX_CONCURRENT = 10  # Семафор для решения
-
-    # Фаза 3: Классификация
+    # ── Конфигурация классификации ──
     CLASSIFY_TOKENS_PER_TASK: int = 1024
     CLASSIFY_MIN_TOKENS: int = 1024
     CLASSIFY_MAX_CONCURRENT = 10  # Семафор для классификации
 
-    @staticmethod
-    def _solve_tokens_for(tasks: list[Task]) -> int:
-        """Вычислить max_tokens для пакета задач с учётом их сложностей."""
-        total = 0
-        for t in tasks:
-            d = t.difficulty if t.difficulty in AdminService.SOLVE_TOKENS_PER_TASK else 1
-            total += AdminService.SOLVE_TOKENS_PER_TASK[d]
-        return max(AdminService.SOLVE_MIN_TOKENS, min(total, AdminService.SOLVE_MAX_TOKENS))
-
     async def classify_tasks(self, task_ids: list[int] | None = None) -> ClassifyTasksResponse:
-        """AI-классификация заданий: сложность → решение → topic/section.
-
-        Три фазы, каждая через отдельный AI-вызов:
-        1. AI оценивает сложность (1-5) для каждого задания.
-           Если AI не смог оценить → задание пропускается (не идёт на следующие этапы).
-        2. Задания группируются по сложности и решаются пакетно
-           (10/5/3/2/1 шт. для сложности 1/2/3/4/5).
-           ВСЕ батчи запускаются параллельно через asyncio.gather().
-           Ответы сравниваются с эталоном.
-        3. Для заданий с верным ответом AI классифицирует topic/section.
+        """AI-классификация заданий: определяет topic/section для каждого задания.
 
         Если передан task_ids — обрабатываются только указанные задания (без ограничений).
         Если task_ids пуст/None — обрабатываются все задания без section/topic.
@@ -872,7 +835,7 @@ class AdminService:
 
         ai = AIService(provider="deepseek")
         log: list[str] = []
-        stats = {"difficulty": 0, "solved": 0, "classified": 0, "failed": 0}
+        stats = {"classified": 0, "failed": 0}
 
         # 1. Получаем задания
         if task_ids:
@@ -896,8 +859,7 @@ class AdminService:
         if not tasks:
             log.append("✅ Все задания уже классифицированы")
             return ClassifyTasksResponse(
-                total_processed=0, difficulty_assigned=0,
-                solved_correctly=0, classified=0, failed=0, log=log
+                total_processed=0, classified=0, failed=0, log=log
             )
 
         log.append(f"🔍 Найдено неклассифицированных: {len(tasks)}")
@@ -915,164 +877,13 @@ class AdminService:
             if section:
                 topics_structure[topic].add(section)
 
-        log.append(f"📚 Тем в базе: {len(topics_structure)}")
+        log.append(f"📚 Тем в базе: {len(topics_structure) if topics_structure else 0}")
 
-        # ═══════════════════════════════════════════
-        # ФАЗА 1: AI-оценка сложности (параллельные батчи)
-        # ═══════════════════════════════════════════
-        log.append("\n── ФАЗА 1: оценка сложности ──")
-
-        DIFF_BATCH = self.ESTIMATE_BATCH_SIZE
-        DIFF_SEMAPHORE = asyncio.Semaphore(self.ESTIMATE_MAX_CONCURRENT)
-
-        total_batches = (len(tasks) + DIFF_BATCH - 1) // DIFF_BATCH
-        estimated_tasks: list[Task] = []
-        estimated_tasks_lock = asyncio.Lock()
-
-        async def _estimate_batch(batch_num: int):
-            batch = tasks[batch_num * DIFF_BATCH : (batch_num + 1) * DIFF_BATCH]
-            prefix = f"[Phase1 batch {batch_num + 1}/{total_batches}]"
-            ids_str = ", ".join(str(t.id) for t in batch)
-            async with DIFF_SEMAPHORE:
-                log.append(f"{prefix} #{ids_str} ({len(batch)} шт.)")
-                try:
-                    diff_map = await self._ai_estimate_difficulty_batch(ai, batch)
-                except Exception as e:
-                    diff_map = {}
-                    logger.error(f"Difficulty batch {batch_num + 1} failed: {e}")
-                    log.append(f"{prefix} 💥 ошибка: {e}")
-
-                batch_local: list[Task] = []
-                for task in batch:
-                    est_diff = diff_map.get(task.id)
-                    if est_diff is None:
-                        stats["failed"] += 1
-                        log.append(f"  ❌ #{task.id} AI не смог оценить сложность — пропущено")
-                        continue
-
-                    if est_diff != task.difficulty:
-                        task.difficulty = est_diff
-                        stats["difficulty"] += 1
-                        log.append(f"  🎯 #{task.id} сложность={est_diff}")
-                    else:
-                        log.append(f"  🎯 #{task.id} сложность={task.difficulty} (не изменилась)")
-
-                    batch_local.append(task)
-
-                async with estimated_tasks_lock:
-                    estimated_tasks.extend(batch_local)
-
-        await asyncio.gather(*(_estimate_batch(i) for i in range(total_batches)))
-
-        # Сохраняем порядок как в исходном списке tasks
-        estimated_ids = {t.id for t in estimated_tasks}
-        estimated_tasks = [t for t in tasks if t.id in estimated_ids]
-
-        if estimated_tasks:
-            await self.db.flush()
-
-        log.append(f"📊 Фаза 1: оценено={len(estimated_tasks)}, пропущено={len(tasks) - len(estimated_tasks)}")
-
-        if not estimated_tasks:
-            log.append("❌ Ни одно задание не прошло оценку сложности")
-            return ClassifyTasksResponse(
-                total_processed=len(tasks),
-                difficulty_assigned=stats["difficulty"],
-                solved_correctly=0, classified=0,
-                failed=stats["failed"], log=log,
-            )
-
-        # ═══════════════════════════════════════════
-        # ФАЗА 2: Пакетное решение — ВСЕ батчи параллельно
-        # ═══════════════════════════════════════════
-        log.append("\n── ФАЗА 2: пакетное решение ──")
-
-        # Группируем по сложности
-        by_difficulty: dict[int, list[Task]] = {d: [] for d in range(1, 6)}
-        for task in estimated_tasks:
-            d = task.difficulty if task.difficulty in range(1, 6) else 1
-            by_difficulty[d].append(task)
-
-        solve_sem = asyncio.Semaphore(self.SOLVE_MAX_CONCURRENT)
-
-        async def _solve_batch(batch: list[Task], kind: str) -> dict[int, str]:
-            """Решение одного батча (закрытого или открытого)."""
-            async with solve_sem:
-                if kind == "closed":
-                    return await self._ai_solve_batch(ai, batch)
-                else:
-                    return await self._ai_solve_open_batch(ai, batch)
-
-        # Формируем ВСЕ корутины для ВСЕХ батчей
-        all_coroutines: list = []
-        batch_info: list[str] = []
-
-        for diff_level in range(1, 6):
-            diff_tasks = by_difficulty[diff_level]
-            if not diff_tasks:
-                continue
-
-            batch_size = self.SOLVE_BATCH_SIZES[diff_level]
-
-            for i in range(0, len(diff_tasks), batch_size):
-                batch = diff_tasks[i:i + batch_size]
-
-                closed = [t for t in batch if not t.is_open_answer]
-                open_list = [t for t in batch if t.is_open_answer]
-
-                if closed:
-                    all_coroutines.append(_solve_batch(closed, "closed"))
-                    batch_info.append(f"сложность {diff_level}, закрытые x{len(closed)}")
-                if open_list:
-                    all_coroutines.append(_solve_batch(open_list, "open"))
-                    batch_info.append(f"сложность {diff_level}, открытые x{len(open_list)}")
-
-        log.append(f"  📤 Запуск {len(all_coroutines)} батчей решения параллельно...")
-        for info in batch_info:
-            log.append(f"     • {info}")
-
-        # 🔥 КЛЮЧЕВОЙ МОМЕНТ: asyncio.gather() — ждём ВСЕ батчи решения!
-        batch_results = await asyncio.gather(
-            *all_coroutines,
-            return_exceptions=True,
-        )
-
-        # Собираем все ответы
-        all_answers: dict[int, str] = {}
-        failed_batches = 0
-        for i, res in enumerate(batch_results):
-            if isinstance(res, Exception):
-                logger.error(f"Батч решения {i + 1} упал: {res}")
-                log.append(f"  💥 батч {i + 1} ошибка: {res}")
-                failed_batches += 1
-            elif isinstance(res, dict):
-                all_answers.update(res)
-
-        # Сравниваем ответы
-        solved_tasks: list[Task] = []
-        for task in estimated_tasks:
-            ai_answer = all_answers.get(task.id, "")
-            if self._compare_answer(ai_answer, task):
-                solved_tasks.append(task)
-                stats["solved"] += 1
-                log.append(f"  ✅ #{task.id} (сл.{task.difficulty}) ответ совпал: «{ai_answer}»")
-            else:
-                stats["failed"] += 1
-                log.append(f"  ❌ #{task.id} (сл.{task.difficulty}) ответ не совпал: AI=«{ai_answer}», эталон=«{task.answer}»")
-
-        log.append(f"📊 Фаза 2: решено верно={stats['solved']}, не совпало={stats['failed']}")
-        if failed_batches:
-            log.append(f"  ⚠️  {failed_batches} батчей не решено из-за ошибок")
-
-        # ═══════════════════════════════════════════
-        # ФАЗА 3: Классификация topic/section (параллельно)
-        # ═══════════════════════════════════════════
-        log.append("\n── ФАЗА 3: классификация topic/section ──")
-
+        # 3. Классификация topic/section (параллельно)
         classify_semaphore = asyncio.Semaphore(self.CLASSIFY_MAX_CONCURRENT)
 
         async def _classify_one(task: Task, idx: int) -> str:
-            prefix = f"[Phase3 {idx}/{len(solved_tasks)}] #{task.id} (сл.{task.difficulty})"
+            prefix = f"[{idx}/{len(tasks)}] #{task.id}"
             async with classify_semaphore:
                 try:
                     classification = await self._ai_classify_task(ai, task, topics_structure)
@@ -1091,334 +902,21 @@ class AdminService:
 
         chunk_results = await asyncio.gather(*(
             _classify_one(task, idx)
-            for idx, task in enumerate(solved_tasks, 1)
+            for idx, task in enumerate(tasks, 1)
         ))
         log.extend(chunk_results)
 
         await self.db.commit()
-        log.append(f"\n📊 Итого: сложность={stats['difficulty']}, решено={stats['solved']}, "
-                   f"классифицировано={stats['classified']}, ошибок={stats['failed']}")
+        log.append(
+            f"\n📊 Итого: классифицировано={stats['classified']}, ошибок={stats['failed']}"
+        )
 
         return ClassifyTasksResponse(
             total_processed=len(tasks),
-            difficulty_assigned=stats["difficulty"],
-            solved_correctly=stats["solved"],
             classified=stats["classified"],
             failed=stats["failed"],
             log=log,
         )
-
-    async def _ai_estimate_difficulty_batch(self, ai, tasks: list[Task]) -> dict[int, int]:
-        """AI оценивает сложность пачки заданий (1-5) за один вызов.
-
-        Использует json_mode (без thinking) — это классификация, не решение.
-        Возвращает {task_id: difficulty}.
-        """
-        if not tasks:
-            return {}
-
-        task_blocks: list[str] = []
-        for i, task in enumerate(tasks, 1):
-            qtype = "открытый" if task.is_open_answer else "закрытый"
-            block = (
-                f"### Задание {i} (id={task.id}, класс={task.task_class}, тип={qtype})\n"
-                f"{task.content[:400]}\n"
-            )
-            task_blocks.append(block)
-
-        prompt = (
-            "Оцени сложность КАЖДОГО задания по шкале 1-5, где:\n"
-            "1 — устный счёт / очевидное\n"
-            "2 — базовое, в 1-2 действия\n"
-            "3 — среднее, требует нескольких шагов\n"
-            "4 — сложное, требует хорошего понимания темы\n"
-            "5 — олимпиадное / требует много шагов и нестандартного подхода\n\n"
-            "Верни ТОЛЬКО JSON-массив:\n"
-            '[{"task_id": <id>, "difficulty": <1-5>}, ...]\n\n'
-            + "\n".join(task_blocks)
-        )
-
-        try:
-            response = await ai._chat_completion(
-                system_prompt=(
-                    "Ты оцениваешь сложность математических заданий. "
-                    "Верни ТОЛЬКО валидный JSON-массив."
-                ),
-                user_prompt=prompt,
-                temperature=0.0,
-                max_tokens=max(self.ESTIMATE_MIN_TOKENS, len(tasks) * self.ESTIMATE_TOKENS_PER_TASK),
-                json_mode=True,
-            )
-
-            if not response:
-                logger.warning(f"Difficulty batch: empty response from AI for {len(tasks)} tasks")
-                return {}
-
-            logger.debug(f"Difficulty batch: raw response ({len(response)} chars): {response[:300]}...")
-
-            # json_mode даёт чистый JSON, пробуем весь ответ как массив
-            result: dict[int, int] = {}
-            m = re.search(r'\[.*\]', response, re.DOTALL)
-            if m:
-                try:
-                    items = json.loads(m.group())
-                    if isinstance(items, list):
-                        for item in items:
-                            tid = item.get("task_id")
-                            d = item.get("difficulty")
-                            if tid is not None and isinstance(d, int) and 1 <= d <= 5:
-                                result[int(tid)] = d
-                    logger.debug(f"Difficulty batch: parsed {len(result)}/{len(tasks)} tasks")
-                except (json.JSONDecodeError, TypeError, ValueError) as e:
-                    logger.warning(f"Difficulty batch JSON parse error: {e}")
-                    logger.warning(f"  Failed JSON snippet: {m.group()[:200]}")
-            else:
-                logger.warning(f"Difficulty batch: no JSON array found in response")
-                logger.warning(f"  Response preview: {response[:500]}")
-
-            missing = [t.id for t in tasks if t.id not in result]
-            if missing:
-                logger.warning(f"Difficulty batch: {len(missing)} tasks missing in AI response: {missing}")
-
-            return result
-
-        except Exception as e:
-            logger.warning(f"Difficulty batch estimation failed: {type(e).__name__}: {e}")
-
-        return {}
-
-    async def _ai_solve_open_batch(self, ai, tasks: list[Task]) -> dict[int, str]:
-        """Пакетное решение открытых заданий — json_mode, без thinking.
-
-        thinking отключён, потому что он съедает бюджет токенов на рассуждения,
-        и JSON-массив обрезается (finish_reason=length).
-        json_mode гарантирует валидный JSON на выходе.
-        """
-        if not tasks:
-            return {}
-
-        task_blocks: list[str] = []
-        for i, task in enumerate(tasks, 1):
-            block = (
-                f"### Задание {i} (id={task.id}, класс={task.task_class}, сложность={task.difficulty})\n"
-                f"Условие:\n{task.content[:800]}\n"
-            )
-            task_blocks.append(block)
-
-        prompt = (
-            "Реши КАЖДОЕ задание и выведи ответы в JSON-массиве. "
-            "answer — ТОЛЬКО число или математическое выражение без префиксов (без «x=», «ответ:», и т.п.).\n"
-            "Формат ответа строго:\n"
-            '[{"task_id": <id>, "answer": "<число или выражение>"}, ...]\n\n'
-            + "\n".join(task_blocks)
-        )
-
-        max_tokens = self._solve_tokens_for(tasks)
-
-        try:
-            response = await ai._chat_completion(
-                system_prompt=(
-                    "Ты — математик. Реши каждое задание и верни ответ СТРОГО в JSON-массиве "
-                    '[{"task_id": <id>, "answer": "<ответ>"}, ...]. Никакого текста вне JSON.'
-                ),
-                user_prompt=prompt,
-                temperature=0.0,
-                max_tokens=max_tokens,
-                json_mode=True,
-            )
-
-            if not response:
-                logger.warning(f"Open solve batch: empty response from AI for {len(tasks)} tasks")
-                return {}
-
-            logger.debug(f"Open solve batch: raw response ({len(response)} chars): {response[:300]}...")
-
-            result: dict[int, str] = self._extract_answer_json(response)
-            if not result:
-                logger.warning(f"Open solve batch: _extract_answer_json returned empty for {len(tasks)} tasks")
-                logger.warning(f"  Response tail: {response[-500:]}")
-            else:
-                logger.debug(f"Open solve batch: extracted {len(result)}/{len(tasks)} answers")
-            return result
-
-        except Exception as e:
-            logger.warning(f"Open batch solve failed for {len(tasks)} tasks: {type(e).__name__}: {e}")
-
-        return {}
-
-    async def _ai_solve_batch(self, ai, tasks: list[Task]) -> dict[int, str]:
-        """Пакетное решение закрытых заданий (выбор варианта) — json_mode, без thinking.
-
-        AI возвращает НОМЕР правильного варианта (1-5), не текст.
-        thinking отключён — json_mode даёт валидный JSON без обрезки.
-        """
-        if not tasks:
-            return {}
-
-        task_blocks: list[str] = []
-        for i, task in enumerate(tasks, 1):
-            opts = ""
-            if task.options:
-                for j, opt in enumerate(task.options, 1):
-                    opts += f"{j}) {opt}\n"
-
-            block = (
-                f"### Задание {i} (id={task.id}, класс={task.task_class}, сложность={task.difficulty})\n"
-                f"Условие:\n{task.content[:800]}\n"
-                f"Варианты:\n{opts}"
-            )
-            task_blocks.append(block)
-
-        prompt = (
-            "Реши КАЖДОЕ задание и выбери правильный вариант ответа.\n"
-            "answer — ТОЛЬКО НОМЕР правильного варианта (1, 2, 3, 4 или 5).\n"
-            "Если правильных вариантов несколько, укажи номера через запятую (например: \"1,3\").\n"
-            "Формат ответа СТРОГО:\n"
-            '[{"task_id": <id>, "answer": "<номер или номера>"}, ...]\n\n'
-            + "\n".join(task_blocks)
-        )
-
-        max_tokens = self._solve_tokens_for(tasks)
-
-        try:
-            response = await ai._chat_completion(
-                system_prompt=(
-                    "Ты — математик. Реши задания и верни СТРОГО JSON-массив. "
-                    "answer — ТОЛЬКО НОМЕР(А) правильного варианта (1-5), без текста варианта."
-                ),
-                user_prompt=prompt,
-                temperature=0.0,
-                max_tokens=max_tokens,
-                json_mode=True,
-            )
-
-            if not response:
-                logger.warning(f"Closed solve batch: empty response from AI for {len(tasks)} tasks")
-                return {}
-
-            logger.debug(f"Closed solve batch: raw response ({len(response)} chars): {response[:300]}...")
-
-            result: dict[int, str] = self._extract_answer_json(response)
-            if not result:
-                logger.warning(f"Closed solve batch: _extract_answer_json returned empty for {len(tasks)} tasks")
-                logger.warning(f"  Response tail: {response[-500:]}")
-            else:
-                logger.debug(f"Closed solve batch: extracted {len(result)}/{len(tasks)} answers")
-            return result
-
-        except Exception as e:
-            logger.warning(f"Batch solve failed for {len(tasks)} tasks: {type(e).__name__}: {e}")
-
-        return {}
-
-    @staticmethod
-    def _extract_answer_json(response: str) -> dict[int, str]:
-        """Извлекает {task_id: answer} из JSON-массива в ответе AI.
-
-        json_mode даёт чистый JSON — пробуем прямой парсинг.
-        Если не выходит — ищем массив в тексте.
-        """
-        result: dict[int, str] = {}
-
-        def _parse(items) -> dict[int, str]:
-            r: dict[int, str] = {}
-            if isinstance(items, list) and items:
-                for item in items:
-                    tid = item.get("task_id")
-                    ans = item.get("answer")
-                    if tid is not None and ans is not None:
-                        r[int(tid)] = str(ans).strip()
-            return r
-
-        # Попытка 1: прямой парсинг (json_mode гарантирует чистый JSON)
-        try:
-            items = json.loads(response.strip())
-            result = _parse(items)
-            if result:
-                logger.debug(f"_extract_answer_json: direct parse OK — {len(result)} entries")
-                return result
-        except (json.JSONDecodeError, TypeError, ValueError):
-            pass
-
-        # Попытка 2: жадный поиск JSON-массива (берёт самый большой)
-        for m in re.finditer(r'\[.*\]', response, re.DOTALL):
-            try:
-                items = json.loads(m.group())
-                result = _parse(items)
-                if result:
-                    logger.debug(f"_extract_answer_json: greedy match OK — {len(result)} entries")
-                    return result
-            except (json.JSONDecodeError, TypeError, ValueError) as e:
-                logger.debug(f"_extract_answer_json: greedy match parse error: {type(e).__name__}: {e}")
-                continue
-
-        # Попытка 3: fallback — хвост ответа
-        tail = response[-3000:] if len(response) > 3000 else response
-        m = re.search(r'\[.*\]', tail, re.DOTALL)
-        if m:
-            try:
-                items = json.loads(m.group())
-                result = _parse(items)
-                if result:
-                    logger.debug(f"_extract_answer_json: tail match OK — {len(result)} entries")
-                else:
-                    logger.warning(f"_extract_answer_json: tail parsed but no entries: {m.group()[:300]}")
-            except (json.JSONDecodeError, TypeError, ValueError) as e:
-                logger.warning(f"_extract_answer_json: tail parse error: {type(e).__name__}: {e}")
-                logger.warning(f"  Snippet: {m.group()[:300]}")
-        else:
-            logger.warning(f"_extract_answer_json: no JSON array found. Tail preview:")
-            logger.warning(f"  {tail[:500]}")
-
-        return result
-
-    @staticmethod
-    def _compare_answer(ai_answer: str, task: Task) -> bool:
-        """Сравнить ответ AI с эталоном.
-
-        Нормализует оба ответа и сравнивает:
-        - Убирает пробелы, префиксы (x=, ответ:)
-        - Нормализует десятичные разделители
-        - Пробует числовое сравнение (float)
-        - Сравнивает множества чисел (для комбинаторных ответов типа «1,3»)
-        """
-        def _norm(s: str) -> str:
-            s = s.strip().lower()
-            s = s.replace(",", ".").replace(" ", "")
-            # Убираем префиксы
-            s = re.sub(r'^(x=|y=|ответ:?\s*|answer:?\s*)', '', s)
-            # Убираем trailing точку
-            s = s.rstrip('.')
-            return s
-
-        a = _norm(ai_answer)
-        b = _norm(task.answer or "")
-
-        # Точное строковое совпадение
-        if a == b:
-            return True
-
-        # Числовое сравнение
-        try:
-            fa = float(a)
-            fb = float(b)
-            return abs(fa - fb) < 1e-9
-        except (ValueError, TypeError):
-            pass
-
-        # Сравнение без скобок (скобки могут быть эквивалентны)
-        a_nobraces = a.replace("(", "").replace(")", "")
-        b_nobraces = b.replace("(", "").replace(")", "")
-        if a_nobraces == b_nobraces:
-            return True
-
-        # Сравнение множеств чисел — для ответов типа "1,3" где порядок не важен
-        a_set = set(re.findall(r'-?\d+', a))
-        b_set = set(re.findall(r'-?\d+', b))
-        if a_set and b_set and a_set == b_set:
-            return True
-
-        return False
 
     async def _ai_classify_task(self, ai, task: Task, topics_structure: dict) -> dict | None:
         """AI классифицирует задание → {topic, section}, выбирая только из существующих в БД тем.

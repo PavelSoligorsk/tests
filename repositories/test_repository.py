@@ -1,5 +1,5 @@
 from sqlalchemy import select, func, delete
-from sqlalchemy.orm import joinedload
+from sqlalchemy.orm import joinedload, selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 from typing import List, Optional
 
@@ -59,7 +59,7 @@ class TestRepository:
     async def get_test_with_tasks(self, test_id: int):
         result = await self.db.execute(
             select(Test)
-            .options(joinedload(Test.tasks))
+            .options(selectinload(Test.tasks))
             .where(Test.id == test_id)
         )
         return result.unique().scalars().first()
