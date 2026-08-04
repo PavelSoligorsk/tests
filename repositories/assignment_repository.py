@@ -1,3 +1,4 @@
+from typing import List
 from sqlalchemy import select, func, and_, delete
 from sqlalchemy.ext.asyncio import AsyncSession
 from datetime import datetime
