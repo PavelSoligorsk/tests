@@ -9,10 +9,12 @@
 
 from __future__ import annotations
 
-import os, datetime as _dt
+import os, secrets, httpx, datetime as _dt
+from datetime import timedelta
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
+from pydantic import BaseModel
 
 from core.database import get_db
 from core.models import Parent, User
@@ -425,16 +427,13 @@ async def register_chat(
     _api_key: str = Depends(verify_bot_key),
     db: AsyncSession = Depends(get_db),
 ):
-    """Сохраняет tg_chat_id учителя. Вызывается ботом при /start."""
+    """Сохраняет tg_chat_id пользователя любой роли. Вызывается ботом при /start."""
     from repositories.user_repository import UserRepository
 
     user_repo = UserRepository(db)
-    # Ищем только среди учителей (приоритет, если такой же tg_username есть у ученика)
-    user = await user_repo.get_user_by_tg_username_and_roles(
-        data.tg_username, roles=("teacher",)
-    )
+    user = await user_repo.get_user_by_tg_username(data.tg_username)
     if not user:
-        raise HTTPException(status_code=404, detail="Учитель не найден")
+        raise HTTPException(status_code=404, detail="Пользователь не найден")
 
     await user_repo.update_chat_id(user.id, data.chat_id)
     await db.commit()
@@ -479,4 +478,98 @@ async def get_teacher_chat(
         teacher_tg_username=teacher_tg,
         chat_id=teacher.tg_chat_id if teacher.tg_chat_id else None,
         found=teacher.tg_chat_id is not None,
+    )
+
+
+# ═══════════════════════════════════════════════════════════════
+# Восстановление пароля через Telegram
+# ═══════════════════════════════════════════════════════════════
+
+
+class TelegramForgotPasswordRequest(BaseModel):
+    """Запрос от ТГ-бота: сброс пароля по tg_username."""
+    tg_username: str
+
+
+class TelegramForgotPasswordResponse(BaseModel):
+    """Ответ: успех / ошибка."""
+    ok: bool
+    message: str
+
+
+@router.post("/forgot-password", response_model=TelegramForgotPasswordResponse)
+async def forgot_password_via_telegram(
+    data: TelegramForgotPasswordRequest,
+    _api_key: str = Depends(verify_bot_key),
+    db: AsyncSession = Depends(get_db),
+):
+    """Генерирует токен сброса пароля и отправляет ссылку в Telegram.
+
+    Вызывается ТГ-ботом по кнопке «Восстановить пароль».
+    """
+    from repositories.user_repository import UserRepository
+    from repositories.password_reset_repository import PasswordResetRepository
+
+    clean = data.tg_username.lstrip("@")
+
+    user_repo = UserRepository(db)
+    user = await user_repo.get_user_by_tg_username(clean)
+    if not user:
+        return TelegramForgotPasswordResponse(
+            ok=False,
+            message="Пользователь с таким Telegram username не найден.",
+        )
+
+    chat_id = user.tg_chat_id
+    if not chat_id:
+        return TelegramForgotPasswordResponse(
+            ok=False,
+            message="Сначала нажмите /start в боте, чтобы активировать аккаунт.",
+        )
+
+    # Удаляем старые токены, создаём новый
+    reset_repo = PasswordResetRepository(db)
+    await reset_repo.delete_existing_tokens(user.username)
+
+    token = secrets.token_urlsafe(32)
+    await reset_repo.create_token(
+        email=user.username,
+        token=token,
+        expires_at=_dt.datetime.utcnow() + timedelta(hours=1),
+    )
+    await db.commit()
+
+    # Отправляем ссылку в Telegram
+    frontend_url = os.getenv("FRONTEND_URL", "https://test-front-lac.vercel.app")
+    reset_link = f"{frontend_url}/reset-password?token={token}"
+    bot_token = TG_BOT_API_KEY
+
+    try:
+        async with httpx.AsyncClient() as client:
+            resp = await client.post(
+                f"https://api.telegram.org/bot{bot_token}/sendMessage",
+                json={
+                    "chat_id": chat_id,
+                    "text": (
+                        f"🔑 *Сброс пароля*\n\n"
+                        f"Для сброса пароля перейдите по ссылке:\n"
+                        f"{reset_link}\n\n"
+                        f"Ссылка действительна 1 час."
+                    ),
+                    "parse_mode": "Markdown",
+                },
+                timeout=10.0,
+            )
+        if resp.status_code != 200:
+            import logging
+            logging.getLogger(__name__).error(
+                f"Telegram sendMessage error: {resp.status_code} {resp.text}"
+            )
+    except Exception as e:
+        import logging
+        logging.getLogger(__name__).error(f"Telegram sendMessage failed: {e}")
+
+    return TelegramForgotPasswordResponse(
+        ok=True,
+        message="Ссылка для сброса пароля отправлена вам в Telegram.",
     )

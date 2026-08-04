@@ -85,32 +85,38 @@ class AuthService:
         )
         await self.db.commit()
         
-        # Отправляем email
-        reset_link = f"https://test-front-lac.vercel.app/reset-password?token={token}"
-        
-        try:
-            async with httpx.AsyncClient() as client:
-                await client.post(
-                    "https://api.resend.com/emails",
-                    headers={
-                        "Authorization": f"Bearer {os.getenv('RESEND_API_KEY')}",
-                        "Content-Type": "application/json"
-                    },
-                    json={
-                        "from": "onboarding@resend.dev",
-                        "to": email,
-                        "subject": "Сброс пароля",
-                        "html": f"""
-                        <h2>Сброс пароля</h2>
-                        <p>Для сброса пароля перейдите по ссылке:</p>
-                        <a href="{reset_link}">{reset_link}</a>
-                        <p>Ссылка действительна 1 час.</p>
-                        """
-                    },
-                    timeout=10.0
-                )
-        except Exception as e:
-            print(f"Email error: {e}")
+        # Отправляем email через Resend API
+        resend_api_key = os.getenv("RESEND_API_KEY")
+        reset_link = f"{os.getenv('FRONTEND_URL', 'https://test-front-lac.vercel.app')}/reset-password?token={token}"
+
+        if not resend_api_key:
+            print("Email error: RESEND_API_KEY not set in .env")
+        else:
+            try:
+                async with httpx.AsyncClient() as client:
+                    resp = await client.post(
+                        "https://api.resend.com/emails",
+                        headers={
+                            "Authorization": f"Bearer {resend_api_key}",
+                            "Content-Type": "application/json",
+                        },
+                        json={
+                            "from": "onboarding@resend.dev",
+                            "to": email,
+                            "subject": "Сброс пароля",
+                            "html": (
+                                f"<h2>Сброс пароля</h2>"
+                                f"<p>Для сброса пароля перейдите по ссылке:</p>"
+                                f"<a href=\"{reset_link}\">{reset_link}</a>"
+                                f"<p>Ссылка действительна 1 час.</p>"
+                            ),
+                        },
+                        timeout=15.0,
+                    )
+                if resp.status_code != 200:
+                    print(f"Email error: Resend returned {resp.status_code}: {resp.text}")
+            except Exception as e:
+                print(f"Email error: {e}")
         
         return MessageResponse(message="Если такой email зарегистрирован, инструкция отправлена")
     
