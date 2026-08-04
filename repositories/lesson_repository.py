@@ -328,3 +328,15 @@ class LessonRepository:
     async def delete(self, lesson: Lesson) -> None:
         await self.db.delete(lesson)
         await self.db.flush()
+
+    async def get_lessons_by_teacher(
+        self, teacher_id: int, date_from: datetime, date_to: datetime
+    ) -> List[Lesson]:
+        """Занятия учителя в диапазоне дат (алиас для calendar)."""
+        return await self.calendar(teacher_id, date_from, date_to)
+
+    async def get_lessons_by_student(
+        self, student_id: int, date_from: datetime, date_to: datetime
+    ) -> List[Lesson]:
+        """Занятия ученика в диапазоне дат (алиас для calendar_for_student)."""
+        return await self.calendar_for_student(student_id, date_from, date_to)

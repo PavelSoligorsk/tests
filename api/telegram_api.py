@@ -2,15 +2,16 @@
 
 Методы:
 - whoami:        определить роль пользователя по tg_username
-- parent-info:   для родителя — список детей
-- student-balance: баланс + история операций
-- confirm-payment / reject-payment: работа с оплатами
+- Баланс / статистика / платежи
+- register-chat: сохранить tg_chat_id
+- forgot-password: сброс пароля через Telegram
+- schedule:      расписание на неделю/месяц
+- my-assignments: домашние задания
 """
 
 from __future__ import annotations
 
-import os, secrets, httpx, datetime as _dt
-from datetime import timedelta
+import os, datetime as _dt
 from typing import List
 from fastapi import APIRouter, Depends, HTTPException, Header, Query
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -18,14 +19,12 @@ from pydantic import BaseModel
 
 from core.database import get_db
 from core.models import Parent, User
-from services.schedule_service import ScheduleService
+from services.telegram_service import TelegramService
 from dto_schemas.schedule import (
     TelegramPaymentRequest,
     TelegramPaymentResponse,
     TelegramWhoamiResponse,
-    TelegramStudentBrief,
     TelegramBalanceResponse,
-    TelegramPaymentBrief,
     TelegramPaymentStatsResponse,
     TelegramRegisterChatRequest,
     TelegramTeacherChatResponse,
@@ -33,28 +32,27 @@ from dto_schemas.schedule import (
 
 router = APIRouter(prefix="/telegram", tags=["Telegram Bot"])
 
-# Ключ, который ТГ-бот передаёт в заголовке X-Telegram-Bot-Key
-# Пробуем все возможные имена переменной на Railway
-TG_BOT_API_KEY = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN") or ""
-if not TG_BOT_API_KEY:
-    TG_BOT_API_KEY = "tg-bot-secret-change-me"
+# Ключ для проверки запросов от бота
+TG_BOT_API_KEY = os.getenv("TELEGRAM_BOT_TOKEN") or os.getenv("BOT_TOKEN") or "tg-bot-secret-change-me"
 
 
 def verify_bot_key(x_telegram_bot_key: str = Header(...)) -> str:
-    """Проверяет, что запрос пришёл от нашего ТГ-бота."""
     if x_telegram_bot_key != TG_BOT_API_KEY:
         import logging
-        _log = logging.getLogger(__name__)
-        _log.warning(
-            f"Key mismatch! Received: ...{x_telegram_bot_key[-8:]}, "
+        logging.getLogger(__name__).warning(
+            f"Key mismatch! Received: ...{x_telegram_bot_key[-8:] if len(x_telegram_bot_key) >= 8 else x_telegram_bot_key}, "
             f"Expected: ...{TG_BOT_API_KEY[-8:] if len(TG_BOT_API_KEY) >= 8 else TG_BOT_API_KEY}"
         )
         raise HTTPException(status_code=403, detail="Неверный ключ Telegram-бота")
     return x_telegram_bot_key
 
 
+def get_telegram_service(db: AsyncSession = Depends(get_db)) -> TelegramService:
+    return TelegramService(db)
+
+
 # ═══════════════════════════════════════════════════════════════
-# whoami — определение роли пользователя по tg_username
+# whoami
 # ═══════════════════════════════════════════════════════════════
 
 
@@ -62,200 +60,45 @@ def verify_bot_key(x_telegram_bot_key: str = Header(...)) -> str:
 async def whoami(
     tg_username: str,
     _api_key: str = Depends(verify_bot_key),
-    db: AsyncSession = Depends(get_db),
+    service: TelegramService = Depends(get_telegram_service),
 ):
-    """Определяет, кто этот пользователь: родитель, учитель или ученик.
-
-    Используется при /start в Telegram-боте для маршрутизации.
-    Приоритет: сначала ищем среди учителей, затем родителей, затем учеников.
-    """
-    from repositories.user_repository import UserRepository
-    from repositories.parent_repository import ParentRepository
-    from repositories.teacher_student_repository import TeacherStudentRepository
-
-    clean = tg_username.lstrip("@")
-
-    # 1. Ищем учителя (приоритет!)
-    user_repo = UserRepository(db)
-    teacher = await user_repo.get_user_by_tg_username_and_roles(
-        tg_username, roles=("teacher", "admin")
-    )
-    if teacher:
-        name = f"{teacher.first_name or ''} {teacher.last_name or ''}".strip() or teacher.username
-        if teacher.role == "teacher":
-            ts_repo = TeacherStudentRepository(db)
-            students = await ts_repo.get_teacher_students(teacher.id)
-            return TelegramWhoamiResponse(
-                found=True,
-                role="teacher",
-                name=name,
-                tg_username=clean,
-                students_count=len(students),
-            )
-        else:
-            # admin
-            return TelegramWhoamiResponse(
-                found=True,
-                role=teacher.role,
-                name=name,
-                tg_username=clean,
-                message="Администраторы работают через веб-интерфейс.",
-            )
-
-    # 2. Ищем ученика (если учитель не найден)
-    student = await user_repo.get_user_by_tg_username_and_roles(
-        tg_username, roles=("student",)
-    )
-    if student:
-        name = f"{student.first_name or ''} {student.last_name or ''}".strip() or student.username
-        return TelegramWhoamiResponse(
-            found=True,
-            role="student",
-            name=name,
-            tg_username=clean,
-            message="Функционал для учеников скоро появится! 🚀",
-        )
-
-    # 3. Ищем родителя (по Parent.tg_username) — без backref, через прямой SQL
-    from sqlalchemy import select as sa_select
-    parent_repo = ParentRepository(db)
-    r = await db.execute(
-        sa_select(Parent).where(Parent.tg_username.in_([clean, f"@{clean}"]))
-    )
-    parent = r.scalars().first()
-
-    if parent:
-        # Получаем ID студентов родителя прямым запросом (не через backref)
-        student_ids = await parent_repo.get_student_ids(parent.id)
-        children: List[TelegramStudentBrief] = []
-
-        if student_ids:
-            # Загружаем студентов по ID
-            user_repo_temp = UserRepository(db)
-            students = await user_repo_temp.get_users_by_ids(student_ids)
-            student_map: dict[int, User] = {s.id: s for s in students}
-
-            # Связи с учителями
-            ts_repo = TeacherStudentRepository(db)
-            links = await ts_repo.get_links_by_student_ids(student_ids)
-            student_teacher_map: dict[int, list[int]] = {}
-            for link in links:
-                student_teacher_map.setdefault(link.student_id, []).append(link.teacher_id)
-
-            # Batch-запрос учителей
-            all_teacher_ids = [tid for tids in student_teacher_map.values() for tid in tids]
-            teacher_map: dict[int, User] = {}
-            if all_teacher_ids:
-                teachers = await user_repo_temp.get_teachers_by_ids(all_teacher_ids)
-                teacher_map = {t.id: t for t in teachers}
-
-            for sid in student_ids:
-                student = student_map.get(sid)
-                if not student:
-                    continue
-                teacher_ids_for_student = student_teacher_map.get(sid, [])
-                teacher_name = None
-                if teacher_ids_for_student:
-                    t = teacher_map.get(teacher_ids_for_student[0])
-                    if t:
-                        teacher_name = f"{t.first_name or ''} {t.last_name or ''}".strip() or t.username
-
-                children.append(TelegramStudentBrief(
-                    id=student.id,
-                    name=f"{student.first_name or ''} {student.last_name or ''}".strip() or student.username,
-                    tg_username=student.tg_username,
-                    balance=student.balance or 0,
-                    teacher_name=teacher_name,
-                ))
-
-        return TelegramWhoamiResponse(
-            found=True,
-            role="parent",
-            name=parent.name,
-            tg_username=clean,
-            children=children,
-        )
-
-    # 4. Не найден
-    return TelegramWhoamiResponse(
-        found=False,
-        tg_username=clean,
-    )
+    return await service.whoami(tg_username)
 
 
 # ═══════════════════════════════════════════════════════════════
-# Баланс ученика + история операций
+# Баланс ученика
 # ═══════════════════════════════════════════════════════════════
 
 
-@router.get("/student/{student_id}/balance", response_model=TelegramBalanceResponse)
+@router.get("/student/{student_id}/balance")
 async def get_student_balance_with_history(
     student_id: int,
     limit: int = Query(default=5, ge=0, le=20),
     _api_key: str = Depends(verify_bot_key),
-    db: AsyncSession = Depends(get_db),
+    service: TelegramService = Depends(get_telegram_service),
 ):
-    """Возвращает баланс ученика + последние N операций (пополнения и списания).
+    try:
+        return await service.get_student_balance(student_id, limit)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
-    Используется родителем в боте для просмотра баланса ребёнка.
-    """
-    from repositories.user_repository import UserRepository
-    from repositories.payment_repository import PaymentRepository
 
-    user_repo = UserRepository(db)
-    student = await user_repo.get_user_by_id(student_id)
-    if not student:
-        raise HTTPException(status_code=404, detail="Ученик не найден")
-    if student.role != "student":
-        raise HTTPException(status_code=400, detail="Пользователь не является учеником")
-
-    student_name = f"{student.first_name or ''} {student.last_name or ''}".strip() or student.username
-
-    payment_repo = PaymentRepository(db)
-    all_payments = await payment_repo.list_by_student(student_id)
-
-    # Формируем операции: deposit (пополнение) / withdrawal (списание)
-    operations: List[TelegramPaymentBrief] = []
-    for p in all_payments:
-        # Определяем тип операции
-        if p.payment_type == "per_lesson":
-            # per_lesson с дебетовым статусом "paid" и без lesson_id — это пополнение баланса
-            # per_lesson с lesson_id — это списание за урок
-            if p.lesson_id:
-                op_type = "withdrawal"
-            else:
-                op_type = "deposit"
-        else:
-            # monthly / package — всегда deposit
-            op_type = "deposit"
-
-        operations.append(TelegramPaymentBrief(
-            id=p.id,
-            type=op_type,
-            amount=p.amount,
-            payment_type=p.payment_type,
-            status=p.status,
-            comment=p.comment,
-            created_at=p.created_at,
-        ))
-
-    # Последние N операций
-    last_ops = sorted(
-        operations,
-        key=lambda o: o.created_at or _dt.datetime.min,
-        reverse=True,
-    )[:limit]
-
-    return TelegramBalanceResponse(
-        student_id=student.id,
-        student_name=student_name,
-        balance=student.balance or 0,
-        last_operations=last_ops,
-    )
+@router.get("/student/{student_id}/payment-stats")
+async def get_payment_stats(
+    student_id: int,
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=5, ge=1, le=20),
+    _api_key: str = Depends(verify_bot_key),
+    service: TelegramService = Depends(get_telegram_service),
+):
+    try:
+        return await service.get_payment_stats(student_id, page, page_size)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # ═══════════════════════════════════════════════════════════════
-# Подтверждение / отклонение оплаты (существующие методы)
+# Платежи (подтверждение / отклонение)
 # ═══════════════════════════════════════════════════════════════
 
 
@@ -263,22 +106,10 @@ async def get_student_balance_with_history(
 async def confirm_payment_via_telegram(
     data: TelegramPaymentRequest,
     _api_key: str = Depends(verify_bot_key),
-    db: AsyncSession = Depends(get_db),
+    service: TelegramService = Depends(get_telegram_service),
 ):
-    """ТГ-бот вызывает этот метод, когда учитель подтверждает оплату.
-
-    Тело запроса:
-        - teacher_tg_username: @username учителя (кто подтверждает)
-        - student_tg_username: @username ученика (за кого заплатили)
-        - amount: сумма в копейках BYN
-        - payment_type: тип оплаты (по умолчанию "per_lesson")
-        - comment: пояснение (опционально)
-
-    Создаёт запись Payment со статусом "paid" и пополняет баланс ученика.
-    """
-    service = ScheduleService(db)
     try:
-        return await service.confirm_payment_via_telegram(data)
+        return await service.confirm_payment(data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -289,20 +120,14 @@ async def get_student_balance(
     _api_key: str = Depends(verify_bot_key),
     db: AsyncSession = Depends(get_db),
 ):
-    """ТГ-бот запрашивает текущий баланс ученика по Telegram username.
-
-    Возвращает:
-        - student_id, student_name, balance (копейки BYN)
-    """
+    """ТГ-бот запрашивает текущий баланс ученика по Telegram username."""
     from repositories.user_repository import UserRepository
-
     user_repo = UserRepository(db)
     student = await user_repo.get_user_by_tg_username_and_roles(
         student_tg_username, roles=("student",)
     )
     if not student:
         raise HTTPException(status_code=404, detail="Ученик не найден")
-
     student_name = f"{student.first_name or ''} {student.last_name or ''}".strip() or student.username
     return {
         "student_id": student.id,
@@ -311,113 +136,20 @@ async def get_student_balance(
     }
 
 
-# ═══════════════════════════════════════════════════════════════
-# Статистика оплат для родителя (с пагинацией)
-# ═══════════════════════════════════════════════════════════════
-
-
-@router.get("/student/{student_id}/payment-stats", response_model=TelegramPaymentStatsResponse)
-async def get_payment_stats(
-    student_id: int,
-    page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=5, ge=1, le=20),
-    _api_key: str = Depends(verify_bot_key),
-    db: AsyncSession = Depends(get_db),
-):
-    """Статистика оплат ученика: сводка + пагинированный список.
-
-    Используется родителем в боте — кнопка «📊 Статистика».
-    """
-    from math import ceil
-    from repositories.user_repository import UserRepository
-    from repositories.payment_repository import PaymentRepository
-
-    user_repo = UserRepository(db)
-    student = await user_repo.get_user_by_id(student_id)
-    if not student:
-        raise HTTPException(status_code=404, detail="Ученик не найден")
-    if student.role != "student":
-        raise HTTPException(status_code=400, detail="Пользователь не является учеником")
-
-    student_name = f"{student.first_name or ''} {student.last_name or ''}".strip() or student.username
-
-    payment_repo = PaymentRepository(db)
-    all_payments = await payment_repo.list_by_student(student_id)
-
-    # Считаем сводку
-    total_deposited = 0
-    total_spent = 0
-    operations: List[TelegramPaymentBrief] = []
-    for p in all_payments:
-        if p.status != "paid":
-            continue
-        if p.payment_type == "per_lesson":
-            if p.lesson_id:
-                op_type = "withdrawal"
-                total_spent += p.amount
-            else:
-                op_type = "deposit"
-                total_deposited += p.amount
-        else:
-            op_type = "deposit"
-            total_deposited += p.amount
-
-        operations.append(TelegramPaymentBrief(
-            id=p.id,
-            type=op_type,
-            amount=p.amount,
-            payment_type=p.payment_type,
-            status=p.status,
-            comment=p.comment,
-            created_at=p.created_at,
-        ))
-
-    # Сортируем по дате (свежие сверху) и пагинируем
-    ops_sorted = sorted(
-        operations,
-        key=lambda o: o.created_at or _dt.datetime.min,
-        reverse=True,
-    )
-    total_items = len(ops_sorted)
-    total_pages = max(1, ceil(total_items / page_size))
-    page = min(page, total_pages)  # не выходим за границы
-    start = (page - 1) * page_size
-    page_ops = ops_sorted[start:start + page_size]
-
-    return TelegramPaymentStatsResponse(
-        student_id=student.id,
-        student_name=student_name,
-        balance=student.balance or 0,
-        total_deposited=total_deposited,
-        total_spent=total_spent,
-        payments=page_ops,
-        page=page,
-        total_pages=total_pages,
-        has_next=(page < total_pages),
-        has_prev=(page > 1),
-    )
-
-
 @router.post("/reject-payment")
 async def reject_payment_via_telegram(
     data: TelegramPaymentRequest,
     _api_key: str = Depends(verify_bot_key),
-    db: AsyncSession = Depends(get_db),
+    service: TelegramService = Depends(get_telegram_service),
 ):
-    """ТГ-бот вызывает этот метод, когда учитель отклоняет платёж.
-
-    Возвращает статус операции (только для лога, баланс не меняется).
-    """
-    service = ScheduleService(db)
     try:
-        result = await service.reject_payment_via_telegram(data)
-        return result
+        return await service.reject_payment(data)
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
 
 # ═══════════════════════════════════════════════════════════════
-# Chat registration — маршрутизация чеков учителю
+# Chat registration
 # ═══════════════════════════════════════════════════════════════
 
 
@@ -425,19 +157,11 @@ async def reject_payment_via_telegram(
 async def register_chat(
     data: TelegramRegisterChatRequest,
     _api_key: str = Depends(verify_bot_key),
-    db: AsyncSession = Depends(get_db),
+    service: TelegramService = Depends(get_telegram_service),
 ):
-    """Сохраняет tg_chat_id пользователя любой роли. Вызывается ботом при /start."""
-    from repositories.user_repository import UserRepository
-
-    user_repo = UserRepository(db)
-    user = await user_repo.get_user_by_tg_username(data.tg_username)
-    if not user:
+    ok = await service.register_chat(data.tg_username, data.chat_id)
+    if not ok:
         raise HTTPException(status_code=404, detail="Пользователь не найден")
-
-    await user_repo.update_chat_id(user.id, data.chat_id)
-    await db.commit()
-
     return TelegramTeacherChatResponse(
         student_id=0,
         teacher_tg_username=data.tg_username,
@@ -450,49 +174,25 @@ async def register_chat(
 async def get_teacher_chat(
     student_id: int,
     _api_key: str = Depends(verify_bot_key),
-    db: AsyncSession = Depends(get_db),
+    service: TelegramService = Depends(get_telegram_service),
 ):
-    """Возвращает chat_id учителя ученика. Вызывается ботом для маршрутизации чеков."""
-    from repositories.user_repository import UserRepository
-    from repositories.teacher_student_repository import TeacherStudentRepository
-
-    user_repo = UserRepository(db)
-    student = await user_repo.get_user_by_id(student_id)
-    if not student or student.role != "student":
-        raise HTTPException(status_code=404, detail="Ученик не найден")
-
-    # Находим учителя через связь TeacherStudent
-    ts_repo = TeacherStudentRepository(db)
-    teachers = await ts_repo.get_teacher_students_for_student(student_id)
-    if not teachers:
-        return TelegramTeacherChatResponse(
-            student_id=student_id,
-            found=False,
-        )
-
-    teacher = teachers[0]  # берём первого учителя
-    teacher_tg = teacher.tg_username
-
-    return TelegramTeacherChatResponse(
-        student_id=student_id,
-        teacher_tg_username=teacher_tg,
-        chat_id=teacher.tg_chat_id if teacher.tg_chat_id else None,
-        found=teacher.tg_chat_id is not None,
-    )
+    try:
+        result = await service.get_teacher_chat(student_id)
+        return TelegramTeacherChatResponse(**result)
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 
 
 # ═══════════════════════════════════════════════════════════════
-# Восстановление пароля через Telegram
+# Восстановление пароля
 # ═══════════════════════════════════════════════════════════════
 
 
 class TelegramForgotPasswordRequest(BaseModel):
-    """Запрос от ТГ-бота: сброс пароля по tg_username."""
     tg_username: str
 
 
 class TelegramForgotPasswordResponse(BaseModel):
-    """Ответ: успех / ошибка."""
     ok: bool
     message: str
 
@@ -501,75 +201,46 @@ class TelegramForgotPasswordResponse(BaseModel):
 async def forgot_password_via_telegram(
     data: TelegramForgotPasswordRequest,
     _api_key: str = Depends(verify_bot_key),
-    db: AsyncSession = Depends(get_db),
+    service: TelegramService = Depends(get_telegram_service),
 ):
-    """Генерирует токен сброса пароля и отправляет ссылку в Telegram.
+    return await service.forgot_password(data.tg_username)
 
-    Вызывается ТГ-ботом по кнопке «Восстановить пароль».
+
+# ═══════════════════════════════════════════════════════════════
+# Расписание (новое)
+# ═══════════════════════════════════════════════════════════════
+
+
+@router.get("/schedule")
+async def get_schedule(
+    tg_username: str = Query(...),
+    period: str = Query(default="week", regex="^(week|month)$"),
+    _api_key: str = Depends(verify_bot_key),
+    service: TelegramService = Depends(get_telegram_service),
+):
+    """Расписание занятий на неделю или месяц.
+
+    Query params:
+        tg_username: @username пользователя
+        period: "week" (7 дней) или "month" (30 дней)
     """
-    from repositories.user_repository import UserRepository
-    from repositories.password_reset_repository import PasswordResetRepository
+    return await service.get_schedule(tg_username, period)
 
-    clean = data.tg_username.lstrip("@")
 
-    user_repo = UserRepository(db)
-    user = await user_repo.get_user_by_tg_username(clean)
-    if not user:
-        return TelegramForgotPasswordResponse(
-            ok=False,
-            message="Пользователь с таким Telegram username не найден.",
-        )
+# ═══════════════════════════════════════════════════════════════
+# Домашние задания (новое)
+# ═══════════════════════════════════════════════════════════════
 
-    chat_id = user.tg_chat_id
-    if not chat_id:
-        return TelegramForgotPasswordResponse(
-            ok=False,
-            message="Сначала нажмите /start в боте, чтобы активировать аккаунт.",
-        )
 
-    # Удаляем старые токены, создаём новый
-    reset_repo = PasswordResetRepository(db)
-    await reset_repo.delete_existing_tokens(user.username)
+@router.get("/my-assignments")
+async def get_my_assignments(
+    tg_username: str = Query(...),
+    _api_key: str = Depends(verify_bot_key),
+    service: TelegramService = Depends(get_telegram_service),
+):
+    """Назначенные тесты для ученика.
 
-    token = secrets.token_urlsafe(32)
-    await reset_repo.create_token(
-        email=user.username,
-        token=token,
-        expires_at=_dt.datetime.utcnow() + timedelta(hours=1),
-    )
-    await db.commit()
-
-    # Отправляем ссылку в Telegram
-    frontend_url = os.getenv("FRONTEND_URL", "https://test-front-lac.vercel.app")
-    reset_link = f"{frontend_url}/reset-password?token={token}"
-    bot_token = TG_BOT_API_KEY
-
-    try:
-        async with httpx.AsyncClient() as client:
-            resp = await client.post(
-                f"https://api.telegram.org/bot{bot_token}/sendMessage",
-                json={
-                    "chat_id": chat_id,
-                    "text": (
-                        f"🔑 *Сброс пароля*\n\n"
-                        f"Для сброса пароля перейдите по ссылке:\n"
-                        f"{reset_link}\n\n"
-                        f"Ссылка действительна 1 час."
-                    ),
-                    "parse_mode": "Markdown",
-                },
-                timeout=10.0,
-            )
-        if resp.status_code != 200:
-            import logging
-            logging.getLogger(__name__).error(
-                f"Telegram sendMessage error: {resp.status_code} {resp.text}"
-            )
-    except Exception as e:
-        import logging
-        logging.getLogger(__name__).error(f"Telegram sendMessage failed: {e}")
-
-    return TelegramForgotPasswordResponse(
-        ok=True,
-        message="Ссылка для сброса пароля отправлена вам в Telegram.",
-    )
+    Query params:
+        tg_username: @username ученика
+    """
+    return await service.get_my_assignments(tg_username)

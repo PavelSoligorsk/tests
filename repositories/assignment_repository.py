@@ -138,3 +138,7 @@ class AssignmentRepository:
         await self.db.execute(
             delete(TestAssignment).where(TestAssignment.user_id == user_id)
         )
+
+    async def get_by_student_id(self, student_id: int) -> List[TestAssignment]:
+        """Алиас для get_user_assignments."""
+        return await self.get_user_assignments(student_id)
