@@ -178,7 +178,48 @@ async def delete_tasks_batch(
     return result
 
 
-# --- Single-item routes (after batch to avoid shadowing) ---
+# --- Named-prefix GET routes (before {task_id} to avoid shadowing) ---
+
+
+@router.get("/tasks/by-topic/{topic}/section/{section}", response_model=List[TaskResponse])
+async def get_tasks_by_topic_section(
+    topic: str,
+    section: str,
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """Ленивая загрузка заданий по теме и разделу (как у учителя)"""
+    return await async_cache_result(
+        "teacher_tasks_by_topic_section",
+        None,
+        lambda: service.get_tasks_by_topic_section(topic, section),
+        model_class=TaskResponse,
+        ttl=3600,
+        topic=topic,
+        section=section
+    )
+
+
+@router.get("/tasks/by-class/", response_model=List[TaskResponse])
+async def get_tasks_by_class_topic(
+    task_class: str = Query(...),
+    topic_number: str = Query(...),
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """Ленивая загрузка заданий по классу и номеру темы (как у учителя)"""
+    return await async_cache_result(
+        "teacher_tasks_by_class",
+        None,
+        lambda: service.get_tasks_by_class_and_topic(task_class, topic_number),
+        model_class=TaskResponse,
+        ttl=3600,
+        task_class=task_class,
+        topic_number=topic_number
+    )
+
+
+# --- Single-item routes (after named-prefix to avoid shadowing) ---
 
 
 @router.get("/tasks/{task_id}", response_model=TaskResponse)
@@ -415,44 +456,6 @@ async def classify_tasks(
         raise HTTPException(status_code=500, detail=str(e))
 
 # ==================== ЛЕНИВАЯ ЗАГРУЗКА (МЕТА-ИНФОРМАЦИЯ) ====================
-
-@router.get("/tasks/by-topic/{topic}/section/{section}", response_model=List[TaskResponse])
-async def get_tasks_by_topic_section(
-    topic: str,
-    section: str,
-    service: AdminService = Depends(get_admin_service),
-    current_admin: User = Depends(auth.check_admin)
-):
-    """Ленивая загрузка заданий по теме и разделу (как у учителя)"""
-    return await async_cache_result(
-        "teacher_tasks_by_topic_section",
-        None,
-        lambda: service.get_tasks_by_topic_section(topic, section),
-        model_class=TaskResponse,
-        ttl=3600,
-        topic=topic,
-        section=section
-    )
-
-
-@router.get("/tasks/by-class/", response_model=List[TaskResponse])
-async def get_tasks_by_class_topic(
-    task_class: str = Query(...),
-    topic_number: str = Query(...),
-    service: AdminService = Depends(get_admin_service),
-    current_admin: User = Depends(auth.check_admin)
-):
-    """Ленивая загрузка заданий по классу и номеру темы (как у учителя)"""
-    return await async_cache_result(
-        "teacher_tasks_by_class",
-        None,
-        lambda: service.get_tasks_by_class_and_topic(task_class, topic_number),
-        model_class=TaskResponse,
-        ttl=3600,
-        task_class=task_class,
-        topic_number=topic_number
-    )
-
 
 @router.get("/tasks-meta")
 async def get_tasks_meta(
