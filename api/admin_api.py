@@ -416,6 +416,25 @@ async def classify_tasks(
 
 # ==================== ЛЕНИВАЯ ЗАГРУЗКА (МЕТА-ИНФОРМАЦИЯ) ====================
 
+@router.get("/tasks/by-topic/{topic}/section/{section}", response_model=List[TaskResponse])
+async def get_tasks_by_topic_section(
+    topic: str,
+    section: str,
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """Ленивая загрузка заданий по теме и разделу (как у учителя)"""
+    return await async_cache_result(
+        "teacher_tasks_by_topic_section",
+        None,
+        lambda: service.get_tasks_by_topic_section(topic, section),
+        model_class=TaskResponse,
+        ttl=3600,
+        topic=topic,
+        section=section
+    )
+
+
 @router.get("/tasks/by-class/", response_model=List[TaskResponse])
 async def get_tasks_by_class_topic(
     task_class: str = Query(...),
