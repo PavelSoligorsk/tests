@@ -917,12 +917,11 @@ class AdminService:
     CLASSIFY_MIN_TOKENS: int = 1024
     CLASSIFY_MAX_CONCURRENT = 10  # Семафор для классификации
 
-    async def classify_tasks(self, task_ids: list[int] | None = None, all_tasks: bool = False) -> ClassifyTasksResponse:
+    async def classify_tasks(self, task_ids: list[int] | None = None, include_classified: bool = False) -> ClassifyTasksResponse:
         """AI-классификация заданий: определяет topic/section для каждого задания.
 
-        Если передан task_ids — обрабатываются только указанные задания (без ограничений).
-        Если task_ids пуст/None и all_tasks=False — только неклассифицированные (без topic/section).
-        Если task_ids пуст/None и all_tasks=True — вообще все задания.
+        task_ids пуст = все задания.
+        include_classified=True — включая уже классифицированные, False — только неклассифицированные.
         """
         from services.ai_service import AIService
 
@@ -931,26 +930,20 @@ class AdminService:
         stats = {"classified": 0, "failed": 0}
 
         # 1. Получаем задания
+        stmt = select(Task)
         if task_ids:
-            result = await self.db.execute(
-                select(Task).where(Task.id.in_(task_ids))
-            )
+            stmt = stmt.where(Task.id.in_(task_ids))
             log.append(f"🔍 Обработка по ID: {len(task_ids)} шт.")
-        elif all_tasks:
-            result = await self.db.execute(
-                select(Task).order_by(Task.task_class, Task.topic_number)
-            )
-            log.append("🔍 Обработка ВСЕХ заданий (переклассификация)")
         else:
-            result = await self.db.execute(
-                select(Task)
-                .where(
-                    (Task.section.is_(None)) | (Task.section == "") |
-                    (Task.topic.is_(None)) | (Task.topic == "")
-                )
-                .order_by(Task.task_class, Task.topic_number)
+            log.append("🔍 Обработка всех заданий")
+        if not include_classified:
+            stmt = stmt.where(
+                (Task.section.is_(None)) | (Task.section == "") |
+                (Task.topic.is_(None)) | (Task.topic == "")
             )
-            log.append("🔍 Обработка только неклассифицированных заданий")
+            log.append("   (только неклассифицированные)")
+        stmt = stmt.order_by(Task.task_class, Task.topic_number)
+        result = await self.db.execute(stmt)
 
         tasks = list(result.scalars().all())
 
