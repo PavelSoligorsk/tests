@@ -449,7 +449,7 @@ async def classify_tasks(
     Если пустой — обрабатываются все неклассифицированные задания.
     """
     try:
-        result = await service.classify_tasks(payload.task_ids)
+        result = await service.classify_tasks(payload.task_ids, payload.all_tasks)
         _invalidate_task_caches()
         return result
     except Exception as e:

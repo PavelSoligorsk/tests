@@ -917,11 +917,12 @@ class AdminService:
     CLASSIFY_MIN_TOKENS: int = 1024
     CLASSIFY_MAX_CONCURRENT = 10  # Семафор для классификации
 
-    async def classify_tasks(self, task_ids: list[int] | None = None) -> ClassifyTasksResponse:
+    async def classify_tasks(self, task_ids: list[int] | None = None, all_tasks: bool = False) -> ClassifyTasksResponse:
         """AI-классификация заданий: определяет topic/section для каждого задания.
 
         Если передан task_ids — обрабатываются только указанные задания (без ограничений).
-        Если task_ids пуст/None — обрабатываются все задания без section/topic.
+        Если task_ids пуст/None и all_tasks=False — только неклассифицированные (без topic/section).
+        Если task_ids пуст/None и all_tasks=True — вообще все задания.
         """
         from services.ai_service import AIService
 
@@ -935,6 +936,11 @@ class AdminService:
                 select(Task).where(Task.id.in_(task_ids))
             )
             log.append(f"🔍 Обработка по ID: {len(task_ids)} шт.")
+        elif all_tasks:
+            result = await self.db.execute(
+                select(Task).order_by(Task.task_class, Task.topic_number)
+            )
+            log.append("🔍 Обработка ВСЕХ заданий (переклассификация)")
         else:
             result = await self.db.execute(
                 select(Task)
@@ -944,7 +950,7 @@ class AdminService:
                 )
                 .order_by(Task.task_class, Task.topic_number)
             )
-            log.append("🔍 Обработка всех неклассифицированных заданий")
+            log.append("🔍 Обработка только неклассифицированных заданий")
 
         tasks = list(result.scalars().all())
 

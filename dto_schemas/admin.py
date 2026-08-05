@@ -143,6 +143,7 @@ class BatchTaskDeleteResponse(BaseModel):
 class ClassifyTasksRequest(BaseModel):
     """Запрос на AI-классификацию заданий"""
     task_ids: list[int] = Field(default=[], description="Список ID заданий для классификации (без ограничений)")
+    all_tasks: bool = Field(default=False, description="True — классифицировать все задания, False — только неклассифицированные (если task_ids пуст)")
 
 
 class ClassifyTasksResponse(BaseModel):
