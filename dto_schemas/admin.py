@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from dto_schemas.task import TaskBase, TaskResponse
 
@@ -49,7 +49,22 @@ class RecomputeAnswersResponse(BaseModel):
 
 class BatchTaskCreateItem(TaskBase):
     """Одно задание в пакете для создания"""
-    pass
+
+    @model_validator(mode='after')
+    def validate_options(self):
+        if not self.is_open_answer and (not self.options or len(self.options) == 0):
+            raise ValueError(f"task_class={self.task_class} topic_number={self.topic_number}: для закрытого задания поле options обязательно.")
+        if self.is_open_answer and self.options:
+            raise ValueError(f"task_class={self.task_class} topic_number={self.topic_number}: для открытого задания поле options должно быть пустым.")
+        if not self.content or not self.content.strip():
+            raise ValueError(f"task_class={self.task_class} topic_number={self.topic_number}: поле content обязательно.")
+        if not self.answer or not self.answer.strip():
+            raise ValueError(f"task_class={self.task_class} topic_number={self.topic_number}: поле answer обязательно.")
+        if not self.task_class or not self.task_class.strip():
+            raise ValueError("Поле task_class обязательно.")
+        if not self.topic_number or not self.topic_number.strip():
+            raise ValueError("Поле topic_number обязательно.")
+        return self
 
 
 class BatchTaskCreateRequest(BaseModel):
@@ -81,6 +96,17 @@ class BatchTaskUpdateItem(BaseModel):
     difficulty: Optional[int] = None
 
     model_config = ConfigDict(from_attributes=True)
+
+    @model_validator(mode='after')
+    def validate_options(self):
+        if self.is_open_answer is not None:
+            if not self.is_open_answer and self.options is not None and len(self.options) == 0:
+                raise ValueError(f"id={self.id}: для закрытого задания options не может быть пустым.")
+            if self.is_open_answer and self.options is not None and len(self.options) > 0:
+                raise ValueError(f"id={self.id}: для открытого задания options должно быть пустым.")
+        if self.difficulty is not None and (self.difficulty < 1 or self.difficulty > 5):
+            raise ValueError(f"id={self.id}: difficulty должно быть от 1 до 5.")
+        return self
 
 
 class BatchTaskUpdateRequest(BaseModel):

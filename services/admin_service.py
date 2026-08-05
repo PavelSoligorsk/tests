@@ -35,9 +35,17 @@ from dto_schemas.cached import (
     ResultUserResponse,
     TeacherHistoryItemResponse,
     TeacherHistoryResultResponse,
+    TeacherTaskMetaResponse,
+    TeacherTaskMetaByTopicSectionResponse,
+    TeacherTaskDetailResponse,
 )
 
 logger = logging.getLogger(__name__)
+
+
+class PermissionError(Exception):
+    """Ошибка доступа."""
+    pass
 
 
 class AdminService:
@@ -817,6 +825,86 @@ class AdminService:
             answers_updated=answers_updated,
             results_updated=results_updated
         )
+
+    # ==================== ЛЕНИВАЯ ЗАГРУЗКА (МЕТА-ИНФОРМАЦИЯ) ====================
+
+    async def get_tasks_by_class_and_topic(self, task_class: str, topic_number: str):
+        """Ленивая загрузка заданий по классу и номеру темы"""
+        return await self.task_repo.get_tasks_by_class_and_topic(task_class, topic_number)
+
+    async def get_tasks_meta(self):
+        """Получить метаинформацию: { task_class: { topic_number: count } }"""
+        tasks = await self.task_repo.get_all_tasks()
+        result = {}
+        for task in tasks:
+            cls = str(task.task_class)
+            topic_num = str(task.topic_number)
+
+            if cls not in result:
+                result[cls] = {}
+            if topic_num not in result[cls]:
+                result[cls][topic_num] = 0
+
+            result[cls][topic_num] += 1
+
+        return TeacherTaskMetaResponse(result)
+
+    async def get_tasks_meta_by_topic_section(self):
+        """Получить метаинформацию по topic и section: { topic: { section: count } }"""
+        tasks = await self.task_repo.get_all_tasks()
+        result = {}
+
+        for task in tasks:
+            topic = task.topic or "Без темы"
+            section = task.section or "Без раздела"
+
+            if topic not in result:
+                result[topic] = {}
+            if section not in result[topic]:
+                result[topic][section] = 0
+
+            result[topic][section] += 1
+
+        return TeacherTaskMetaByTopicSectionResponse(result)
+
+    # ==================== РАБОТА С ТЕСТАМИ ====================
+
+    async def get_tests(self, admin_id: int):
+        """Получить все тесты (админ видит все)"""
+        return await self.test_repo.get_teacher_tests(admin_id, "admin")
+
+    async def get_test_detail(self, test_id: int, admin_id: int):
+        """Получить детальную информацию о тесте"""
+        test = await self.test_repo.get_test_with_tasks(test_id)
+
+        if not test:
+            raise ValueError("Тест не найден")
+
+        return test
+
+    async def get_test_tasks(self, test_id: int, admin_id: int):
+        """Получить задания теста (для ленивой загрузки)"""
+        test = await self.test_repo.get_test_with_tasks(test_id)
+        if not test:
+            raise ValueError("Тест не найден")
+
+        tasks = []
+        for task in test.tasks:
+            tasks.append(TeacherTaskDetailResponse(
+                id=task.id,
+                content=task.content,
+                options=task.options,
+                answer=task.answer,
+                hint=task.hint,
+                solution=task.solution,
+                is_open_answer=task.is_open_answer,
+                difficulty=task.difficulty,
+                topic=task.topic,
+                section=task.section,
+                topic_number=task.topic_number,
+                task_class=task.task_class,
+            ))
+        return tasks
 
     # ==================== AI-КЛАССИФИКАЦИЯ ЗАДАНИЙ ====================
 

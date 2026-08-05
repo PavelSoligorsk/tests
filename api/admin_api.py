@@ -14,11 +14,14 @@ from dto_schemas import (
     BatchTaskUpdateRequest, BatchTaskUpdateResponse,
     BatchTaskDeleteRequest, BatchTaskDeleteResponse,
     ClassifyTasksRequest, ClassifyTasksResponse,
+    TestResponse, TeacherTaskMetaResponse,
+    TeacherTaskMetaByTopicSectionResponse,
+    TeacherTaskDetailResponse,
 )
 from core import auth
-from core.cache import invalidate_cache_pattern
+from core.cache import invalidate_cache_pattern, async_cache_result, invalidate_user_cache
 from core.database import get_db
-from services.admin_service import AdminService
+from services.admin_service import AdminService, PermissionError
 
 router = APIRouter(prefix="/admin", tags=["Admin"])
 
@@ -410,6 +413,118 @@ async def classify_tasks(
         return result
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# ==================== ЛЕНИВАЯ ЗАГРУЗКА (МЕТА-ИНФОРМАЦИЯ) ====================
+
+@router.get("/tasks/by-class/", response_model=List[TaskResponse])
+async def get_tasks_by_class_topic(
+    task_class: str = Query(...),
+    topic_number: str = Query(...),
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """Ленивая загрузка заданий по классу и номеру темы (как у учителя)"""
+    return await async_cache_result(
+        "teacher_tasks_by_class",
+        None,
+        lambda: service.get_tasks_by_class_and_topic(task_class, topic_number),
+        model_class=TaskResponse,
+        ttl=3600,
+        task_class=task_class,
+        topic_number=topic_number
+    )
+
+
+@router.get("/tasks-meta")
+async def get_tasks_meta(
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """Получить только структуру заданий (классы, темы) без содержимого"""
+    return await async_cache_result(
+        "teacher_tasks_meta",
+        None,
+        lambda: service.get_tasks_meta(),
+        model_class=TeacherTaskMetaResponse,
+        ttl=7200
+    )
+
+
+@router.get("/tasks-meta-by-topic-section")
+async def get_tasks_meta_by_topic_section(
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """Получить структуру: { topic: { section: count } }"""
+    return await async_cache_result(
+        "teacher_tasks_meta_by_topic_section",
+        None,
+        lambda: service.get_tasks_meta_by_topic_section(),
+        model_class=TeacherTaskMetaByTopicSectionResponse,
+        ttl=7200
+    )
+
+
+# ==================== РАБОТА С ТЕСТАМИ ====================
+
+@router.get("/tests", response_model=List[TestResponse])
+async def get_all_tests(
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """Получить все тесты (админ видит все)"""
+    return await async_cache_result(
+        "teacher_tests",
+        current_admin.id,
+        lambda: service.get_tests(current_admin.id),
+        model_class=TestResponse,
+        ttl=300
+    )
+
+
+@router.get("/tests/{test_id}", response_model=TestResponse)
+async def get_test_detail(
+    test_id: int,
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """Получить детали теста"""
+    try:
+        return await async_cache_result(
+            "teacher_test_detail",
+            current_admin.id,
+            lambda: service.get_test_detail(test_id, current_admin.id),
+            model_class=TestResponse,
+            ttl=300,
+            entity_id=test_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
+@router.get("/tests/{test_id}/tasks")
+async def get_test_tasks(
+    test_id: int,
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """Получить только задания теста (ленивая загрузка)"""
+    try:
+        return await async_cache_result(
+            "teacher_test_tasks",
+            current_admin.id,
+            lambda: service.get_test_tasks(test_id, current_admin.id),
+            model_class=TaskResponse,
+            ttl=300,
+            entity_id=test_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
 
 @router.post("/rebuild-all-static-tests")
 async def rebuild_all_static_tests(
