@@ -832,6 +832,10 @@ class AdminService:
         """Ленивая загрузка заданий по классу и номеру темы"""
         return await self.task_repo.get_tasks_by_class_and_topic(task_class, topic_number)
 
+    async def get_tasks_by_topic_section(self, topic: str, section: str):
+        """Ленивая загрузка заданий по теме и разделу"""
+        return await self.task_repo.get_tasks_by_topic_and_section(topic, section)
+
     async def get_tasks_meta(self):
         """Получить метаинформацию: { task_class: { topic_number: count } }"""
         tasks = await self.task_repo.get_all_tasks()
