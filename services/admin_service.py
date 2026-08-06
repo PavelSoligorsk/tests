@@ -917,11 +917,12 @@ class AdminService:
     CLASSIFY_MIN_TOKENS: int = 1024
     CLASSIFY_MAX_CONCURRENT = 10  # Семафор для классификации
 
-    async def classify_tasks(self, task_ids: list[int] | None = None, include_classified: bool = False) -> ClassifyTasksResponse:
+    async def classify_tasks(self, task_ids: list[int] | None = None, include_classified: bool = False, reestimate_difficulty: bool = False) -> ClassifyTasksResponse:
         """AI-классификация заданий: определяет topic/section для каждого задания.
 
         task_ids пуст = все задания.
         include_classified=True — включая уже классифицированные, False — только неклассифицированные.
+        reestimate_difficulty=True — только задания с difficulty=1 или без сложности, переоценить их сложность.
         """
         from services.ai_service import AIService
 
@@ -936,7 +937,12 @@ class AdminService:
             log.append(f"🔍 Обработка по ID: {len(task_ids)} шт.")
         else:
             log.append("🔍 Обработка всех заданий")
-        if not include_classified:
+        if reestimate_difficulty:
+            stmt = stmt.where(
+                (Task.difficulty.is_(None)) | (Task.difficulty == 1)
+            )
+            log.append("   (только с difficulty=1 или без сложности)")
+        elif not include_classified:
             stmt = stmt.where(
                 (Task.section.is_(None)) | (Task.section == "") |
                 (Task.topic.is_(None)) | (Task.topic == "")
