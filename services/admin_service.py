@@ -938,13 +938,11 @@ class AdminService:
         else:
             log.append("🔍 Обработка всех заданий")
         # Filter logic:
-        # - reestimate_difficulty + include_classified → all tasks (no filter)
-        # - reestimate_difficulty only → difficulty=1 or NULL
-        # - include_classified only → all tasks (no filter)
+        # - reestimate_difficulty + include_classified → difficulty=1/NULL, save topic+section+difficulty
+        # - reestimate_difficulty only → difficulty=1/NULL, save ONLY difficulty
+        # - include_classified only → all tasks (no filter), save everything
         # - neither → unclassified only
-        if reestimate_difficulty and include_classified:
-            log.append("   (все задания: переоценка сложности + классификация)")
-        elif reestimate_difficulty:
+        if reestimate_difficulty:
             stmt = stmt.where(
                 (Task.difficulty.is_(None)) | (Task.difficulty == 1)
             )
