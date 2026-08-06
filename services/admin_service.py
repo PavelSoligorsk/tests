@@ -981,8 +981,11 @@ class AdminService:
                     if classification and classification.get("topic"):
                         task.topic = classification["topic"]
                         task.section = classification.get("section", "")
+                        diff = classification.get("difficulty")
+                        if diff is not None and isinstance(diff, int) and 1 <= diff <= 5:
+                            task.difficulty = diff
                         stats["classified"] += 1
-                        return f"{prefix} 🏷️  topic={task.topic}, section={task.section}"
+                        return f"{prefix} 🏷️  topic={task.topic}, section={task.section}, diff={task.difficulty}"
                     else:
                         stats["failed"] += 1
                         return f"{prefix} ⚠️ AI не вернул topic/section"
@@ -1018,18 +1021,19 @@ class AdminService:
 
         # Бутстрап: если в БД ещё нет тем — AI классифицирует свободно
         if not topics_structure:
-            prompt = f"""Classify this math task by topic and section.
-Output ONLY a JSON object: {{"topic": "...", "section": "..."}}
+            prompt = f"""Classify this math task by topic, section, and difficulty.
+Output ONLY a JSON object: {{"topic": "...", "section": "...", "difficulty": N}}
 
 === TASK INFO ===
 Type: {task_type}
-Difficulty: {task.difficulty}/5
+Current difficulty: {task.difficulty or 'not set'}/5
 Problem:
 {task.content[:600]}
 
 === CLASSIFICATION GUIDELINES ===
 - topic - broad category (e.g., "Алгебра", "Геометрия", "Тригонометрия", "Логарифмы", "Прогрессии", "Функции", "Неравенства")
 - section - specific subtopic (e.g., "Квадратные уравнения", "Площади фигур", "Тригонометрические уравнения", "Стереометрия")
+- difficulty - integer from 1 (easiest) to 5 (hardest), based on number of solution steps and math level required
 - Choose the most specific topic and section that matches this problem."""
         else:
             # Нормальный режим: список тем из БД
@@ -1042,12 +1046,12 @@ Problem:
                     available_lines.append(f'  - "{topic}" (без разделов)')
             available_str = "\n".join(available_lines)
 
-            prompt = f"""Classify this math task by topic and section.
-Output ONLY a JSON object: {{"topic": "...", "section": "..."}}
+            prompt = f"""Classify this math task by topic, section, and difficulty.
+Output ONLY a JSON object: {{"topic": "...", "section": "...", "difficulty": N}}
 
 === TASK INFO ===
 Type: {task_type}
-Difficulty: {task.difficulty}/5
+Current difficulty: {task.difficulty or 'not set'}/5
 Problem:
 {task.content[:600]}
 
@@ -1057,6 +1061,7 @@ Problem:
 === CLASSIFICATION GUIDELINES ===
 - topic MUST be one of the listed topics above.
 - section MUST be one of the listed sections under that topic (or "" if none listed or none applies).
+- difficulty - integer from 1 (easiest) to 5 (hardest), based on number of solution steps and math level required
 - Choose the most specific match. If nothing fits, pick the closest topic from the list.
 - Do NOT invent topics or sections that are not in the list above."""
         try:
@@ -1079,6 +1084,7 @@ Problem:
                 data = json.loads(m.group())
                 topic = data.get("topic")
                 section = data.get("section", "")
+                difficulty = data.get("difficulty")
                 if topic:
                     # Валидация: тема должна быть среди существующих в БД
                     # Но если БД пустая — доверяем AI (бутстрап)
@@ -1089,6 +1095,14 @@ Problem:
                     if topics_structure and section and section not in topics_structure.get(topic, set()):
                         logger.warning(f"Classify task #{task.id}: AI вернул раздел '{section}' для темы '{topic}', но такого раздела нет в БД (доступны: {topics_structure.get(topic, set())})")
                         return None
+                    # Валидация difficulty
+                    if difficulty is not None:
+                        try:
+                            diff = int(difficulty)
+                            if 1 <= diff <= 5:
+                                data["difficulty"] = diff
+                        except (ValueError, TypeError):
+                            pass
                     return data
                 else:
                     logger.warning(f"Classify task #{task.id}: JSON parsed but no 'topic' field: {data}")
