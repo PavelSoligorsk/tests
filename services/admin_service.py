@@ -996,11 +996,12 @@ class AdminService:
                             task.topic = classification["topic"]
                             task.section = classification.get("section", "")
                             changed.append(f"topic={task.topic}")
-                        # difficulty
-                        diff = classification.get("difficulty")
-                        if diff is not None and isinstance(diff, int) and 1 <= diff <= 5:
-                            task.difficulty = diff
-                            changed.append(f"diff={task.difficulty}")
+                        # difficulty — only when explicitly requested
+                        if reestimate_difficulty:
+                            diff = classification.get("difficulty")
+                            if diff is not None and isinstance(diff, int) and 1 <= diff <= 5:
+                                task.difficulty = diff
+                                changed.append(f"diff={task.difficulty}")
                         if changed:
                             stats["classified"] += 1
                             return f"{prefix} ✅ {', '.join(changed)}"
