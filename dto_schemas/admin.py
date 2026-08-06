@@ -144,7 +144,8 @@ class ClassifyTasksRequest(BaseModel):
     """Запрос на AI-классификацию заданий"""
     task_ids: list[int] = Field(default=[], description="Список ID заданий. Пустой массив = все задания.")
     include_classified: bool = Field(default=False, description="True — включая уже классифицированные, False — только неклассифицированные")
-    reestimate_difficulty: bool = Field(default=False, description="True — переоценить сложность для заданий с difficulty=1 или без сложности")
+    reestimate_difficulty: bool = Field(default=False, description="True — только задания с difficulty=1 или без сложности, переоценить сложность")
+    skip_classification: bool = Field(default=False, description="True — НЕ менять topic/section, только difficulty (требует reestimate_difficulty=True)")
 
 
 class ClassifyTasksResponse(BaseModel):

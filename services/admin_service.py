@@ -917,12 +917,13 @@ class AdminService:
     CLASSIFY_MIN_TOKENS: int = 1024
     CLASSIFY_MAX_CONCURRENT = 10  # Семафор для классификации
 
-    async def classify_tasks(self, task_ids: list[int] | None = None, include_classified: bool = False, reestimate_difficulty: bool = False) -> ClassifyTasksResponse:
-        """AI-классификация заданий: определяет topic/section для каждого задания.
+    async def classify_tasks(self, task_ids: list[int] | None = None, include_classified: bool = False, reestimate_difficulty: bool = False, skip_classification: bool = False) -> ClassifyTasksResponse:
+        """AI-классификация заданий: topic/section/difficulty.
 
         task_ids пуст = все задания.
-        include_classified=True — включая уже классифицированные, False — только неклассифицированные.
-        reestimate_difficulty=True — только задания с difficulty=1 или без сложности, переоценить их сложность.
+        include_classified=True — включая уже размеченные.
+        reestimate_difficulty=True — только задания с difficulty=1/NULL.
+        skip_classification=True — не менять topic/section, только difficulty.
         """
         from services.ai_service import AIService
 
@@ -937,11 +938,7 @@ class AdminService:
             log.append(f"🔍 Обработка по ID: {len(task_ids)} шт.")
         else:
             log.append("🔍 Обработка всех заданий")
-        # Filter logic:
-        # - reestimate_difficulty + include_classified → difficulty=1/NULL, save topic+section+difficulty
-        # - reestimate_difficulty only → difficulty=1/NULL, save ONLY difficulty
-        # - include_classified only → all tasks (no filter), save everything
-        # - neither → unclassified only
+        # Filters:
         if reestimate_difficulty:
             stmt = stmt.where(
                 (Task.difficulty.is_(None)) | (Task.difficulty == 1)
@@ -953,6 +950,8 @@ class AdminService:
                 (Task.topic.is_(None)) | (Task.topic == "")
             )
             log.append("   (только неклассифицированные)")
+        if skip_classification:
+            log.append("   (только difficulty, topic/section не трогаем)")
         stmt = stmt.order_by(Task.task_class, Task.topic_number)
         result = await self.db.execute(stmt)
 
@@ -990,34 +989,24 @@ class AdminService:
                 try:
                     classification = await self._ai_classify_task(ai, task, topics_structure)
                     if classification and (classification.get("topic") or classification.get("difficulty") is not None):
-                        # reestimate_difficulty solo: save ONLY difficulty, don't touch topic/section
-                        if reestimate_difficulty and not include_classified:
-                            diff = classification.get("difficulty")
-                            if diff is not None and isinstance(diff, int) and 1 <= diff <= 5:
-                                task.difficulty = diff
-                                stats["classified"] += 1
-                                return f"{prefix} 🔢  diff={task.difficulty}"
-                            else:
-                                # AI gave difficulty but invalid → try to get topic/section too
-                                if classification.get("topic"):
-                                    task.topic = classification["topic"]
-                                    task.section = classification.get("section", "")
-                                if diff is not None and isinstance(diff, (int, float)):
-                                    d = int(diff)
-                                    if 1 <= d <= 5:
-                                        task.difficulty = d
-                                stats["classified"] += 1
-                                return f"{prefix} 🔢  diff={task.difficulty}"
-                        else:
-                            # Normal mode or combo: save topic + section + difficulty
-                            if classification.get("topic"):
-                                task.topic = classification["topic"]
-                                task.section = classification.get("section", "")
-                            diff = classification.get("difficulty")
-                            if diff is not None and isinstance(diff, int) and 1 <= diff <= 5:
-                                task.difficulty = diff
+                        # Save logic:
+                        changed = []
+                        # topic/section
+                        if not skip_classification and classification.get("topic"):
+                            task.topic = classification["topic"]
+                            task.section = classification.get("section", "")
+                            changed.append(f"topic={task.topic}")
+                        # difficulty
+                        diff = classification.get("difficulty")
+                        if diff is not None and isinstance(diff, int) and 1 <= diff <= 5:
+                            task.difficulty = diff
+                            changed.append(f"diff={task.difficulty}")
+                        if changed:
                             stats["classified"] += 1
-                            return f"{prefix} 🏷️  topic={task.topic}, section={task.section}, diff={task.difficulty}"
+                            return f"{prefix} ✅ {', '.join(changed)}"
+                        else:
+                            stats["failed"] += 1
+                            return f"{prefix} ⚠️ нечего сохранять"
                     else:
                         stats["failed"] += 1
                         return f"{prefix} ⚠️ AI не вернул topic/section"
