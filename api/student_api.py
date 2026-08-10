@@ -370,7 +370,11 @@ async def generate_ai_test(
             current_user.id,
             request.prompt,
             request.task_count,
-            request.difficulty
+            request.difficulty,
+            request.topic,
+            request.section,
+            request.exclude_recent_weeks,
+            request.use_stats,
         )
         
         # Инвалидируем кеш AI тестов

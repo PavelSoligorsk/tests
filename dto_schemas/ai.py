@@ -11,9 +11,13 @@ class TheoryQuestionRequest(BaseModel):
 
 
 class AITestRequest(BaseModel):
-    prompt: str
-    task_count: int = 10
+    prompt: str = ""
+    task_count: int = Field(default=10, ge=1, le=50)
     difficulty: Optional[str] = None
+    topic: Optional[str] = None
+    section: Optional[str] = None
+    exclude_recent_weeks: float = Field(default=0.0, ge=0.0)
+    use_stats: bool = False
 
     model_config = ConfigDict(from_attributes=True)
 

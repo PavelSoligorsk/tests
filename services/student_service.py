@@ -517,24 +517,39 @@ class StudentService:
             ),
         )
     
-    async def generate_ai_test(self, user_id: int, prompt: str, task_count: int, difficulty: Optional[str] = None):
+    async def generate_ai_test(self, user_id: int, prompt: str = "", task_count: int = 10, difficulty: Optional[str] = None, topic: Optional[str] = None, section: Optional[str] = None, exclude_recent_weeks: float = 0.0, use_stats: bool = False):
         """Сгенерировать тест с помощью AI"""
         
-        # Шаг 1: AI определяет темы и разделы
-        structure_data = await self.task_repo.get_tasks_structure()
+        # Если указаны topic/section — используем их напрямую
+        if topic:
+            detected_topics = [{"name": topic, "sections": [section] if section else []}]
+        elif prompt:
+            # AI определяет темы и разделы
+            structure_data = await self.task_repo.get_tasks_structure()
+            
+            topics_structure = {}
+            for tpc, sec in structure_data:
+                if tpc not in topics_structure:
+                    topics_structure[tpc] = set()
+                if sec:
+                    topics_structure[tpc].add(sec)
+            
+            detected_topics = await self.ai_service.classify_topics(prompt, topics_structure)
+            
+            # Если AI ничего не определил - случайный тест
+            if not detected_topics:
+                return await self._generate_random_test(user_id, prompt or topic or "random", task_count, difficulty)
+        else:
+            raise ValueError("Укажите prompt или topic")
         
-        topics_structure = {}
-        for topic, section in structure_data:
-            if topic not in topics_structure:
-                topics_structure[topic] = set()
-            if section:
-                topics_structure[topic].add(section)
-        
-        detected_topics = await self.ai_service.classify_topics(prompt, topics_structure)
-        
-        # Если AI ничего не определил - случайный тест
-        if not detected_topics:
-            return await self._generate_random_test(user_id, prompt, task_count, difficulty)
+        # Use stats for personalization
+        if use_stats:
+            user_stats = await self.user_repo.get_user_stats(user_id)
+            if user_stats.get("weakest_topic"):
+                # Add weakest topic to detected if not already there
+                weakest = user_stats["weakest_topic"]
+                if not any(t.get("name") == weakest for t in detected_topics):
+                    detected_topics.append({"name": weakest, "sections": []})
         
         # Шаг 2: Фильтрация заданий
         difficulty_map = {
@@ -563,7 +578,7 @@ class StudentService:
             filtered_tasks = await self.task_repo.get_tasks_by_topics(topic_names, sections_map, target_difficulties)
         
         # Fallback: поиск по ключевым словам
-        if not filtered_tasks:
+        if not filtered_tasks and prompt:
             keywords = [w for w in re.sub(r'[^\w\s]', '', prompt).split() if len(w) > 3]
             if keywords:
                 filtered_tasks = await self.task_repo.get_tasks_by_keywords(keywords, target_difficulties)
@@ -574,6 +589,22 @@ class StudentService:
         
         if not filtered_tasks:
             raise ValueError("Нет доступных заданий")
+        
+        # Exclude recently solved tasks
+        if exclude_recent_weeks > 0:
+            import datetime
+            recent_cutoff = datetime.datetime.utcnow() - datetime.timedelta(weeks=exclude_recent_weeks)
+            results = await self.result_repo.get_user_history(user_id)
+            recent_task_ids = set()
+            for r in results:
+                if r.completed_at and r.completed_at > recent_cutoff:
+                    answers = await self.result_repo.get_user_answers_for_result(r.id)
+                    for ans in answers:
+                        recent_task_ids.add(ans.task_id)
+            if recent_task_ids:
+                filtered_tasks = [t for t in filtered_tasks if t.id not in recent_task_ids]
+                if not filtered_tasks:
+                    raise ValueError(f"Все задания этого типа решены за последние {exclude_recent_weeks} нед. Попробуйте другую тему.")
         
         # Шаг 3: AI выбирает лучшие задания
         tasks_for_ai = []
