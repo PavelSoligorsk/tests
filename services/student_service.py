@@ -57,6 +57,22 @@ class StudentService:
             stats=UserStats(**stats_dict),
         )
     
+    async def get_detailed_stats(self, user_id: int, period: str = "all"):
+        """Получить детальную статистику (сводка + темы + сложность)"""
+        from services.stats_service import StatsService
+        stats_svc = StatsService(self.db)
+        
+        period_stats = await stats_svc.get_period_stats(user_id, period, await self.user_repo.get_user_by_id(user_id))
+        topics_stats = await stats_svc.get_topics_stats(user_id, period, await self.user_repo.get_user_by_id(user_id))
+        difficulty_stats = await stats_svc.get_difficulty_stats(user_id, period, await self.user_repo.get_user_by_id(user_id))
+        
+        from dto_schemas.stats import FullStatsResponse
+        return FullStatsResponse(
+            period=period_stats,
+            topics=topics_stats,
+            difficulties=difficulty_stats,
+        )
+    
     async def update_profile(self, user_id: int, update_data: dict):
         """Обновить профиль студента"""
         user = await self.user_repo.get_user_by_id(user_id)

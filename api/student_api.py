@@ -11,6 +11,7 @@ from dto_schemas import (
     TheoryQuestionRequest, TestAnswerSubmission, StartAssignedTestResponse,
     RetakeTestResponse,
     SaveProgressRequest, SaveProgressResponse,
+    FullStatsResponse,
 )
 from core import auth
 from core.database import get_db
@@ -41,6 +42,19 @@ async def get_student_profile(
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+
+
+@router.get("/me/stats", response_model=FullStatsResponse)
+async def get_my_detailed_stats(
+    period: str = "all",
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """Получить детальную статистику: сводка + по темам + по сложности"""
+    try:
+        return await service.get_detailed_stats(current_user.id, period)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 @router.put("/me", response_model=UserResponse)
