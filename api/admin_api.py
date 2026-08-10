@@ -17,6 +17,7 @@ from dto_schemas import (
     TestResponse, TeacherTaskMetaResponse,
     TeacherTaskMetaByTopicSectionResponse,
     TeacherTaskDetailResponse,
+    FullStatsResponse,
 )
 from core import auth
 from core.cache import invalidate_cache_pattern, async_cache_result, invalidate_user_cache
@@ -112,6 +113,20 @@ async def get_user_history(
     current_admin: User = Depends(auth.check_admin)
 ):
     return await service.get_user_history(user_id)
+
+
+@router.get("/users/{user_id}/stats", response_model=FullStatsResponse)
+async def get_user_detailed_stats(
+    user_id: int,
+    period: str = "all",
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """Детальная статистика пользователя (сводка + по темам + по сложности)"""
+    try:
+        return await service.get_user_detailed_stats(user_id, period)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ==================== ЗАДАНИЯ ====================
