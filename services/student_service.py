@@ -1,5 +1,6 @@
 import re
 import random
+import json
 from typing import List, Dict, Optional
 from repositories.user_repository import UserRepository
 from repositories.test_repository import TestRepository
@@ -405,9 +406,13 @@ class StudentService:
         
         hint = await self.ai_service.get_hint(task_dict, topic_mastery['percentage'])
         
+        # Parse GeoGebra block
+        geogebra = self._parse_geogebra(hint)
+        
         return AIHintResponse(
             task_id=task_id,
             hint=hint,
+            geogebra=geogebra,
             context=AIHintContext(
                 task_class=task.task_class,
                 topic_number=task.topic_number,
@@ -439,6 +444,9 @@ class StudentService:
         
         ai_solution = await self.ai_service.get_solution(task_dict, topic_mastery['percentage'])
         
+        # Parse GeoGebra block
+        geogebra = self._parse_geogebra(ai_solution)
+        
         # Извлечение ответа ИИ
         answer_pattern = r'=== ОТВЕТ ===\s*(.+?)(?:\n|$)'
         match = re.search(answer_pattern, ai_solution, re.IGNORECASE)
@@ -450,6 +458,7 @@ class StudentService:
                 verified=False,
                 message="Решение ИИ не найдено (нет маркера '=== ОТВЕТ ===')",
                 ai_solution=ai_solution,
+                geogebra=geogebra,
             )
         
         ai_answer = match.group(1).strip()
@@ -463,6 +472,7 @@ class StudentService:
             ai_solution=ai_solution,
             ai_answer=ai_answer,
             correct_answer=task.answer,
+            geogebra=geogebra,
             context=AISolutionContext(
                 task_class=task.task_class,
                 topic_number=task.topic_number,
@@ -965,6 +975,17 @@ class StudentService:
             "percentage": percentage
         }
     
+    def _parse_geogebra(self, text: str) -> Optional[dict]:
+        """Parse === GEOGEBRA === block from AI response."""
+        pattern = r'=== GEOGEBRA ===\s*(\{[^}]+\})'
+        match = re.search(pattern, text, re.IGNORECASE)
+        if match:
+            try:
+                return json.loads(match.group(1))
+            except (json.JSONDecodeError, Exception):
+                pass
+        return None
+
     def _verify_answer(self, ai_answer: str, correct_answer: str) -> bool:
         """Сверить ответ ИИ с правильным"""
         if not correct_answer:

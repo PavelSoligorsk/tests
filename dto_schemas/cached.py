@@ -358,6 +358,7 @@ class AIHintResponse(BaseModel):
     task_id: int
     hint: str
     context: AIHintContext
+    geogebra: Optional[dict] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -374,12 +375,13 @@ class AISolutionContext(BaseModel):
 class AISolutionResponse(BaseModel):
     task_id: int
     success: bool
-    verified: bool = False
-    message: str = ""
-    ai_solution: str = ""
-    ai_answer: str = ""
-    correct_answer: str = ""
-    context: AISolutionContext = Field(default_factory=AISolutionContext)
+    verified: bool
+    message: str
+    ai_solution: str
+    ai_answer: Optional[str] = None
+    correct_answer: Optional[str] = None
+    context: AISolutionContext
+    geogebra: Optional[dict] = None
 
     model_config = ConfigDict(from_attributes=True)
 
