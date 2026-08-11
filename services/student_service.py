@@ -976,9 +976,18 @@ class StudentService:
         }
     
     def _parse_geogebra(self, text: str) -> Optional[dict]:
-        """Parse === GEOGEBRA === block from AI response."""
-        pattern = r'=== GEOGEBRA ===\s*(\{[^}]+\})'
-        match = re.search(pattern, text, re.IGNORECASE)
+        """Parse <GeoGebra setup={{`...`}} height="..." /> from AI response."""
+        # New format: <GeoGebra setup={{`command1\ncommand2`}} height="400" />
+        pattern = r'<GeoGebra\s+setup=\{\{`([^`]*)`\}\}\s+height="(\d+)"'
+        match = re.search(pattern, text)
+        if match:
+            return {
+                "setup": match.group(1),
+                "height": match.group(2),
+            }
+        # Old format: === GEOGEBRA === {json}
+        old_pattern = r'=== GEOGEBRA ===\s*(\{[^}]+\})'
+        match = re.search(old_pattern, text, re.IGNORECASE)
         if match:
             try:
                 return json.loads(match.group(1))

@@ -5,7 +5,7 @@ from typing import Optional
 class TheoryQuestionRequest(BaseModel):
     theory_id: Optional[int] = None
     question: str
-    theory_content: str = ""
+    theory_content: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

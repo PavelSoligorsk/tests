@@ -13,6 +13,7 @@ from dto_schemas import (
     GroupAssignResponse, AddStudentsToGroupResponse, MessageResponse,
     TeacherTaskMetaResponse, TeacherTaskMetaByTopicSectionResponse,
     TeacherAITestRequest,
+    FullStatsResponse,
 )
 from dto_schemas.user import UserUpdate
 from repositories.user_repository import UserRepository
@@ -484,6 +485,22 @@ async def get_student_history(
         return await service.get_student_history(user_id, current_teacher.id)
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
+@router.get("/students/{student_id}/stats", response_model=FullStatsResponse)
+async def get_student_detailed_stats(
+    student_id: int,
+    period: str = "all",
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: User = Depends(check_teacher)
+):
+    """Детальная статистика ученика (сводка + по темам + по сложности)"""
+    try:
+        return await service.get_student_detailed_stats(student_id, current_teacher.id, period)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
     except PermissionError as e:
         raise HTTPException(status_code=403, detail=str(e))
 
