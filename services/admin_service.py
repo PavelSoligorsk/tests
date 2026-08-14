@@ -1055,8 +1055,16 @@ Problem:
 === CLASSIFICATION GUIDELINES ===
 - topic - broad category (e.g., "Алгебра", "Геометрия", "Тригонометрия", "Логарифмы", "Прогрессии", "Функции", "Неравенства")
 - section - specific subtopic (e.g., "Квадратные уравнения", "Площади фигур", "Тригонометрические уравнения", "Стереометрия")
-- difficulty - integer from 1 (easiest) to 5 (hardest), based on number of solution steps and math level required
-- Choose the most specific topic and section that matches this problem."""
+- Choose the most specific topic and section that matches this problem.
+
+=== DIFFICULTY SCALE (rate 1-5, one example per level) ===
+1 - single obvious step, basic arithmetic."
+2 - one concept, 1-2 steps."
+3 - standard algorithm, several steps."
+4 - combines a couple of concepts or needs non-trivial transformations."
+5 - multi-step, multi-concept, non-routine reasoning."
+
+- difficulty - output the integer that best matches the problem."""
         else:
             # Нормальный режим: список тем из БД
             available_lines = []
@@ -1083,9 +1091,17 @@ Problem:
 === CLASSIFICATION GUIDELINES ===
 - topic MUST be one of the listed topics above.
 - section MUST be one of the listed sections under that topic (or "" if none listed or none applies).
-- difficulty - integer from 1 (easiest) to 5 (hardest), based on number of solution steps and math level required
 - Choose the most specific match. If nothing fits, pick the closest topic from the list.
-- Do NOT invent topics or sections that are not in the list above."""
+- Do NOT invent topics or sections that are not in the list above.
+
+=== DIFFICULTY SCALE (rate 1-5, one example per level) ===
+1 - single obvious step, basic arithmetic. Example: "2 + 3 = ?"
+2 - one concept, 1-2 steps. Example: "Solve 2x + 4 = 10."
+3 - standard algorithm, several steps. Example: "Solve x^2 - 5x + 6 = 0."
+4 - combines a couple of concepts or needs non-trivial transformations. Example: "Solve sin x = 1/2 for x in [0, 2π]."
+5 - multi-step, multi-concept, non-routine reasoning. Example: "Prove that √2 is irrational."
+
+- difficulty - output the integer that best matches the problem."""
         try:
             response = await ai._chat_completion(
                 system_prompt="You are a strict classifier of math problems. Output valid JSON only, no markdown.",
