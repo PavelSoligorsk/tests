@@ -200,8 +200,8 @@ class AIService:
 === GeoGebra (только для визуализации) ===
 
 Генерируй ТОЛЬКО такой JSX:
-<GeoGebra setup={{`команда1
-команда2`}} height="ЧИСЛО" />
+<GeoGebra setup={`команда1
+команда2`} height="ЧИСЛО" />
 
 РАЗРЕШЁННЫЕ КОМАНДЫ В setup (строго по одной на строку):
 
@@ -235,6 +235,7 @@ Intersect(c, l)              // пересечение объектов
 Polygon(A, B, C)             // многоугольник
 p = Slider(0, 360, 1)        // слайдер (min, max, шаг)
 Text("текст", (x,y))          // текст на координатах
+Point(Segment)               // точка на отрезке (для 3D слайдера)
 
 // Настройки объектов (применяются ПОСЛЕ объявления)
 SetColor(A, "#ff0000")        // цвет объекта
@@ -244,25 +245,8 @@ SetPointSize(A, 5)            // размер точки
 SetLineThickness(OA, 3)       // толщина линии
 SetFilling(s, 0.3)            // прозрачность заливки (0.0-1.0)
 
-ПРИМЕР 2D (планиметрия, окружность и касательная):
-<GeoGebra setup={{`SetPerspective("2")
-CenterView((0,0))
-ZoomIn(2)
-ShowGrid(true)
-ShowAxes(true)
-c = Circle((0,0), 1)
-SetColor(c, "#3b82f6")
-SetLineThickness(c, 2)
-A = (-0.7, -0.71)
-P = (0.7, 0.71)
-SetColor(A, "#ef4444")
-SetPointSize(A, 5)
-l = Line(A, P)
-SetColor(l, "#ef4444")
-SetLineThickness(l, 2)`}} height="400" />
-
-ПРИМЕР 3D (стереометрия, сфера с радиусом):
-<GeoGebra setup={{`SetPerspective("T")
+ПРИМЕР 3D СЛАЙДЕРА (сфера с сечением, управление расстоянием d):
+<GeoGebra setup={`SetPerspective("T")
 CenterView((0,0,0))
 ZoomIn(1)
 ShowAxes(false)
@@ -270,22 +254,56 @@ ShowGrid(false)
 R = 3
 s = Sphere((0,0,0), R)
 SetColor(s, "#38bdf8")
-SetFilling(s, 0.3)
+SetFilling(s, 0.12)
+H_min = (-5, 0, 0)
+H_max = (-5, R, 0)
+SliderAxis = Segment(H_min, H_max)
+SetColor(SliderAxis, "#9ca3af")
+SetLineThickness(SliderAxis, 3)
+CapMin = Segment((-5.2, 0, 0), (-4.8, 0, 0))
+CapMax = Segment((-5.2, R, 0), (-4.8, R, 0))
+SetColor(CapMin, "#9ca3af")
+SetColor(CapMax, "#9ca3af")
+SetLineThickness(CapMin, 3)
+SetLineThickness(CapMax, 3)
+H = Point(SliderAxis)
+SetColor(H, "#ef4444")
+SetPointSize(H, 7)
+d = y(H)
+TextD = Text("d = " + d, (-5.5, y(H), 0.3))
+SetColor(TextD, "#ef4444")
+plane = Plane((d, 0, 0), (d, 1, 0), (d, 1, 5))
+SetColor(plane, "#fbbf24")
+SetFilling(plane, 0.3)
+section = Intersect(s, plane)
+SetColor(section, "#ef4444")
+SetLineThickness(section, 5)
+SetFilling(section, 0.4)
 O = (0,0,0)
 SetColor(O, "#1e293b")
 SetPointSize(O, 5)
 SetCaption(O, "O")
 ShowLabel(O, true)
-A = (R, 0, 0)
+A = (d, 0, sqrt(R^2 - d^2))
 SetColor(A, "#ef4444")
 SetPointSize(A, 4)
 SetCaption(A, "A")
 ShowLabel(A, true)
 OA = Segment(O, A)
-SetColor(OA, "#ef4444")
+SetColor(OA, "#22c55e")
 SetLineThickness(OA, 3)
 SetCaption(OA, "R")
-ShowLabel(OA, true)`}} height="400" />
+ShowLabel(OA, true)
+OH = Segment(O, (d, 0, 0))
+SetColor(OH, "#8b5cf6")
+SetLineThickness(OH, 3)
+SetCaption(OH, "d")
+ShowLabel(OH, true)
+HA = Segment((d, 0, 0), A)
+SetColor(HA, "#f59e0b")
+SetLineThickness(HA, 3)
+SetCaption(HA, "r")
+ShowLabel(HA, true)`} height="450" />
 
 ПРАВИЛА:
 - Команды ТОЛЬКО из списка выше
@@ -295,6 +313,16 @@ ShowLabel(OA, true)`}} height="400" />
 - НИКАКИХ api.*, JS, комментариев внутри setup
 - НИКАКИХ русских символов в именах переменных
 - Цвета в HEX: "#3b82f6", "#ef4444", "#22c55e" и т.д.
+
+// 3D СЛАЙДЕР (если нужен интерактив в 3D):
+// 1. Создай отрезок-шкалу ВНЕ объекта: SliderAxis = Segment(StartPoint, EndPoint)
+// 2. Добавь ограничители на концах: CapMin = Segment(...), CapMax = Segment(...)
+// 3. Точка-ползунок: H = Point(SliderAxis)
+// 4. Бери нужную координату: d = y(H) или d = x(H) или d = z(H)
+// 5. Используй d в вычислениях других объектов
+// 6. Текст с текущим значением: TextD = Text("d = " + d, (x, y, z))
+// ВАЖНО: слайдер размещай ВНЕ основного объекта (например, слева при x = -5)
+// ВАЖНО: d должно быть в диапазоне [0, R] или [min, max] без отрицательных значений
 """
 
     # ── Prompt builders ──
