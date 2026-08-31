@@ -106,6 +106,24 @@ class UserRepository:
             await self.db.rollback()
             raise e
 
+    async def delete_user(self, user: User) -> None:
+        """Удалить объект пользователя из БД.
+
+        ВНИМАНИЕ: этот метод удаляет только саму запись `users`.
+        Каскадная очистка связанных данных выполняется НА УРОВНЕ СЕРВИСА
+        (AdminService.delete_user) и на уровне БД через ondelete:
+          * RESTRICT (нужно чистить вручную, делает сервис):
+              tests.creator_id, test_results.user_id,
+              test_assignments.user_id, teacher_students.*
+          * CASCADE (автоматически в БД):
+              groups.teacher_id, group_students.student_id,
+              lessons.teacher_id, lesson_schedules.teacher_id, payments.student_id
+          * SET NULL (автоматически в БД, nullable-колонки):
+              lessons.student_id, lesson_schedules.student_id
+        """
+        await self.db.delete(user)
+        await self.db.commit()
+
     async def update_user_role(self, user: User, new_role: str):
         user.role = new_role
         await self.db.commit()
