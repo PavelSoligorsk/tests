@@ -68,6 +68,14 @@ class ResultRepository:
             select(UserAnswer).where(UserAnswer.result_id == result_id)
         )
         return r.scalars().all()
+
+    async def get_answers_by_result_ids(self, result_ids: List[int]):
+        if not result_ids:
+            return []
+        r = await self.db.execute(
+            select(UserAnswer).where(UserAnswer.result_id.in_(result_ids))
+        )
+        return r.scalars().all()
     
     async def get_user_results_for_topic(self, user_id: int, topic_number: int):
         r = await self.db.execute(

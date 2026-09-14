@@ -280,9 +280,76 @@ class GroupAssignResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class GroupUnassignResponse(BaseModel):
+    message: str
+    group_id: int
+    test_id: int
+    deleted_count: int
+    user_ids: list[int] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class AddStudentsToGroupResponse(BaseModel):
     message: str
     added: int
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GroupAssignmentStudentItem(BaseModel):
+    user_id: int
+    student_name: str
+    student_username: Optional[str] = None
+    assignment_id: int
+    is_completed: bool = False
+    completed_at: Optional[datetime] = None
+    total_points: Optional[int] = None
+    percentage: Optional[float] = None
+    result_id: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GroupAssignmentTestItem(BaseModel):
+    test_id: int
+    test_title: str
+    assigned_at: datetime
+    due_date: Optional[datetime] = None
+    total_tasks: int = 0
+    max_points: Optional[int] = None
+    students: list[GroupAssignmentStudentItem] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GroupAssignmentsResponse(BaseModel):
+    group_id: int
+    group_name: str
+    tests: list[GroupAssignmentTestItem] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GroupReviewNotSubmittedItem(BaseModel):
+    student_id: int
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    student_name: str
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GroupReviewAnswerItem(BaseModel):
+    student_id: int
+    first_name: Optional[str] = None
+    last_name: Optional[str] = None
+    student_name: str
+    result_id: int
+    task_id: int
+    user_answer: Optional[str] = None
+    is_correct: bool = False
+    points_earned: int = 0
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -300,6 +367,17 @@ class TeacherTaskDetailResponse(BaseModel):
     section: Optional[str] = None
     topic_number: Optional[str] = None
     task_class: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class GroupTestReviewResponse(BaseModel):
+    group_id: int
+    test_id: int
+    test_title: str
+    tasks: list[TeacherTaskDetailResponse] = Field(default_factory=list)
+    answers: list[GroupReviewAnswerItem] = Field(default_factory=list)
+    not_submitted: list[GroupReviewNotSubmittedItem] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 

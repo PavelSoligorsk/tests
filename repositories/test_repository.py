@@ -32,6 +32,8 @@ class TestRepository:
         return result.unique().scalars().first()
     
     async def get_tests_by_ids(self, test_ids: List[int]):
+        if not test_ids:
+            return []
         result = await self.db.execute(
             select(Test)
             .options(joinedload(Test.tasks))

@@ -55,6 +55,37 @@ async def _get_teacher_student_id(
     return teacher["id"], student["id"]
 
 
+async def _add_linked_student(
+    ac: AsyncClient,
+    admin_token: str,
+    teacher_id: int,
+    email: str,
+    first_name: str,
+    last_name: str,
+) -> int:
+    """Register a student and link them to the teacher. Return student_id."""
+    await ac.post(
+        "/admin/allowed-emails", json={"email": email},
+        headers=_bearer(admin_token),
+    )
+    await ac.post("/register", json={
+        "username": email, "password": "TeachSt1!",
+        "first_name": first_name, "last_name": last_name,
+    })
+    users = (await ac.get(
+        "/admin/users", headers=_bearer(admin_token),
+    )).json()
+    student = next((u for u in users if u["username"] == email), None)
+    assert student is not None
+    link_resp = await ac.post(
+        "/admin/assign-student-to-teacher",
+        json={"teacher_id": teacher_id, "student_id": student["id"]},
+        headers=_bearer(admin_token),
+    )
+    assert link_resp.status_code == 200
+    return student["id"]
+
+
 # ═══════════════════════════════════════════════════════════════
 # Банк заданий
 # ═══════════════════════════════════════════════════════════════
@@ -1237,3 +1268,211 @@ async def test_student_cannot_access_groups(
     """БТ: Студент не может управлять группами → 403."""
     resp = await async_client.get("/teacher/groups/", headers=_bearer(student_token))
     assert resp.status_code == 403, resp.text
+
+
+# ═══════════════════════════════════════════════════════════════
+# Группа: назначения, снятие теста, разбор
+# ═══════════════════════════════════════════════════════════════
+
+
+@pytest.mark.teacher
+@pytest.mark.asyncio
+async def test_teacher_group_assignments_review_and_unassign(
+    async_client: AsyncClient, admin_token: str, teacher_token: str
+) -> None:
+    """Группа: GET assignments (по тестам и ученикам), review, DELETE со всей группы."""
+    teacher_id, student_id = await _get_teacher_student_id(
+        async_client, admin_token, teacher_token)
+    student2_id = await _add_linked_student(
+        async_client, admin_token, teacher_id,
+        "teacher-student2@test.com", "Anna", "Second",
+    )
+
+    grp = (await async_client.post(
+        "/teacher/groups/", json={"name": "Review Group"},
+        headers=_bearer(teacher_token))).json()
+    await async_client.post(
+        f"/teacher/groups/{grp['id']}/students",
+        json={"student_ids": [student_id, student2_id]},
+        headers=_bearer(teacher_token),
+    )
+
+    task = await async_create_task(async_client, admin_token, {
+        "task_class": "10", "topic_number": "1",
+        "content": "2 + 2 = ?", "answer": "4",
+        "is_open_answer": False, "options": ["3", "4", "5", "6"],
+        "difficulty": 1, "hint": "h", "solution": "s",
+    })
+    test = (await async_client.post(
+        "/teacher/tests",
+        json={"title": "Group Review Test", "target_class": "10",
+              "target_topic": "1", "task_ids": [task["id"]]},
+        headers=_bearer(teacher_token))).json()
+    assign = await async_client.post(
+        "/teacher/assign-test-to-group",
+        json={"group_id": grp["id"], "test_id": test["id"]},
+        headers=_bearer(teacher_token),
+    )
+    assert assign.status_code == 200, assign.text
+
+    listed = await async_client.get(
+        f"/teacher/groups/{grp['id']}/assignments",
+        headers=_bearer(teacher_token),
+    )
+    assert listed.status_code == 200, listed.text
+    body = listed.json()
+    assert body["group_id"] == grp["id"]
+    assert body["group_name"] == "Review Group"
+    assert len(body["tests"]) == 1
+    test_item = body["tests"][0]
+    assert test_item["test_id"] == test["id"]
+    assert test_item["test_title"] == "Group Review Test"
+    assert test_item["total_tasks"] == 1
+    assert len(test_item["students"]) == 2
+    by_user = {s["user_id"]: s for s in test_item["students"]}
+    assert student_id in by_user and student2_id in by_user
+    assert by_user[student_id]["is_completed"] is False
+    assert by_user[student_id]["result_id"] is None
+    assert by_user[student_id]["student_name"]
+
+    s_login = (await async_client.post(
+        "/login", data={"username": "teacher-student@test.com", "password": "TeachSt1!"}
+    )).json()
+    s_tok = s_login["access_token"]
+    start = await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(s_tok))
+    assert start.status_code == 200, start.text
+    submit = await async_client.post(
+        f"/student/tests/{test['id']}/submit",
+        json=[{"task_id": task["id"], "user_answer": "4"}],
+        headers=_bearer(s_tok),
+    )
+    assert submit.status_code == 200, submit.text
+
+    listed2 = (await async_client.get(
+        f"/teacher/groups/{grp['id']}/assignments",
+        headers=_bearer(teacher_token),
+    )).json()
+    by_user2 = {s["user_id"]: s for s in listed2["tests"][0]["students"]}
+    assert by_user2[student_id]["is_completed"] is True
+    assert by_user2[student_id]["result_id"] is not None
+    assert by_user2[student_id]["total_points"] is not None
+    assert by_user2[student2_id]["is_completed"] is False
+
+    review = await async_client.get(
+        f"/teacher/groups/{grp['id']}/tests/{test['id']}/review",
+        headers=_bearer(teacher_token),
+    )
+    assert review.status_code == 200, review.text
+    rv = review.json()
+    assert rv["group_id"] == grp["id"]
+    assert rv["test_id"] == test["id"]
+    assert rv["test_title"] == "Group Review Test"
+    assert len(rv["tasks"]) == 1
+    assert rv["tasks"][0]["id"] == task["id"]
+    assert rv["tasks"][0]["answer"] == "4"
+
+    submitted_ids = {a["student_id"] for a in rv["answers"]}
+    not_submitted_ids = {s["student_id"] for s in rv["not_submitted"]}
+    assert student_id in submitted_ids
+    assert student2_id in not_submitted_ids
+    assert student_id not in not_submitted_ids
+    answer = next(a for a in rv["answers"] if a["student_id"] == student_id)
+    assert answer["task_id"] == task["id"]
+    assert answer["user_answer"] == "4"
+    assert answer["is_correct"] is True
+    assert answer["result_id"] == by_user2[student_id]["result_id"]
+    assert answer["student_name"]
+    ns = rv["not_submitted"][0]
+    assert ns["first_name"] == "Anna"
+    assert ns["last_name"] == "Second"
+
+    deleted = await async_client.delete(
+        f"/teacher/groups/{grp['id']}/assignments/{test['id']}",
+        headers=_bearer(teacher_token),
+    )
+    assert deleted.status_code == 200, deleted.text
+    d = deleted.json()
+    assert d["deleted_count"] == 2
+    assert set(d["user_ids"]) == {student_id, student2_id}
+
+    after = (await async_client.get(
+        f"/teacher/groups/{grp['id']}/assignments",
+        headers=_bearer(teacher_token),
+    )).json()
+    assert after["tests"] == []
+
+    student_asg = await async_client.get(
+        f"/teacher/student/{student_id}/assignments",
+        headers=_bearer(teacher_token),
+    )
+    assert student_asg.status_code == 200, student_asg.text
+    assert all(item["test_id"] != test["id"] for item in student_asg.json())
+
+    gone = await async_client.get(
+        f"/teacher/groups/{grp['id']}/tests/{test['id']}/review",
+        headers=_bearer(teacher_token),
+    )
+    assert gone.status_code == 404, gone.text
+
+
+@pytest.mark.teacher
+@pytest.mark.asyncio
+async def test_teacher_unassign_test_from_group_not_found(
+    async_client: AsyncClient, teacher_token: str
+) -> None:
+    """DELETE назначения несуществующей группы / неназначенного теста → 404."""
+    missing_group = await async_client.delete(
+        "/teacher/groups/99999/assignments/1",
+        headers=_bearer(teacher_token),
+    )
+    assert missing_group.status_code == 404, missing_group.text
+
+    grp = (await async_client.post(
+        "/teacher/groups/", json={"name": "No Assign"},
+        headers=_bearer(teacher_token))).json()
+    missing_test = await async_client.delete(
+        f"/teacher/groups/{grp['id']}/assignments/99999",
+        headers=_bearer(teacher_token),
+    )
+    assert missing_test.status_code == 404, missing_test.text
+
+
+@pytest.mark.teacher
+@pytest.mark.asyncio
+async def test_teacher_group_review_not_found(
+    async_client: AsyncClient, teacher_token: str
+) -> None:
+    """GET review без группы / без назначения → 404."""
+    missing_group = await async_client.get(
+        "/teacher/groups/99999/tests/1/review",
+        headers=_bearer(teacher_token),
+    )
+    assert missing_group.status_code == 404, missing_group.text
+
+    grp = (await async_client.post(
+        "/teacher/groups/", json={"name": "No Review"},
+        headers=_bearer(teacher_token))).json()
+    missing_assign = await async_client.get(
+        f"/teacher/groups/{grp['id']}/tests/1/review",
+        headers=_bearer(teacher_token),
+    )
+    assert missing_assign.status_code == 404, missing_assign.text
+
+
+@pytest.mark.teacher
+@pytest.mark.asyncio
+async def test_student_cannot_group_review_or_unassign(
+    async_client: AsyncClient, student_token: str
+) -> None:
+    """Студент не может разбирать группу и снимать назначения → 403."""
+    review = await async_client.get(
+        "/teacher/groups/1/tests/1/review",
+        headers=_bearer(student_token),
+    )
+    assert review.status_code == 403, review.text
+    unassign = await async_client.delete(
+        "/teacher/groups/1/assignments/1",
+        headers=_bearer(student_token),
+    )
+    assert unassign.status_code == 403, unassign.text

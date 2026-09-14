@@ -38,6 +38,13 @@ from dto_schemas.cached import (
     TeacherTaskMetaResponse,
     TeacherTaskMetaByTopicSectionResponse,
     GroupAssignResponse,
+    GroupUnassignResponse,
+    GroupAssignmentStudentItem,
+    GroupAssignmentTestItem,
+    GroupAssignmentsResponse,
+    GroupReviewNotSubmittedItem,
+    GroupReviewAnswerItem,
+    GroupTestReviewResponse,
     AddStudentsToGroupResponse,
 )
 
@@ -693,77 +700,212 @@ class TeacherService:
             for s in group.students
         ]
 
-    async def get_group_assignments(self, group_id: int, teacher_id: int, role: str):
-        """Получить все назначения группы"""
-        group = await self.group_repo.get_group_by_id(group_id, teacher_id if role == "teacher" else None)
+    def _student_display_name(self, student) -> str:
+        if not student:
+            return "Неизвестный"
+        name = f"{student.first_name or ''} {student.last_name or ''}".strip()
+        return name or student.username or "Неизвестный"
+
+    async def _get_accessible_group(self, group_id: int, teacher_id: int, role: str):
+        group = await self.group_repo.get_group_by_id(
+            group_id, teacher_id if role == "teacher" else None
+        )
         if not group:
             raise ValueError("Группа не найдена")
-
         if role == "teacher" and group.teacher_id != teacher_id:
             raise PermissionError("У вас нет доступа к этой группе")
+        return group
 
+    def _task_detail(self, task) -> TeacherTaskDetailResponse:
+        return TeacherTaskDetailResponse(
+            id=task.id,
+            content=task.content,
+            options=task.options,
+            answer=task.answer,
+            hint=task.hint,
+            solution=task.solution,
+            is_open_answer=task.is_open_answer,
+            difficulty=task.difficulty,
+            topic=task.topic,
+            section=task.section,
+            topic_number=task.topic_number,
+            task_class=task.task_class,
+        )
+
+    async def get_group_assignments(self, group_id: int, teacher_id: int, role: str):
+        """Все назначения группы одним ответом: тесты → ученики."""
+        group = await self._get_accessible_group(group_id, teacher_id, role)
         assignments = await self.assignment_repo.get_group_assignments(group_id)
 
-        # Собираем все test_id и user_id для batch-запросов
         test_ids = list({a.test_id for a in assignments})
-        user_ids = list({a.user_id for a in assignments})
+        user_ids = list({a.user_id for a in assignments if a.user_id is not None})
 
-        # Загружаем тесты и студентов
-        tests_map = {}
-        for tid in test_ids:
-            test = await self.test_repo.get_test_by_id(tid)
-            if test:
-                tests_map[tid] = test
+        tests = await self.test_repo.get_tests_by_ids(test_ids)
+        tests_map = {t.id: t for t in tests}
 
         users_map = {}
         if user_ids:
             users = await self.user_repo.get_users_by_ids(user_ids)
             users_map = {u.id: u for u in users}
 
-        # Результаты
-        all_results: dict = {}  # user_id -> {test_id -> result}
-        for uid in user_ids:
-            latest = await self.assignment_repo.get_latest_results_for_student(uid)
-            all_results[uid] = {r.test_id: r for r in latest}
+        latest_results = await self.assignment_repo.get_latest_results_for_students(user_ids)
+        results_map: dict[tuple[int, int], object] = {
+            (r.user_id, r.test_id): r for r in latest_results
+        }
 
-        result = []
+        grouped: dict[int, list] = {}
         for assignment in assignments:
-            test = tests_map.get(assignment.test_id)
+            grouped.setdefault(assignment.test_id, []).append(assignment)
+
+        tests_out: list[GroupAssignmentTestItem] = []
+        for test_id, test_assignments in grouped.items():
+            test = tests_map.get(test_id)
             if not test:
                 continue
 
-            student = users_map.get(assignment.user_id)
-
-            student_results = all_results.get(assignment.user_id, {})
-            latest_result = student_results.get(assignment.test_id)
-            is_completed = latest_result is not None
-            completed_at = latest_result.completed_at if latest_result else None
-            total_points = latest_result.total_points if latest_result else None
-            result_id = latest_result.id if latest_result else None
-
             max_points = await self.test_repo.calculate_test_max_points(test)
-            percentage = round((total_points / max_points) * 100, 1) if (total_points is not None and max_points > 0) else None
+            first = min(test_assignments, key=lambda a: a.assigned_at or datetime.datetime.min)
+            students_out: list[GroupAssignmentStudentItem] = []
 
-            result.append(TeacherAssignmentItemResponse(
-                id=assignment.id,
-                test_id=assignment.test_id,
+            for assignment in test_assignments:
+                student = users_map.get(assignment.user_id)
+                latest_result = results_map.get((assignment.user_id, assignment.test_id))
+                total_points = latest_result.total_points if latest_result else None
+                percentage = (
+                    round((total_points / max_points) * 100, 1)
+                    if (total_points is not None and max_points > 0)
+                    else None
+                )
+                students_out.append(GroupAssignmentStudentItem(
+                    user_id=assignment.user_id,
+                    student_name=self._student_display_name(student),
+                    student_username=student.username if student else None,
+                    assignment_id=assignment.id,
+                    is_completed=latest_result is not None,
+                    completed_at=latest_result.completed_at if latest_result else None,
+                    total_points=total_points,
+                    percentage=percentage,
+                    result_id=latest_result.id if latest_result else None,
+                ))
+
+            students_out.sort(key=lambda s: (s.is_completed, s.student_name))
+            tests_out.append(GroupAssignmentTestItem(
+                test_id=test.id,
                 test_title=test.title,
-                user_id=assignment.user_id,
-                student_name=f"{student.first_name} {student.last_name}" if student else "Неизвестный",
-                student_username=student.username if student else None,
-                assigned_at=assignment.assigned_at,
-                due_date=assignment.due_date,
-                is_completed=is_completed,
-                completed_at=completed_at,
+                assigned_at=first.assigned_at,
+                due_date=first.due_date,
                 total_tasks=len(test.tasks) if test.tasks else 0,
-                total_points=total_points,
                 max_points=max_points,
-                percentage=percentage,
-                result_id=result_id,
+                students=students_out,
             ))
 
-        result.sort(key=lambda x: (x.is_completed, x.student_name))
-        return result
+        tests_out.sort(key=lambda t: t.assigned_at, reverse=True)
+        return GroupAssignmentsResponse(
+            group_id=group.id,
+            group_name=group.name,
+            tests=tests_out,
+        )
+
+    async def unassign_test_from_group(
+        self, group_id: int, test_id: int, teacher_id: int, role: str
+    ) -> GroupUnassignResponse:
+        """Снять тест со всех учеников группы."""
+        await self._get_accessible_group(group_id, teacher_id, role)
+
+        test = await self.test_repo.get_test_by_id(test_id)
+        if not test:
+            raise ValueError("Тест не найден")
+        if role == "teacher" and test.creator_id != teacher_id:
+            raise PermissionError("Вы не можете снять это назначение")
+
+        user_ids = await self.assignment_repo.delete_group_test_assignments(group_id, test_id)
+        if not user_ids:
+            raise ValueError("Тест не назначен этой группе")
+
+        return GroupUnassignResponse(
+            message=f"Тест снят с {len(user_ids)} учеников группы",
+            group_id=group_id,
+            test_id=test_id,
+            deleted_count=len(user_ids),
+            user_ids=user_ids,
+        )
+
+    async def get_group_test_review(
+        self, group_id: int, test_id: int, teacher_id: int, role: str
+    ) -> GroupTestReviewResponse:
+        """Разбор теста группой: задания + ответы сдавших + не сдавшие."""
+        group = await self._get_accessible_group(group_id, teacher_id, role)
+
+        test = await self.test_repo.get_test_with_tasks(test_id)
+        if not test:
+            raise ValueError("Тест не найден")
+        if role == "teacher" and test.creator_id != teacher_id:
+            raise PermissionError("У вас нет доступа к этому тесту")
+
+        assignments = await self.assignment_repo.get_group_test_assignments(group_id, test_id)
+        assigned_ids = {a.user_id for a in assignments if a.user_id is not None}
+        if not assigned_ids:
+            raise ValueError("Тест не назначен этой группе")
+
+        roster_ids = {s.id for s in group.students}
+        target_ids = assigned_ids & roster_ids
+        users_map = {s.id: s for s in group.students}
+
+        tasks = [self._task_detail(task) for task in test.tasks]
+
+        latest_results = await self.assignment_repo.get_latest_results_for_students(list(target_ids))
+        results_by_user = {
+            r.user_id: r for r in latest_results if r.test_id == test_id
+        }
+        answers = await self.result_repo.get_answers_by_result_ids(
+            [r.id for r in results_by_user.values()]
+        )
+        answers_map = {(ua.result_id, ua.task_id): ua for ua in answers}
+
+        def _name_key(uid: int) -> tuple[str, str]:
+            user = users_map.get(uid)
+            if not user:
+                return ("", "")
+            return ((user.last_name or ""), (user.first_name or ""))
+
+        answers_out: list[GroupReviewAnswerItem] = []
+        not_submitted: list[GroupReviewNotSubmittedItem] = []
+
+        for uid in sorted(target_ids, key=_name_key):
+            user = users_map.get(uid)
+            student_name = self._student_display_name(user)
+            result = results_by_user.get(uid)
+            if not result:
+                not_submitted.append(GroupReviewNotSubmittedItem(
+                    student_id=uid,
+                    first_name=user.first_name if user else None,
+                    last_name=user.last_name if user else None,
+                    student_name=student_name,
+                ))
+                continue
+
+            for task in test.tasks:
+                ua = answers_map.get((result.id, task.id))
+                answers_out.append(GroupReviewAnswerItem(
+                    student_id=uid,
+                    first_name=user.first_name if user else None,
+                    last_name=user.last_name if user else None,
+                    student_name=student_name,
+                    result_id=result.id,
+                    task_id=task.id,
+                    user_answer=ua.user_text_answer if ua else None,
+                    is_correct=bool(ua.is_correct) if ua else False,
+                    points_earned=ua.points_earned if ua else 0,
+                ))
+
+        return GroupTestReviewResponse(
+            group_id=group.id,
+            test_id=test.id,
+            test_title=test.title,
+            tasks=tasks,
+            answers=answers_out,
+            not_submitted=not_submitted,
+        )
     
     async def get_tasks_by_topic_section(self, topic: str, section: str):
         """Получить задания по теме и разделу"""
@@ -777,22 +919,7 @@ class TeacherService:
         if role == "teacher" and test.creator_id != teacher_id:
             raise PermissionError("У вас нет доступа к этому тесту")
         
-        tasks = []
-        for task in test.tasks:
-            tasks.append(TeacherTaskDetailResponse(
-                id=task.id,
-                content=task.content,
-                options=task.options,
-                answer=task.answer,
-                hint=task.hint,
-                solution=task.solution,
-                is_open_answer=task.is_open_answer,
-                difficulty=task.difficulty,
-                topic=task.topic,
-                section=task.section,
-                topic_number=task.topic_number,
-                task_class=task.task_class,
-            ))
+        tasks = [self._task_detail(task) for task in test.tasks]
         return tasks
     
     async def get_tasks_meta(self):

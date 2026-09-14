@@ -26,6 +26,60 @@ class AssignmentRepository:
             .order_by(TestAssignment.assigned_at.desc())
         )
         return r.scalars().all()
+
+    async def get_group_test_assignments(self, group_id: int, test_id: int):
+        """Назначения конкретного теста внутри группы."""
+        r = await self.db.execute(
+            select(TestAssignment).where(
+                TestAssignment.group_id == group_id,
+                TestAssignment.test_id == test_id,
+            )
+        )
+        return r.scalars().all()
+
+    async def delete_group_test_assignments(self, group_id: int, test_id: int) -> List[int]:
+        """Снять тест со всей группы. Возвращает user_id удалённых назначений."""
+        assignments = await self.get_group_test_assignments(group_id, test_id)
+        user_ids = [a.user_id for a in assignments if a.user_id is not None]
+        if not assignments:
+            return []
+        await self.db.execute(
+            delete(TestAssignment).where(
+                TestAssignment.group_id == group_id,
+                TestAssignment.test_id == test_id,
+            )
+        )
+        await self.db.commit()
+        return user_ids
+
+    async def get_latest_results_for_students(self, user_ids: List[int]):
+        """Последние завершённые результаты нескольких студентов по всем тестам."""
+        if not user_ids:
+            return []
+        subq = (
+            select(
+                TestResult.user_id,
+                TestResult.test_id,
+                func.max(TestResult.completed_at).label('max_completed_at')
+            )
+            .where(
+                TestResult.user_id.in_(user_ids),
+                TestResult.completed_at.isnot(None),
+            )
+            .group_by(TestResult.user_id, TestResult.test_id)
+            .subquery()
+        )
+        r = await self.db.execute(
+            select(TestResult).join(
+                subq,
+                and_(
+                    TestResult.user_id == subq.c.user_id,
+                    TestResult.test_id == subq.c.test_id,
+                    TestResult.completed_at == subq.c.max_completed_at,
+                )
+            )
+        )
+        return r.scalars().all()
     
     async def get_assignment(self, test_id: int, user_id: int):
         r = await self.db.execute(

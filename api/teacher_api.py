@@ -10,10 +10,11 @@ from dto_schemas import (
     TeacherGroupResponse, DetailedResultResponse, UserResponse,
     GroupCreateRequest, GroupUpdateRequest, AddStudentsToGroupRequest,
     TeacherStudentProfileResponse, TeacherHistoryItemResponse,
-    GroupAssignResponse, AddStudentsToGroupResponse, MessageResponse,
+    GroupAssignResponse, GroupUnassignResponse, AddStudentsToGroupResponse, MessageResponse,
     TeacherTaskMetaResponse, TeacherTaskMetaByTopicSectionResponse,
     TeacherAITestRequest,
     FullStatsResponse,
+    GroupAssignmentsResponse, GroupTestReviewResponse,
 )
 from dto_schemas.user import UserUpdate
 from repositories.user_repository import UserRepository
@@ -815,21 +816,72 @@ async def get_group_students(
         raise HTTPException(status_code=404, detail=str(e ))
 
 
-@router.get("/groups/{group_id}/assignments")
+@router.get("/groups/{group_id}/assignments", response_model=GroupAssignmentsResponse)
 async def get_group_assignments(
     group_id: int,
     service: TeacherService = Depends(get_teacher_service),
     current_teacher: User = Depends(check_teacher)
 ):
-    """Получить все назначения группы"""
+    """Все назначения группы одним ответом: тесты и ученики."""
     try:
         return await async_cache_result(
             "teacher_group_assignments",
             current_teacher.id,
             lambda: service.get_group_assignments(group_id, current_teacher.id, current_teacher.role),
-            model_class=TeacherAssignmentItemResponse,
+            model_class=GroupAssignmentsResponse,
             ttl=300,
             group_id=group_id
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
+@router.delete(
+    "/groups/{group_id}/assignments/{test_id}",
+    response_model=GroupUnassignResponse,
+)
+async def unassign_test_from_group(
+    group_id: int,
+    test_id: int,
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: User = Depends(check_teacher)
+):
+    """Снять тест сразу со всей группы."""
+    try:
+        result = await service.unassign_test_from_group(
+            group_id, test_id, current_teacher.id, current_teacher.role
+        )
+        invalidate_user_cache(
+            current_teacher.id,
+            "teacher_test_assignments",
+            "teacher_student_assignments",
+            "teacher_group_assignments",
+        )
+        for user_id in result.user_ids:
+            invalidate_user_cache(user_id, "my_assignments", "my_assignments_meta")
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except PermissionError as e:
+        raise HTTPException(status_code=403, detail=str(e))
+
+
+@router.get(
+    "/groups/{group_id}/tests/{test_id}/review",
+    response_model=GroupTestReviewResponse,
+)
+async def get_group_test_review(
+    group_id: int,
+    test_id: int,
+    service: TeacherService = Depends(get_teacher_service),
+    current_teacher: User = Depends(check_teacher)
+):
+    """Разбор теста группой: задания, ответы учеников и список не сдавших."""
+    try:
+        return await service.get_group_test_review(
+            group_id, test_id, current_teacher.id, current_teacher.role
         )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
