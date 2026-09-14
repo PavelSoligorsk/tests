@@ -312,6 +312,15 @@ async def test_stats_with_submitted_data(
         if algebra:
             assert algebra["total_tasks"] >= 2
             assert algebra["correct_tasks"] == 1
+            stats_section = next((s for s in algebra.get("sections", []) if s["section"] == "stats"), None)
+            assert stats_section is not None
+            diffs = {d["difficulty"]: d for d in stats_section.get("difficulties", [])}
+            assert 1 in diffs
+            assert diffs[1]["correct_tasks"] == 1
+            assert diffs[1]["total_tasks"] == 1
+            assert 3 in diffs
+            assert diffs[3]["correct_tasks"] == 0
+            assert diffs[3]["total_tasks"] == 1
 
     # Difficulty stats
     diff = await async_client.get(

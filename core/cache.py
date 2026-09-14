@@ -262,4 +262,5 @@ def invalidate_all_user_cache(user_id: int) -> None:
         "my_assignments_meta",
         "my_ai_tests",
         "detailed_result",
+        "student_stats",
     )

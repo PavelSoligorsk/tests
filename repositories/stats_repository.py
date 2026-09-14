@@ -85,6 +85,31 @@ class StatsRepository:
         )
         return r.all()
     
+    async def get_topics_section_difficulty_counts(self, test_ids: List[int]):
+        """Уникальные задачи, сгруппированные по теме / разделу / сложности."""
+        if not test_ids:
+            return []
+
+        r = await self.db.execute(
+            select(
+                Task.topic,
+                Task.section,
+                Task.difficulty,
+                func.count(distinct(Task.id)).label("total_unique")
+            )
+            .join(TestTaskAssociation, Task.id == TestTaskAssociation.task_id)
+            .where(TestTaskAssociation.test_id.in_(test_ids))
+            .group_by(Task.topic, Task.section, Task.difficulty)
+        )
+        return r.all()
+
+    async def get_tasks_by_ids(self, task_ids: List[int]) -> dict:
+        """Загрузить задачи пачкой: {task_id: Task}."""
+        if not task_ids:
+            return {}
+        r = await self.db.execute(select(Task).where(Task.id.in_(task_ids)))
+        return {task.id: task for task in r.scalars().all()}
+    
     async def get_difficulty_counts(self, test_ids: List[int]):
         """Получить сложность с количеством уникальных задач"""
         if not test_ids:

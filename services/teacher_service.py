@@ -280,6 +280,18 @@ class TeacherService:
             )
             for r in results
         ]
+
+    async def get_student_detailed_stats(self, student_id: int, teacher_id: int, period: str = "all"):
+        """Детальная статистика ученика: сводка + темы → разделы → сложность."""
+        if not await self.teacher_student_repo.check_student_belongs_to_teacher(student_id, teacher_id):
+            raise PermissionError("У вас нет доступа к этому ученику")
+
+        user = await self.user_repo.get_user_by_id(student_id)
+        if not user or user.role != "student":
+            raise ValueError("Ученик не найден")
+
+        from services.student_service import StudentService
+        return await StudentService(self.db).get_detailed_stats(student_id, period)
     
     async def get_detailed_result(self, result_id: int, teacher_id: int):
         """Получить детальный результат теста (для учителя)"""

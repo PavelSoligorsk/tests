@@ -156,6 +156,15 @@ class AdminService:
             )
             for r in results
         ]
+
+    async def get_user_detailed_stats(self, user_id: int, period: str = "all"):
+        """Детальная статистика пользователя: сводка + темы → разделы → сложность."""
+        user = await self.user_repo.get_user_by_id(user_id)
+        if not user:
+            raise ValueError("Пользователь не найден")
+
+        from services.student_service import StudentService
+        return await StudentService(self.db).get_detailed_stats(user_id, period)
     
     # ==================== ЗАДАНИЯ ====================
     

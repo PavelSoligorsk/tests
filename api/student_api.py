@@ -50,7 +50,7 @@ async def get_my_detailed_stats(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
-    """Получить детальную статистику: сводка + по темам + по сложности"""
+    """Получить детальную статистику: сводка + темы → разделы → сложность"""
     try:
         return await service.get_detailed_stats(current_user.id, period)
     except ValueError as e:
@@ -139,7 +139,8 @@ async def submit_test_results(
             "my_assignments",
             "my_assignments_meta",
             "my_ai_tests",
-            "detailed_result"
+            "detailed_result",
+            "student_stats",
         )
         
         return result
@@ -496,6 +497,7 @@ async def retake_test(
             "my_assignments",
             "my_assignments_meta",
             "my_ai_tests",
+            "student_stats",
         )
 
         return result

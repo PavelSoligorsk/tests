@@ -54,11 +54,21 @@ class PeriodStatsResponse(BaseModel):
 
 # ============ TOPICS STATS ============
 
+class DifficultyItem(BaseModel):
+    difficulty: int
+    total_tasks: int = 0
+    correct_tasks: int = 0
+    mastery_percent: float = 0.0
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class TopicSectionItem(BaseModel):
     section: str
     total_tasks: int = 0
     correct_tasks: int = 0
     mastery_percent: float = 0.0
+    difficulties: list[DifficultyItem] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -74,6 +84,7 @@ class TopicSummaryItem(BaseModel):
 
 class TopicItem(TopicSummaryItem):
     sections: list[TopicSectionItem] = Field(default_factory=list)
+    difficulties: list[DifficultyItem] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -90,15 +101,6 @@ class TopicsStatsResponse(BaseModel):
 
 
 # ============ DIFFICULTY STATS ============
-
-class DifficultyItem(BaseModel):
-    difficulty: int
-    total_tasks: int = 0
-    correct_tasks: int = 0
-    mastery_percent: float = 0.0
-
-    model_config = ConfigDict(from_attributes=True)
-
 
 class DifficultyStatsResponse(BaseModel):
     period: str

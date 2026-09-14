@@ -59,19 +59,27 @@ class StudentService:
         )
     
     async def get_detailed_stats(self, user_id: int, period: str = "all"):
-        """Получить детальную статистику (сводка + темы + сложность)"""
+        """Получить детальную статистику (сводка + темы/разделы/сложность)."""
+        from core.cache import async_cache_result
         from services.stats_service import StatsService
-        stats_svc = StatsService(self.db)
-        
-        period_stats = await stats_svc.get_period_stats(user_id, period, await self.user_repo.get_user_by_id(user_id))
-        topics_stats = await stats_svc.get_topics_stats(user_id, period, await self.user_repo.get_user_by_id(user_id))
-        difficulty_stats = await stats_svc.get_difficulty_stats(user_id, period, await self.user_repo.get_user_by_id(user_id))
-        
         from dto_schemas.stats import FullStatsResponse
-        return FullStatsResponse(
-            period=period_stats,
-            topics=topics_stats,
-            difficulties=difficulty_stats,
+
+        async def _fetch():
+            stats_svc = StatsService(self.db)
+            user = await self.user_repo.get_user_by_id(user_id)
+            return FullStatsResponse(
+                period=await stats_svc.get_period_stats(user_id, period, user),
+                topics=await stats_svc.get_topics_stats(user_id, period, user),
+                difficulties=await stats_svc.get_difficulty_stats(user_id, period, user),
+            )
+
+        return await async_cache_result(
+            prefix="student_stats",
+            user_id=user_id,
+            fetcher=_fetch,
+            model_class=FullStatsResponse,
+            ttl=180,
+            period=period,
         )
     
     async def update_profile(self, user_id: int, update_data: dict):

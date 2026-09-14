@@ -152,32 +152,34 @@ class StatsService:
         )
     
     async def get_topics_stats(self, user_id: int, period: str, current_user) -> TopicsStatsResponse:
-        """Статистика по темам с разделами"""
+        """Статистика по темам → разделам → уровням сложности."""
         user = await self._check_access(user_id, current_user)
         start_date, end_date = self._get_period_dates(period)
-        
+
         results = await self.stats_repo.get_user_results(user_id, start_date)
-        
+
         if not results:
             return self._empty_topics_response(user_id, period, user)
-        
+
         result_ids = [r.id for r in results]
         test_ids = list(set(r.test_id for r in results))
-        
-        total_tasks_query = await self.stats_repo.get_topics_with_counts(test_ids)
+
+        total_rows = await self.stats_repo.get_topics_section_difficulty_counts(test_ids)
         user_answers = await self.stats_repo.get_user_answers_by_results(result_ids)
         best_answers = self._get_best_answers(user_answers)
-        
-        # Считаем правильные по темам
-        correct_map = {}
+        tasks = await self.stats_repo.get_tasks_by_ids(list(best_answers.keys()))
+
+        correct_map: dict[tuple, int] = {}
         for task_id, answer in best_answers.items():
-            if self._is_valid_answer(answer):
-                task = await self.stats_repo.get_task_by_id(task_id)
-                if task and task.topic:
-                    key = (task.topic, task.section or "Общее")
-                    correct_map[key] = correct_map.get(key, 0) + 1
-        
-        return self._build_topics_response(total_tasks_query, correct_map, user_id, period, user)
+            if not self._is_valid_answer(answer):
+                continue
+            task = tasks.get(task_id)
+            if not task or not task.topic:
+                continue
+            key = (task.topic, task.section or "Общее", task.difficulty or 1)
+            correct_map[key] = correct_map.get(key, 0) + 1
+
+        return self._build_topics_response(total_rows, correct_map, user_id, period, user)
     
     async def get_difficulty_stats(self, user_id: int, period: str, current_user) -> DifficultyStatsResponse:
         """Статистика по сложности"""
@@ -264,57 +266,94 @@ class StatsService:
         
         return daily_stats
     
-    def _build_topics_response(self, total_tasks_query, correct_map, user_id, period, user) -> TopicsStatsResponse:
-        topics_map = {}
-        
-        for topic, section, total in total_tasks_query:
+    def _difficulty_items(self, diff_map: dict) -> list[DifficultyItem]:
+        items = []
+        for diff in sorted(diff_map):
+            total = diff_map[diff]["total"]
+            correct = diff_map[diff]["correct"]
+            items.append(DifficultyItem(
+                difficulty=diff,
+                total_tasks=total,
+                correct_tasks=correct,
+                mastery_percent=round((correct / total) * 100, 1) if total > 0 else 0.0,
+            ))
+        return items
+
+    def _build_topics_response(self, total_rows, correct_map, user_id, period, user) -> TopicsStatsResponse:
+        topics_map: dict = {}
+
+        for topic, section, difficulty, total in total_rows:
             if not topic:
                 continue
-            
-            correct = correct_map.get((topic, section or "Общее"), 0)
-            mastery = round((correct / total) * 100, 1) if total > 0 else 0.0
-            
+
+            section_name = section or "Общее"
+            diff_level = difficulty or 1
+            correct = correct_map.get((topic, section_name, diff_level), 0)
+
             if topic not in topics_map:
                 topics_map[topic] = {
                     "total_tasks": 0,
                     "correct_tasks": 0,
-                    "sections": {}
+                    "difficulties": {},
+                    "sections": {},
                 }
-            
-            topics_map[topic]["total_tasks"] += total
-            topics_map[topic]["correct_tasks"] += correct
-            topics_map[topic]["sections"][section or "Общее"] = TopicSectionItem(
-                section=section or "Общее",
-                total_tasks=total,
-                correct_tasks=correct,
-                mastery_percent=mastery,
-            )
-        
+
+            topic_data = topics_map[topic]
+            topic_data["total_tasks"] += total
+            topic_data["correct_tasks"] += correct
+            topic_diff = topic_data["difficulties"].setdefault(diff_level, {"total": 0, "correct": 0})
+            topic_diff["total"] += total
+            topic_diff["correct"] += correct
+
+            if section_name not in topic_data["sections"]:
+                topic_data["sections"][section_name] = {
+                    "total_tasks": 0,
+                    "correct_tasks": 0,
+                    "difficulties": {},
+                }
+
+            section_data = topic_data["sections"][section_name]
+            section_data["total_tasks"] += total
+            section_data["correct_tasks"] += correct
+            section_data["difficulties"][diff_level] = {
+                "total": total,
+                "correct": correct,
+            }
+
         topics = []
         strongest = None
         weakest = None
         max_mastery = -1.0
         min_mastery = 101.0
-        
+
         for topic_name, topic_data in topics_map.items():
             total = topic_data["total_tasks"]
             correct = topic_data["correct_tasks"]
             topic_mastery = round((correct / total) * 100, 1) if total > 0 else 0.0
-            
-            sections_list = sorted(
-                topic_data["sections"].values(),
-                key=lambda x: x.mastery_percent
-            )
-            
+
+            sections_list = []
+            for section_name, section_data in topic_data["sections"].items():
+                section_total = section_data["total_tasks"]
+                section_correct = section_data["correct_tasks"]
+                sections_list.append(TopicSectionItem(
+                    section=section_name,
+                    total_tasks=section_total,
+                    correct_tasks=section_correct,
+                    mastery_percent=round((section_correct / section_total) * 100, 1) if section_total > 0 else 0.0,
+                    difficulties=self._difficulty_items(section_data["difficulties"]),
+                ))
+            sections_list.sort(key=lambda x: x.mastery_percent)
+
             topic_item = TopicItem(
                 topic=topic_name,
                 total_tasks=total,
                 correct_tasks=correct,
                 mastery_percent=topic_mastery,
                 sections=sections_list,
+                difficulties=self._difficulty_items(topic_data["difficulties"]),
             )
             topics.append(topic_item)
-            
+
             if topic_mastery > max_mastery:
                 max_mastery = topic_mastery
                 strongest = TopicSummaryItem(
@@ -323,7 +362,7 @@ class StatsService:
                     correct_tasks=correct,
                     mastery_percent=topic_mastery,
                 )
-            
+
             if topic_mastery < min_mastery and total >= 3:
                 min_mastery = topic_mastery
                 weakest = TopicSummaryItem(
@@ -332,9 +371,9 @@ class StatsService:
                     correct_tasks=correct,
                     mastery_percent=topic_mastery,
                 )
-        
+
         topics.sort(key=lambda x: x.mastery_percent)
-        
+
         return TopicsStatsResponse(
             period=period,
             user_id=user_id,
