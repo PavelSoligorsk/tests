@@ -1,0 +1,16 @@
+id: height
+summary: "Высота из вершины на основание. params apex — вершина, a и b — концы основания. Даёт отрезок name и основание высоты name_foot. Не строй перпендикуляр вручную."
+app: geometry
+params:
+  name: {default: hgt}
+  apex: {default: C}
+  a: {default: A}
+  b: {default: B}
+needs: []
+creates:
+  - '{{name}}'
+  - '{{name}}_foot'
+commands:
+  - '{{name}}_foot = ClosestPoint(Line({{a}}, {{b}}), {{apex}})'
+  - '{{name}} = Segment({{apex}}, {{name}}_foot)'
+  - 'ShowLabel({{name}}_foot, false)'

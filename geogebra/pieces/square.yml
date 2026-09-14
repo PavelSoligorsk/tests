@@ -1,0 +1,19 @@
+id: square
+summary: "Квадрат со стороной a. Вершины A,B,C,D. Диагонали Segment(A, C), Segment(B, D)."
+app: geometry
+params:
+  name: {default: sq}
+  a: {default: 6}
+needs: []
+creates:
+  - '{{name}}'
+  - A
+  - B
+  - C
+  - D
+commands:
+  - 'A = (0, 0)'
+  - 'B = ({{a}}, 0)'
+  - 'C = ({{a}}, {{a}})'
+  - 'D = (0, {{a}})'
+  - '{{name}} = Polygon(A, B, C, D)'

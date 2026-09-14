@@ -1,0 +1,11 @@
+id: intersect
+summary: Пересечение двух объектов. params name, a, b — имена объектов.
+params:
+  name: {default: P}
+  a: {default: cir}
+  b: {default: lin}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Intersect({{a}}, {{b}})'

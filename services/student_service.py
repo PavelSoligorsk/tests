@@ -1,6 +1,5 @@
 import re
 import random
-import json
 from typing import List, Dict, Optional
 from repositories.user_repository import UserRepository
 from repositories.test_repository import TestRepository
@@ -9,6 +8,7 @@ from repositories.result_repository import ResultRepository
 from repositories.assignment_repository import AssignmentRepository
 from repositories.theory_repository import TheoryRepository
 from services.ai_service import AIService
+from services.geogebra_builder import geogebra_builder
 from dto_schemas import *
 from dto_schemas.cached import (
     StudentHistoryItemResponse,
@@ -413,9 +413,7 @@ class StudentService:
         }
         
         hint = await self.ai_service.get_hint(task_dict, topic_mastery['percentage'])
-        
-        # Parse GeoGebra block
-        geogebra = self._parse_geogebra(hint)
+        hint, geogebra = self._apply_geogebra(hint)
         
         return AIHintResponse(
             task_id=task_id,
@@ -451,9 +449,7 @@ class StudentService:
         }
         
         ai_solution = await self.ai_service.get_solution(task_dict, topic_mastery['percentage'])
-        
-        # Parse GeoGebra block
-        geogebra = self._parse_geogebra(ai_solution)
+        ai_solution, geogebra = self._apply_geogebra(ai_solution)
         
         # Извлечение ответа ИИ
         answer_pattern = r'=== ОТВЕТ ===\s*(.+?)(?:\n|$)'
@@ -469,7 +465,7 @@ class StudentService:
                 geogebra=geogebra,
             )
         
-        ai_answer = match.group(1).strip()
+        ai_answer = self._clean_ai_answer(match.group(1))
         is_correct = self._verify_answer(ai_answer, task.answer)
         
         return AISolutionResponse(
@@ -983,25 +979,24 @@ class StudentService:
             "percentage": percentage
         }
     
+    def _apply_geogebra(self, text: str):
+        """Собрать чертежи из текста, заменить блоки на {{geogebra:N}}."""
+        cleaned, figures = geogebra_builder.process_text(text or "")
+        return cleaned, figures or None
+
     def _parse_geogebra(self, text: str) -> Optional[dict]:
-        """Parse <GeoGebra setup={{`...`}} height="..." /> from AI response."""
-        # New format: <GeoGebra setup={{`command1\ncommand2`}} height="400" />
-        pattern = r'<GeoGebra\s+setup=\{\{`([^`]*)`\}\}\s+height="(\d+)"'
-        match = re.search(pattern, text)
-        if match:
-            return {
-                "setup": match.group(1),
-                "height": match.group(2),
-            }
-        # Old format: === GEOGEBRA === {json}
-        old_pattern = r'=== GEOGEBRA ===\s*(\{[^}]+\})'
-        match = re.search(old_pattern, text, re.IGNORECASE)
-        if match:
-            try:
-                return json.loads(match.group(1))
-            except (json.JSONDecodeError, Exception):
-                pass
-        return None
+        """Совместимость: первый чертёж как dict, если он один."""
+        _, figures = geogebra_builder.process_text(text or "")
+        if not figures:
+            return None
+        return figures[0]
+
+    def _clean_ai_answer(self, raw: str) -> str:
+        text = (raw or "").strip()
+        text = re.sub(r"^\*+", "", text)
+        text = re.sub(r"\*+$", "", text)
+        text = text.strip().strip("`").strip("$").strip()
+        return text
 
     def _verify_answer(self, ai_answer: str, correct_answer: str) -> bool:
         """Сверить ответ ИИ с правильным"""
@@ -1017,6 +1012,9 @@ class StudentService:
             result = result.replace(')', '')
             result = result.replace('.', '')
             result = result.replace(',', '')
+            result = result.replace('*', '')
+            result = result.replace('`', '')
+            result = result.replace('$', '')
             return result
         
         return normalize(ai_answer) == normalize(correct_answer)

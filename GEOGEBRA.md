@@ -32,9 +32,8 @@ GeoGebra используется **только для визуализации
 
 | Команда | Описание |
 |---------|----------|
-| `SetPerspective("T")` | Перспектива 3D |
-| `SetPerspective("2")` | Перспектива: плоскость XY |
-| `SetPerspective("G")` | Графика + алгебра |
+| `SetPerspective("G")` | Graphics (2D) |
+| `SetPerspective("T")` | 3D Graphics |
 | `CenterView((0,0))` | Центр вида 2D |
 | `CenterView((0,0,0))` | Центр вида 3D |
 | `ZoomIn(1)` | Масштаб (1 = нормальный) |
@@ -97,7 +96,7 @@ GeoGebra используется **только для визуализации
 
 - Команды **ТОЛЬКО** из списка выше.
 - Для 3D первая команда **ВСЕГДА** `SetPerspective("T")`.
-- Для 2D — `SetPerspective("2")`.
+- Для 2D — `SetPerspective("G")`.
 - `height`: только `300`, `400`, `450` или `500`.
 - **НИКАКИХ** `api.*`, JS-кода или комментариев внутри `setup`.
 - **НИКАКИХ** русских символов в именах переменных.
@@ -175,7 +174,7 @@ ShowLabel(HA, true)`} height="450" />
 ## 📐 Пример 2D: треугольник в окружности
 
 ```jsx
-<GeoGebra setup={`SetPerspective("2")
+<GeoGebra setup={`SetPerspective("G")
 ShowAxes(true)
 ShowGrid(true)
 O = (0, 0)
@@ -292,4 +291,4 @@ SetLineThickness(OC, 3)`} height="450" />
 <GeoGebraEmbed geogebra={{ commands: ["A=(0,0)", "B=(4,0)", "Polygon(A,B,C)"] }} />
 ```
 
-Команды из `setup` передаются как массив строк в `geogebra.commands` и выполняются последовательно через JavaScript API GeoGebra (`https://www.geogebra.org/apps/embed`). Параметры апплета: `appName: 'geometry'`, `language: 'ru'`, отключены меню и правое поле ввода алгебры, включены панель инструментов и кнопка сброса.
+Команды из `figure.commands` выполняются последовательно через GeoGebra Apps API: скрипт `https://www.geogebra.org/apps/deployggb.js`, `new GGBApplet({ appName: figure.app, appletOnLoad })`. `appName`: `geometry` | `graphing` | `3d`. Не используйте `https://www.geogebra.org/apps/embed` — это не API для своих команд. Подробности: `FRONTEND_GEOGEBRA.md`.

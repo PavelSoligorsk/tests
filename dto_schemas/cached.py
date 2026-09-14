@@ -423,6 +423,16 @@ class SubmitTestResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class GeoGebraFigureResponse(BaseModel):
+    id: int
+    app: str = "geometry"
+    height: str = "400"
+    commands: list[str] = Field(default_factory=list)
+    setup: str = ""
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class AIHintContext(BaseModel):
     task_class: Optional[str] = None
     topic_number: Optional[str] = None
@@ -436,7 +446,7 @@ class AIHintResponse(BaseModel):
     task_id: int
     hint: str
     context: AIHintContext
-    geogebra: Optional[dict] = None
+    geogebra: Optional[list[GeoGebraFigureResponse]] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -459,7 +469,7 @@ class AISolutionResponse(BaseModel):
     ai_answer: Optional[str] = None
     correct_answer: Optional[str] = None
     context: AISolutionContext
-    geogebra: Optional[dict] = None
+    geogebra: Optional[list[GeoGebraFigureResponse]] = None
 
     model_config = ConfigDict(from_attributes=True)
 

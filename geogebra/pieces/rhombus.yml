@@ -1,0 +1,20 @@
+id: rhombus
+summary: "Ромб по диагоналям. params p — горизонтальная диагональ, q — вертикальная. Вершины A,B,C,D, центр в (0,0)."
+app: geometry
+params:
+  name: {default: rh}
+  p: {default: 8}
+  q: {default: 6}
+needs: []
+creates:
+  - '{{name}}'
+  - A
+  - B
+  - C
+  - D
+commands:
+  - 'A = (-{{p}}/2, 0)'
+  - 'B = (0, -{{q}}/2)'
+  - 'C = ({{p}}/2, 0)'
+  - 'D = (0, {{q}}/2)'
+  - '{{name}} = Polygon(A, B, C, D)'

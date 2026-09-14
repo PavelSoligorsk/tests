@@ -1,0 +1,16 @@
+id: regular_pyramid
+summary: Правильная n-угольная пирамида. params a — сторона основания, h — высота, n — вершин (4=квадрат). Основание центрировано в начале координат, вершина над его центром.
+app: 3d
+params:
+  name: {default: pyr}
+  a: {default: 6}
+  h: {default: 5}
+  n: {default: 4}
+needs: []
+creates:
+  - '{{name}}'
+  - '{{name}}_base'
+commands:
+  - '{{name}}_R = {{a}} / (2 sin(pi/{{n}}))'
+  - '{{name}}_base = Polygon(Sequence(({{name}}_R cos(2pi k/{{n}}), {{name}}_R sin(2pi k/{{n}}), 0), k, 1, {{n}}))'
+  - '{{name}} = Pyramid({{name}}_base, (0, 0, {{h}}))'

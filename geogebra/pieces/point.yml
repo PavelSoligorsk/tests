@@ -1,0 +1,10 @@
+id: point
+summary: Точка. params name, at — "(x,y)" или "(x,y,z)".
+params:
+  name: {default: A}
+  at: {default: '(0,0)'}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = {{at}}'

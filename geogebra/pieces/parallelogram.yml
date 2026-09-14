@@ -1,0 +1,21 @@
+id: parallelogram
+summary: "Параллелограмм. Ставить после view_2d. params a — основание, h — высота, s — сдвиг верхней стороны. Вершины A,B,C,D. Последним fit_2d."
+app: geometry
+params:
+  name: {default: pg}
+  a: {default: 8}
+  h: {default: 5}
+  s: {default: 2}
+needs: []
+creates:
+  - '{{name}}'
+  - A
+  - B
+  - C
+  - D
+commands:
+  - 'A = (0, 0)'
+  - 'B = ({{a}}, 0)'
+  - 'D = ({{s}}, {{h}})'
+  - 'C = ({{a}} + {{s}}, {{h}})'
+  - '{{name}} = Polygon(A, B, C, D)'

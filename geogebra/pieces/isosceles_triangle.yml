@@ -1,0 +1,18 @@
+id: isosceles_triangle
+summary: "Равнобедренный треугольник. params a — основание, h — высота к основанию. Вершины A,B,C."
+app: geometry
+params:
+  name: {default: tri}
+  a: {default: 8}
+  h: {default: 6}
+needs: []
+creates:
+  - '{{name}}'
+  - A
+  - B
+  - C
+commands:
+  - 'A = (0, 0)'
+  - 'B = ({{a}}, 0)'
+  - 'C = ({{a}}/2, {{h}})'
+  - '{{name}} = Polygon(A, B, C)'

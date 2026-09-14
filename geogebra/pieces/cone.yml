@@ -1,0 +1,13 @@
+id: cone
+summary: Конус. С view_3d. params name, base, apex, r.
+app: 3d
+params:
+  name: {default: cn}
+  base: {default: O}
+  apex: {default: S}
+  r: {default: 1}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Cone({{base}}, {{apex}}, {{r}})'

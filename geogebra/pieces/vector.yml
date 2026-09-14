@@ -1,0 +1,11 @@
+id: vector
+summary: Вектор. params name, a, b — начало и конец.
+params:
+  name: {default: vec}
+  a: {default: A}
+  b: {default: B}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Vector({{a}}, {{b}})'

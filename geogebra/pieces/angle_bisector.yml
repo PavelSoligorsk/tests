@@ -1,0 +1,12 @@
+id: angle_bisector
+summary: Биссектриса угла. params name, a, vertex, b.
+params:
+  name: {default: bis}
+  a: {default: A}
+  vertex: {default: O}
+  b: {default: B}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = AngleBisector({{a}}, {{vertex}}, {{b}})'

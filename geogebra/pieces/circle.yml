@@ -1,0 +1,11 @@
+id: circle
+summary: Окружность. params name, center (имя или "(x,y)"), r.
+params:
+  name: {default: cir}
+  center: {default: '(0,0)'}
+  r: {default: 3}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Circle({{center}}, {{r}})'

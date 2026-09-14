@@ -1,0 +1,11 @@
+id: incircle_ngon
+summary: "Окружность, вписанная в квадрат или правильный многоугольник. params poly — имя многоугольника (sq, hex). Для треугольника бери incircle."
+app: geometry
+params:
+  name: {default: inc}
+  poly: {default: sq}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Circle(Centroid({{poly}}), Distance(Centroid({{poly}}), Midpoint(Vertex({{poly}}, 1), Vertex({{poly}}, 2))))'

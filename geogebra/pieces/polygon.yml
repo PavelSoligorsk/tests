@@ -1,0 +1,10 @@
+id: polygon
+summary: Многоугольник. params name, vertices — "A, B, C".
+params:
+  name: {default: poly}
+  vertices: {default: 'A, B, C'}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Polygon({{vertices}})'

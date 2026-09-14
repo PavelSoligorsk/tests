@@ -1,0 +1,11 @@
+id: circumcircle_ngon
+summary: "Окружность, описанная около квадрата или правильного многоугольника. params poly — имя многоугольника (sq, hex). Для треугольника бери circumcircle."
+app: geometry
+params:
+  name: {default: circ}
+  poly: {default: sq}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Circle(Centroid({{poly}}), Distance(Centroid({{poly}}), Vertex({{poly}}, 1)))'

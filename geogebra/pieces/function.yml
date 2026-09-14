@@ -1,0 +1,11 @@
+id: function
+summary: Функция y=f(x). params name, expr без y= (например x^2+2x). Лучше с view_graph.
+app: graphing
+params:
+  name: {default: f}
+  expr: {default: 'x'}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}}(x) = {{expr}}'

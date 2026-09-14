@@ -1,0 +1,22 @@
+id: triangle
+summary: "Треугольник по координатам вершин. params ax,ay,bx,by,cx,cy. Остроугольный — вершина C над основанием; тупоугольный — C за основанием, например cx=-3. Вершины A,B,C."
+app: geometry
+params:
+  name: {default: tri}
+  ax: {default: 0}
+  ay: {default: 0}
+  bx: {default: 8}
+  by: {default: 0}
+  cx: {default: 3}
+  cy: {default: 5}
+needs: []
+creates:
+  - '{{name}}'
+  - A
+  - B
+  - C
+commands:
+  - 'A = ({{ax}}, {{ay}})'
+  - 'B = ({{bx}}, {{by}})'
+  - 'C = ({{cx}}, {{cy}})'
+  - '{{name}} = Polygon(A, B, C)'

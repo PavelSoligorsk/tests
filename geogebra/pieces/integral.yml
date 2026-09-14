@@ -1,0 +1,13 @@
+id: integral
+summary: Интеграл функции на отрезке. С view_graph. params name, f, xmin, xmax.
+app: graphing
+params:
+  name: {default: F}
+  f: {default: f}
+  xmin: {default: 0}
+  xmax: {default: 1}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Integral({{f}}, {{xmin}}, {{xmax}})'

@@ -1,0 +1,12 @@
+id: fit_2d
+summary: "ОБЯЗАТЕЛЕН для каждого 2D/графика, последним в stack. xmin,ymin,xmax,ymax — окно вокруг всех точек с запасом ~1. Не ZoomIn(1)."
+app: geometry
+params:
+  xmin: {default: -1}
+  ymin: {default: -1}
+  xmax: {default: 10}
+  ymax: {default: 8}
+needs: []
+creates: []
+commands:
+  - 'ZoomIn({{xmin}}, {{ymin}}, {{xmax}}, {{ymax}})'

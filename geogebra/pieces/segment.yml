@@ -1,0 +1,11 @@
+id: segment
+summary: Отрезок. params name, a, b — имена точек или координаты.
+params:
+  name: {default: ab}
+  a: {default: A}
+  b: {default: B}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Segment({{a}}, {{b}})'

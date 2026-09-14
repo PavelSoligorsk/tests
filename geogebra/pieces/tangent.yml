@@ -1,0 +1,11 @@
+id: tangent
+summary: Касательная из точки к окружности/функции. params name, point, curve.
+params:
+  name: {default: tng}
+  point: {default: A}
+  curve: {default: cir}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Tangent({{point}}, {{curve}})'

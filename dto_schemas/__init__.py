@@ -68,6 +68,7 @@ from dto_schemas.cached import (
     StartAssignedTestResponse,
     RetakeTestResponse,
     SubmitTestResponse,
+    GeoGebraFigureResponse,
     AIHintContext,
     AIHintResponse,
     AISolutionContext,
@@ -126,6 +127,7 @@ __all__ = [
     "GroupReviewNotSubmittedItem", "GroupReviewAnswerItem", "GroupTestReviewResponse",
     "TeacherTaskDetailResponse",
     "StartTestTaskItem", "StartAssignedTestResponse", "RetakeTestResponse", "SubmitTestResponse",
+    "GeoGebraFigureResponse",
     "AIHintContext", "AIHintResponse", "AISolutionContext", "AISolutionResponse",
     "AITheoryContext", "AITheoryResponse",
     # Schedule / Payments / Telegram

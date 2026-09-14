@@ -1,0 +1,14 @@
+id: view_graph
+summary: Графика + алгебра. Ставить первым для графиков функций.
+app: graphing
+params:
+  axes: {default: true}
+  grid: {default: true}
+  zoom: {default: 1}
+needs: []
+creates: []
+commands:
+  - 'SetPerspective("G")'
+  - 'ZoomIn({{zoom}})'
+  - 'ShowAxes({{axes}})'
+  - 'ShowGrid({{grid}})'

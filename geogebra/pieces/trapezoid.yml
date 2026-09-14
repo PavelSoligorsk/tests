@@ -1,0 +1,21 @@
+id: trapezoid
+summary: "Равнобедренная трапеция. params a — нижнее основание, b — верхнее, h — высота. Вершины A,B,C,D."
+app: geometry
+params:
+  name: {default: trap}
+  a: {default: 13}
+  b: {default: 7}
+  h: {default: 6}
+needs: []
+creates:
+  - '{{name}}'
+  - A
+  - B
+  - C
+  - D
+commands:
+  - 'A = (0, 0)'
+  - 'B = ({{a}}, 0)'
+  - 'C = (({{a}} + {{b}})/2, {{h}})'
+  - 'D = (({{a}} - {{b}})/2, {{h}})'
+  - '{{name}} = Polygon(A, B, C, D)'

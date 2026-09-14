@@ -1,0 +1,11 @@
+id: text
+summary: Подпись на чертеже. params name, value (строка или выражение), at — координаты.
+params:
+  name: {default: txt}
+  value: {default: '""'}
+  at: {default: '(0,0)'}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Text({{value}}, {{at}})'

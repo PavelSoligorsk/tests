@@ -1,0 +1,17 @@
+id: view_2d
+summary: Вид Graphics (G). Ставить первым для 2D-чертежа.
+app: geometry
+params:
+  axes: {default: true}
+  grid: {default: true}
+  zoom: {default: 1}
+  cx: {default: 0}
+  cy: {default: 0}
+needs: []
+creates: []
+commands:
+  - 'SetPerspective("G")'
+  - 'CenterView(({{cx}},{{cy}}))'
+  - 'ZoomIn({{zoom}})'
+  - 'ShowAxes({{axes}})'
+  - 'ShowGrid({{grid}})'

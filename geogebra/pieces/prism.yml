@@ -1,0 +1,12 @@
+id: prism
+summary: Призма. С view_3d. params name, base (многоугольник), height — высота числом (например 8), не точка в плоскости основания.
+app: 3d
+params:
+  name: {default: pr}
+  base: {default: poly}
+  height: {default: 8}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Prism({{base}}, {{height}})'

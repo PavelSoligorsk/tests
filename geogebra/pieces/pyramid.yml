@@ -1,0 +1,12 @@
+id: pyramid
+summary: Пирамида. С view_3d. params name, base, apex.
+app: 3d
+params:
+  name: {default: pyr}
+  base: {default: poly}
+  apex: {default: S}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Pyramid({{base}}, {{apex}})'

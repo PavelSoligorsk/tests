@@ -1,0 +1,188 @@
+# Каталог команд GeoGebra Script (английские имена).
+# В extra — скобки: Circle(A, 3), не Circle[<...>].
+# Execute запрещён.
+
+forbidden:
+  - Execute
+
+# Не требуют уже объявленных имён (литералы, вид, текст, графики с формулами).
+free:
+  - ShowAxes
+  - ShowGrid
+  - CenterView
+  - ZoomIn
+  - SetPerspective
+  - AxesVisible
+  - Text
+  - FormulaText
+  - FractionText
+  - SurdText
+  - TableText
+  - BarChart
+  - Histogram
+  - BoxPlot
+  - DotPlot
+  - PieChart
+  - Sequence
+  - SlopeField
+  - Curve
+  - Surface
+  - Function
+
+categories:
+  geometry:
+    - Point
+    - Midpoint
+    - Intersect
+    - Line
+    - Segment
+    - Ray
+    - PerpendicularLine
+    - PerpendicularBisector
+    - AngleBisector
+    - Tangent
+    - Polygon
+    - Circle
+    - Incircle
+    - CircularSector
+    - CircularArc
+    - Semicircle
+    - Sector
+    - Arc
+    - Polyline
+    - ClosestPoint
+    - Center
+    - Radius
+    - Vertex
+    - Centroid
+    - Distance
+    - Angle
+    - Area
+    - Perimeter
+    - Locus
+    - Vector
+  "3d":
+    - Plane
+    - PerpendicularPlane
+    - PlaneBisector
+    - Prism
+    - Pyramid
+    - Cube
+    - Tetrahedron
+    - Sphere
+    - Cylinder
+    - Cone
+    - Net
+    - Volume
+    - Surface
+    - Bottom
+    - Top
+    - Side
+  calculus:
+    - Derivative
+    - Integral
+    - IntegralBetween
+    - Limit
+    - LimitAbove
+    - LimitBelow
+    - Root
+    - Roots
+    - Extremum
+    - InflectionPoint
+    - Asymptote
+    - TaylorPolynomial
+    - Curvature
+    - OsculatingCircle
+    - SolveODE
+    - SlopeField
+    - Curve
+  algebra:
+    - Factor
+    - Expand
+    - Simplify
+    - Solve
+    - NSolve
+    - Numerator
+    - Denominator
+    - Coefficients
+    - Degree
+    - PartialFractions
+    - CFactor
+    - CSolve
+  transformations:
+    - Translate
+    - Rotate
+    - Reflect
+    - Dilate
+    - Shear
+    - Stretch
+  lists:
+    - Sequence
+    - Zip
+    - Element
+    - Append
+    - Sort
+    - Reverse
+    - First
+    - Last
+    - Take
+    - CountIf
+    - KeepIf
+    - Flatten
+    - Unique
+    - Union
+    - Intersection
+  logic:
+    - If
+    - Relation
+    - Defined
+    - IsInRegion
+    - AreParallel
+    - ArePerpendicular
+  charts:
+    - BarChart
+    - Histogram
+    - BoxPlot
+    - DotPlot
+    - PieChart
+  optimization:
+    - Maximize
+    - Minimize
+  scripting:
+    - SetValue
+    - SetCoords
+    - StartAnimation
+    - SetColor
+    - SetCaption
+    - SetVisibleInView
+    - UpdateConstruction
+    - ZoomIn
+    - CenterView
+    - SetPointSize
+    - SetLineThickness
+    - SetFilling
+    - SetPerspective
+    - ShowAxes
+    - ShowGrid
+    - AxesVisible
+  text:
+    - FormulaText
+    - Text
+    - FractionText
+    - SurdText
+    - TableText
+  system:
+    - Delete
+    - Rename
+    - CopyFreeObject
+    - ShowLabel
+    - DynamicCoordinates
+    - Slider
+    - Function
+  cas:
+    - CSolve
+    - Substitute
+    - Eliminate
+    - Numeric
+    - Rationalize
+    - GroebnerLex

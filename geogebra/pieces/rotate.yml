@@ -1,0 +1,12 @@
+id: rotate
+summary: Поворот. params name, obj, angle, center.
+params:
+  name: {default: obj2}
+  obj: {default: poly}
+  angle: {default: 90}
+  center: {default: O}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Rotate({{obj}}, {{angle}}°, {{center}})'

@@ -1,0 +1,11 @@
+id: translate
+summary: Перенос на вектор. params name, obj, vector.
+params:
+  name: {default: obj2}
+  obj: {default: poly}
+  vector: {default: vec}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Translate({{obj}}, {{vector}})'

@@ -1,0 +1,40 @@
+# Свободные — не требуют уже объявленных имён.
+# Полный список extra-команд: geogebra/commands.yml
+forbidden:
+  - Execute
+
+free:
+  - ShowAxes
+  - ShowGrid
+  - CenterView
+  - ZoomIn
+  - SetPerspective
+  - AxesVisible
+  - Text
+
+commands:
+  - SetColor
+  - SetCaption
+  - ShowLabel
+  - SetPointSize
+  - SetLineThickness
+  - SetFilling
+  - Segment
+  - Line
+  - Vector
+  - Point
+  - Circle
+  - Sphere
+  - Polygon
+  - Intersect
+  - Angle
+  - Slider
+  - Plane
+  - Function
+  - Text
+  - ShowAxes
+  - ShowGrid
+  - CenterView
+  - ZoomIn
+  - SetPerspective
+  - AxesVisible

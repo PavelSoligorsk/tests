@@ -1,0 +1,21 @@
+id: slider_3d
+summary: Ползунок в 3D (отрезок + точка H). Даёт d. params coord (x|y|z), min, max, side.
+app: 3d
+params:
+  coord: {default: y}
+  min: {default: 0}
+  max: {default: 3}
+  side: {default: -5}
+needs: []
+creates:
+  - H_min
+  - H_max
+  - SliderAxis
+  - H
+  - d
+commands:
+  - 'H_min = ({{side}}, {{min}}, 0)'
+  - 'H_max = ({{side}}, {{max}}, 0)'
+  - 'SliderAxis = Segment(H_min, H_max)'
+  - 'H = Point(SliderAxis)'
+  - 'd = {{coord}}(H)'

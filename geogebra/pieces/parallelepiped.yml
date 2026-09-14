@@ -1,0 +1,21 @@
+id: parallelepiped
+summary: "Прямоугольный параллелепипед a×b×c. params a, b, c — рёбра. Диагональ Segment(A, G)."
+app: 3d
+params:
+  name: {default: box}
+  a: {default: 2}
+  b: {default: 3}
+  c: {default: 6}
+needs: []
+creates:
+  - '{{name}}'
+  - A
+  - G
+commands:
+  - 'A = (0, 0, 0)'
+  - 'B = ({{a}}, 0, 0)'
+  - 'C = ({{a}}, {{b}}, 0)'
+  - 'D = (0, {{b}}, 0)'
+  - '{{name}}_base = Polygon(A, B, C, D)'
+  # Prism сама создаёт верхние вершины E, F, G, H — переопределять их нельзя.
+  - '{{name}} = Prism({{name}}_base, {{c}})'

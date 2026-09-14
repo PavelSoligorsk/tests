@@ -1,0 +1,11 @@
+id: perpendicular_bisector
+summary: Серединный перпендикуляр. params name, a, b — концы отрезка.
+params:
+  name: {default: pb}
+  a: {default: A}
+  b: {default: B}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = PerpendicularBisector({{a}}, {{b}})'

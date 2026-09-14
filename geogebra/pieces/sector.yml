@@ -1,0 +1,18 @@
+id: sector
+summary: "Круговой сектор. params r — радиус, alpha — угол в градусах. Центр O, точки P и Q на окружности."
+app: geometry
+params:
+  name: {default: sect}
+  r: {default: 4}
+  alpha: {default: 90}
+needs: []
+creates:
+  - '{{name}}'
+  - O
+  - P
+  - Q
+commands:
+  - 'O = (0, 0)'
+  - 'P = ({{r}}, 0)'
+  - 'Q = ({{r}}*cos({{alpha}}*pi/180), {{r}}*sin({{alpha}}*pi/180))'
+  - '{{name}} = CircularSector(O, P, Q)'

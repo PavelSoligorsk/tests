@@ -1,0 +1,11 @@
+id: reflect
+summary: Отражение. params name, obj, mirror — прямая, точка или плоскость.
+params:
+  name: {default: obj2}
+  obj: {default: poly}
+  mirror: {default: lin}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Reflect({{obj}}, {{mirror}})'

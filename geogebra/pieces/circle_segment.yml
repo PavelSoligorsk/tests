@@ -1,0 +1,20 @@
+id: circle_segment
+summary: "Сегмент круга: дуга плюс хорда. params r — радиус, alpha — центральный угол в градусах. Центр O, концы хорды P и Q."
+app: geometry
+params:
+  name: {default: seg}
+  r: {default: 4}
+  alpha: {default: 120}
+needs: []
+creates:
+  - '{{name}}'
+  - '{{name}}_chord'
+  - O
+  - P
+  - Q
+commands:
+  - 'O = (0, 0)'
+  - 'P = ({{r}}, 0)'
+  - 'Q = ({{r}}*cos({{alpha}}*pi/180), {{r}}*sin({{alpha}}*pi/180))'
+  - '{{name}} = CircularArc(O, P, Q)'
+  - '{{name}}_chord = Segment(P, Q)'

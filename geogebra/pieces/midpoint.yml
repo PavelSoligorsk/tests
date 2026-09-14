@@ -1,0 +1,11 @@
+id: midpoint
+summary: Середина отрезка. params name, a, b — две точки.
+params:
+  name: {default: M}
+  a: {default: A}
+  b: {default: B}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Midpoint({{a}}, {{b}})'

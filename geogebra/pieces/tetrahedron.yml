@@ -1,0 +1,12 @@
+id: tetrahedron
+summary: Тетраэдр. С view_3d. params name, a, b — ребро.
+app: 3d
+params:
+  name: {default: tet}
+  a: {default: A}
+  b: {default: B}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Tetrahedron({{a}}, {{b}})'

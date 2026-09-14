@@ -1,0 +1,11 @@
+id: perpendicular_line
+summary: Перпендикуляр из точки к прямой. params name, point, line.
+params:
+  name: {default: perp}
+  point: {default: A}
+  line: {default: lin}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = PerpendicularLine({{point}}, {{line}})'

@@ -610,6 +610,46 @@ async def test_student_ai_hint_success(
 
 @pytest.mark.student
 @pytest.mark.asyncio
+async def test_student_ai_hint_inline_geogebra(
+    async_client: AsyncClient, student_token: str, admin_token: str
+) -> None:
+    """Чертежи из ```geogebra вырезаются в geogebra[] и плейсхолдеры в тексте."""
+    task = await async_create_task(async_client, admin_token, {
+        "task_class": "10", "topic_number": "1",
+        "topic": "geometry", "section": "circle",
+        "content": "Окружность радиуса 2",
+        "answer": "2", "is_open_answer": True,
+        "difficulty": 1, "hint": "h", "solution": "s",
+    })
+    from unittest.mock import AsyncMock, patch
+    raw = (
+        "Посмотри на окружность:\n"
+        "```geogebra\n"
+        '{"app":"geometry","height":400,"stack":['
+        '{"use":"view_2d","params":{}},'
+        '{"use":"circle","params":{"name":"c","r":2}}'
+        '],"extra":["SetColor(c, \\"#3b82f6\\")"]}\n'
+        "```\n"
+        "Радиус равен 2."
+    )
+    with patch("services.ai_service.AIService.get_hint",
+               new_callable=AsyncMock) as mock_hint:
+        mock_hint.return_value = raw
+        resp = await async_client.post(
+            f"/student/tasks/{task['id']}/hint",
+            headers=_bearer(student_token))
+    assert resp.status_code == 200, resp.text
+    d = resp.json()
+    assert "{{geogebra:0}}" in d["hint"]
+    assert "Радиус равен 2." in d["hint"]
+    assert "```geogebra" not in d["hint"]
+    assert isinstance(d["geogebra"], list)
+    assert d["geogebra"][0]["id"] == 0
+    assert any("Circle" in c for c in d["geogebra"][0]["commands"])
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
 async def test_student_ai_solution_success(
     async_client: AsyncClient, student_token: str, admin_token: str
 ) -> None:

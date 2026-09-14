@@ -1,0 +1,11 @@
+id: ray
+summary: Луч. params name, start, through.
+params:
+  name: {default: ry}
+  start: {default: A}
+  through: {default: B}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Ray({{start}}, {{through}})'

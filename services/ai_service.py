@@ -5,9 +5,18 @@ import asyncio
 import logging
 from typing import List, Dict, Optional, Literal
 
+import httpx
+
+from services.geogebra_builder import geogebra_builder
+
 AIProvider = Literal["mistral", "deepseek"]
 
 logger = logging.getLogger(__name__)
+
+
+def _ssl_verify() -> bool:
+    raw = os.getenv("AI_SSL_VERIFY", os.getenv("SSL_VERIFY", "true")).strip().lower()
+    return raw not in ("0", "false", "no", "off")
 
 
 class AIService:
@@ -21,16 +30,24 @@ class AIService:
 
     def __init__(self, provider: AIProvider = "mistral"):
         self.provider = provider
+        verify = _ssl_verify()
+        if not verify:
+            logger.warning("AI SSL verification is disabled (AI_SSL_VERIFY/SSL_VERIFY=false)")
         if provider == "deepseek":
             import openai
             self.client = openai.AsyncOpenAI(
                 api_key=os.getenv("DEEPSEEK_API_KEY"),
                 base_url="https://api.deepseek.com",
+                http_client=httpx.AsyncClient(follow_redirects=True, verify=verify),
             )
             self.model = "deepseek-v4-pro"
         else:
             from mistralai.client import Mistral
-            self.client = Mistral(api_key=os.getenv("MISTRAL_TOKEN"))
+            self.client = Mistral(
+                api_key=os.getenv("MISTRAL_TOKEN"),
+                client=httpx.Client(follow_redirects=True, verify=verify),
+                async_client=httpx.AsyncClient(follow_redirects=True, verify=verify),
+            )
             self.model = "ministral-14b-2512"
 
     async def _chat_completion(
@@ -115,7 +132,7 @@ class AIService:
             system_prompt="Ты — терпеливый ИИ-репетитор. Помогаешь понять, а не решаешь за студента. ВСЕ математические формулы и выражения ОБЯЗАТЕЛЬНО оформляй в $...$ (строчные) или $$...$$ (вынесенные).",
             user_prompt=prompt,
             temperature=0.7,
-            max_tokens=800
+            max_tokens=1600
         )
     
     async def get_solution(self, task: dict, topic_mastery: Optional[float] = None) -> str:
@@ -126,7 +143,7 @@ class AIService:
             system_prompt="Ты — математический эксперт. Решай задачи подробно, показывай все шаги. В конце обязательно укажи ответ в формате '=== ОТВЕТ === ...'",
             user_prompt=prompt,
             temperature=0.3,
-            max_tokens=2000
+            max_tokens=2500
         )
     
     async def get_theory_answer(self, question: str, theory_context: str, topic_name: str = "", section_name: str = "") -> str:
@@ -308,7 +325,7 @@ ShowLabel(HA, true)`} height="450" />
 ПРАВИЛА:
 - Команды ТОЛЬКО из списка выше
 - Для 3D первая команда ВСЕГДА SetPerspective("T")
-- Для 2D: SetPerspective("2")
+- Для 2D: SetPerspective("G")
 - height: 300, 400, 450 или 500
 - НИКАКИХ api.*, JS, комментариев внутри setup
 - НИКАКИХ русских символов в именах переменных
@@ -532,7 +549,7 @@ ShowLabel(HA, true)`} height="450" />
 
 НЕ пиши: "Ответ: ..." или "Правильный вариант — ..."
 НЕ решай полностью — только направляй, показывая примеры преобразований.
-""" + self.GEOGEBRA_INSTRUCTIONS
+""" + geogebra_builder.prompt_instructions()
     
     def _get_solution_requirements(self) -> str:
         return """
@@ -559,4 +576,4 @@ ShowLabel(HA, true)`} height="450" />
 - Соответствие (А1Б3В2): последовательность пар БУКВА+ЦИФРА слитно
 
 ЗАПОМНИ: используй ТОЛЬКО $...$ и $$...$$, НИКОГДА не используй \\( ... \\) или \\[ ... \\]
-""" + self.GEOGEBRA_INSTRUCTIONS
+""" + geogebra_builder.prompt_instructions()

@@ -1,0 +1,16 @@
+id: regular_prism
+summary: Правильная n-угольная призма целиком. params a — сторона основания, h — высота, n — число вершин (3=треугольник). С view_3d.
+app: 3d
+params:
+  name: {default: pr}
+  a: {default: 6}
+  h: {default: 8}
+  n: {default: 3}
+needs: []
+creates:
+  - '{{name}}'
+  - '{{name}}_base'
+commands:
+  - '{{name}}_R = {{a}} / (2 sin(pi/{{n}}))'
+  - '{{name}}_base = Polygon(Sequence(({{name}}_R cos(2pi k/{{n}}), {{name}}_R sin(2pi k/{{n}}), 0), k, 1, {{n}}))'
+  - '{{name}} = Prism({{name}}_base, {{h}})'

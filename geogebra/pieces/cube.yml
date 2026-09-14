@@ -1,0 +1,12 @@
+id: cube
+summary: Куб. С view_3d. params name, a, b — смежные вершины основания.
+app: 3d
+params:
+  name: {default: cu}
+  a: {default: A}
+  b: {default: B}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Cube({{a}}, {{b}})'

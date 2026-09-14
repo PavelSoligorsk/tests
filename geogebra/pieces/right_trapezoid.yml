@@ -1,0 +1,21 @@
+id: right_trapezoid
+summary: "Прямоугольная трапеция: боковая сторона AD перпендикулярна основаниям. params a — нижнее основание, b — верхнее, h — высота."
+app: geometry
+params:
+  name: {default: trap}
+  a: {default: 10}
+  b: {default: 6}
+  h: {default: 5}
+needs: []
+creates:
+  - '{{name}}'
+  - A
+  - B
+  - C
+  - D
+commands:
+  - 'A = (0, 0)'
+  - 'B = ({{a}}, 0)'
+  - 'C = ({{b}}, {{h}})'
+  - 'D = (0, {{h}})'
+  - '{{name}} = Polygon(A, B, C, D)'

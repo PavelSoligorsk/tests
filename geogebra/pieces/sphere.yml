@@ -1,0 +1,12 @@
+id: sphere
+summary: Сфера. Только с view_3d. params name, center, r.
+app: 3d
+params:
+  name: {default: sph}
+  center: {default: '(0,0,0)'}
+  r: {default: 2}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Sphere({{center}}, {{r}})'

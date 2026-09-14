@@ -1,0 +1,12 @@
+id: derivative
+summary: Производная. С view_graph. params name, f, order.
+app: graphing
+params:
+  name: {default: df}
+  f: {default: f}
+  order: {default: 1}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Derivative({{f}}, {{order}})'

@@ -1,0 +1,16 @@
+id: regular_ngon
+summary: "Правильный n-угольник по длине стороны. params a — сторона, n — число вершин (6 = шестиугольник). Вершины A, B, C… строит сам."
+app: geometry
+params:
+  name: {default: ngon}
+  a: {default: 4}
+  n: {default: 6}
+needs: []
+creates:
+  - '{{name}}'
+  - A
+  - B
+commands:
+  - 'A = (0, 0)'
+  - 'B = ({{a}}, 0)'
+  - '{{name}} = Polygon(A, B, {{n}})'

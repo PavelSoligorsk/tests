@@ -1,0 +1,10 @@
+id: centroid
+summary: Центроид многоугольника. params name, poly.
+params:
+  name: {default: G}
+  poly: {default: poly}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Centroid({{poly}})'

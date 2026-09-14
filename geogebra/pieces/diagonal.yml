@@ -1,0 +1,12 @@
+id: diagonal
+summary: "Диагональ четырёхугольника — отрезок противоположных вершин. params a, b: A и C либо B и D."
+app: geometry
+params:
+  name: {default: diag}
+  a: {default: A}
+  b: {default: C}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Segment({{a}}, {{b}})'

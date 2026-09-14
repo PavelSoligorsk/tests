@@ -1,0 +1,12 @@
+id: incircle
+summary: Вписанная окружность треугольника. params name, a, b, c.
+params:
+  name: {default: inc}
+  a: {default: A}
+  b: {default: B}
+  c: {default: C}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Incircle({{a}}, {{b}}, {{c}})'

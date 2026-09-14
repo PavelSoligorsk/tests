@@ -1,0 +1,11 @@
+id: line
+summary: Прямая через две точки. params name, a, b — имена или координаты.
+params:
+  name: {default: lin}
+  a: {default: '(0,0)'}
+  b: {default: '(1,1)'}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Line({{a}}, {{b}})'

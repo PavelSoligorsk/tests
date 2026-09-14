@@ -1,0 +1,15 @@
+id: view_3d
+summary: 3D-вид. Ставить первым для стереометрии.
+app: 3d
+params:
+  axes: {default: false}
+  grid: {default: false}
+  zoom: {default: 1}
+needs: []
+creates: []
+commands:
+  - 'SetPerspective("T")'
+  - 'CenterView((0,0,0))'
+  - 'ZoomIn({{zoom}})'
+  - 'ShowAxes({{axes}})'
+  - 'ShowGrid({{grid}})'

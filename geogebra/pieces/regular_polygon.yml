@@ -1,0 +1,12 @@
+id: regular_polygon
+summary: Правильный n-угольник по двум соседним вершинам. params name, a, b — точки, n — число вершин.
+params:
+  name: {default: rp}
+  a: {default: A}
+  b: {default: B}
+  n: {default: 6}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Polygon({{a}}, {{b}}, {{n}})'

@@ -1,0 +1,10 @@
+id: var
+summary: Числовая переменная. params name, value (например R=3).
+params:
+  name: {default: R}
+  value: {default: 3}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = {{value}}'

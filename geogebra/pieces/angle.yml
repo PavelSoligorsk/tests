@@ -1,0 +1,12 @@
+id: angle
+summary: Угол. params name, a, vertex, b — три точки, вершина в середине.
+params:
+  name: {default: alpha}
+  a: {default: A}
+  vertex: {default: O}
+  b: {default: B}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Angle({{a}}, {{vertex}}, {{b}})'

@@ -1,0 +1,12 @@
+id: circumcircle
+summary: Описанная окружность треугольника — через три точки. params name, a, b, c.
+params:
+  name: {default: circ}
+  a: {default: A}
+  b: {default: B}
+  c: {default: C}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Circle({{a}}, {{b}}, {{c}})'

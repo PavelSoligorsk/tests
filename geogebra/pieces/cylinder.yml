@@ -1,0 +1,13 @@
+id: cylinder
+summary: Цилиндр. С view_3d. params name; a и b — точки или координаты оси; r — радиус.
+app: 3d
+params:
+  name: {default: cyl}
+  a: {default: "(0, 0, 0)"}
+  b: {default: "(0, 0, 5)"}
+  r: {default: 3}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Cylinder({{a}}, {{b}}, {{r}})'

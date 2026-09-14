@@ -1,0 +1,11 @@
+id: distance
+summary: Расстояние точка–объект. params name, point, obj.
+params:
+  name: {default: dist}
+  point: {default: A}
+  obj: {default: lin}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Distance({{point}}, {{obj}})'

@@ -1,0 +1,18 @@
+id: right_triangle
+summary: "Прямоугольный треугольник, прямой угол в A. params a — катет по x, b — катет по y. Вершины A,B,C."
+app: geometry
+params:
+  name: {default: tri}
+  a: {default: 6}
+  b: {default: 8}
+needs: []
+creates:
+  - '{{name}}'
+  - A
+  - B
+  - C
+commands:
+  - 'A = (0, 0)'
+  - 'B = ({{a}}, 0)'
+  - 'C = (0, {{b}})'
+  - '{{name}} = Polygon(A, B, C)'

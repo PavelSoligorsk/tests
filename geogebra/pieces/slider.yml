@@ -1,0 +1,12 @@
+id: slider
+summary: Слайдер 2D. params name, min, max, step. Даёт переменную name.
+params:
+  name: {default: sl}
+  min: {default: 0}
+  max: {default: 10}
+  step: {default: 0.1}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Slider({{min}}, {{max}}, {{step}})'

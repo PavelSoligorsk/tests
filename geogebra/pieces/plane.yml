@@ -1,0 +1,13 @@
+id: plane
+summary: Плоскость через три точки. С view_3d. params name, a, b, c.
+app: 3d
+params:
+  name: {default: pln}
+  a: {default: '(1,0,0)'}
+  b: {default: '(0,1,0)'}
+  c: {default: '(0,0,1)'}
+needs: []
+creates:
+  - '{{name}}'
+commands:
+  - '{{name}} = Plane({{a}}, {{b}}, {{c}})'
