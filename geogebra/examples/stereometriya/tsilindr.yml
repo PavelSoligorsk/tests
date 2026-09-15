@@ -1,0 +1,15 @@
+section: Цилиндр
+topic: Стереометрия
+examples:
+  - title: Цилиндр с радиусом и высотой
+    prompt: Цилиндр с радиусом основания 3 и высотой 5.
+    app: "3d"
+    height: "400"
+    commands:
+      - 'SetPerspective("T")'
+      - CenterView((0,0,0))
+      - ShowAxes(false)
+      - ShowGrid(false)
+      - cyl = Cylinder((0,0,0), (0,0,5), 3)
+      - 'lab_r = Text("r = 3", (3, 0, 0))'
+      - ZoomIn(-5, -5, -1, 5, 5, 7)

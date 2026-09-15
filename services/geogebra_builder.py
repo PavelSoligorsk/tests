@@ -893,70 +893,35 @@ class GeoGebraBuilder:
         return "\n".join(lines)
 
     def prompt_instructions(self) -> str:
+        """Инструкции для AI: блок ```geogebra с полем commands (без use/stack)."""
         return f"""
 === ЧЕРТЕЖИ GeoGebra ===
-Если визуализация помогает — вставь блок ТАМ, где он должен стоять в тексте (не обязательно в конце).
+Если визуализация помогает — вставь блок ТАМ, где он должен стоять в тексте.
 Чертежей может быть несколько. Если не нужен — блоков нет.
 
-Формат строго такой (JSON внутри ограды):
+Формат строго такой (JSON внутри ограды) — набор команд, БЕЗ use/stack:
 
 ```geogebra
-{{"app":"geometry","height":400,"stack":[{{"use":"view_2d","params":{{}}}},{{"use":"point","params":{{"name":"A","at":"(2,0)"}}}},{{"use":"fit_2d","params":{{"xmin":-2,"ymin":-2,"xmax":6,"ymax":4}}}}],"extra":["SetColor(A, \\"#ef4444\\")","ShowLabel(A, true)"]}}
+{{"app":"geometry","height":400,"commands":["SetPerspective(\\"G\\")","ShowAxes(true)","ShowGrid(true)","A = (0, 0)","B = (6, 0)","C = (3, 5)","tri = Polygon(A, B, C)","ShowLabel(A, true)","ZoomIn(-1, -1, 7, 6)"]}}
 ```
 
-Поля блока:
+Поля:
 - app: geometry | graphing | 3d
 - height: 300, 400, 450 или 500
-- stack: массив кусков {{"use":"...","params":{{...}}}} из каталога, сколько угодно
-- extra: команды GeoGebra Script ПОСЛЕ стека. Синтаксис английский со скобками: Circle(A, 3), не Circle[<А>, <r>] и не русские имена (Точка, Прямая).
-- extra без лимита строк. Нельзя: Execute, api.*, JS.
+- commands: массив строк GeoGebra Script (английские имена со скобками)
 
-ПЛАНИМЕТРИЯ (app=geometry, сначала view_2d, потом фигура). Готовый кусок вместо ручных точек:
-- квадрат — square (a); прямоугольник — rectangle (a, b)
-- параллелограмм — parallelogram (a, h, s); ромб — rhombus (p, q — диагонали)
-- трапеция равнобедренная — trapezoid (a, b, h); прямоугольная — right_trapezoid (a, b, h)
-- треугольник прямоугольный — right_triangle (a, b); равнобедренный — isosceles_triangle (a, h); правильный — equilateral_triangle (a)
-- треугольник остроугольный/тупоугольный — triangle (ax,ay,bx,by,cx,cy). Тупой угол: вынеси C за основание, например cx=-3, cy=4
-- правильный n-угольник (шестиугольник) — regular_ngon (a, n). Не задавай точки вручную
-- окружность — circle (center, r)
-- вписанная/описанная ТРЕУГОЛЬНИКА — incircle / circumcircle (a, b, c — вершины)
-- вписанная/описанная КВАДРАТА или правильного n-угольника — incircle_ngon / circumcircle_ngon (poly — имя многоугольника). Incircle(A,B,C) берёт только три точки, для квадрата она не годится
-- сектор — sector (r, alpha в градусах); сегмент круга — circle_segment (r, alpha)
-У всех этих кусков вершины называются A, B, C, D (у сектора O, P, Q) — используй их в extra: Segment(A, C) для диагонали, Angle(A, B, C), Text("a = 6", (3, -0.7))
+Правила команд:
+- 2D/графики: первая SetPerspective("G"); 3D: SetPerspective("T"). Не "2".
+- Точки только с ЗАГЛАВНОЙ: A, B, M. Строчная m — вектор, ломает чертёж.
+- Имена объектов минимум две буквы (hgt, diag, lab_a). Не a, b, c, d, h, r — стороны многоугольника.
+- Нельзя имена функций: ln, sec, alt, abs, exp, log, deg, rad, sin, cos, tan, sqrt
+- RegularPolygon и Circumcircle НЕ существуют. Правильный n-угольник: Polygon(A, B, n). Описанная: Circle(A, B, C).
+- Высота: ClosestPoint(Line(A, B), C) + Segment, не PerpendicularLine (останется бесконечная прямая).
+- Text("подпись", (x,y)) — только позиционные аргументы. SetFilling(obj, 0.3) — число 0..1. Цвет: SetColor(obj, "#3b82f6")
+- В 3D Prism(base, height) — высота числом > 0. Не дублируй вершины A..G вручную после Prism.
+- Копируй стиль из примеров ниже, если они даны. Не пиши JSX <GeoGebra ...>. Не пиши Execute, api.*, JS.
 
-ДОСТРОЙКИ К ФИГУРЕ (высота, диагональ) — куском stack, не вручную:
-- высота — height (apex — вершина, a и b — концы основания): даёт отрезок hgt и основание высоты hgt_foot
-- диагональ — diagonal (a, b): например A и C
-- медиана — Segment(C, Midpoint(A, B)) в extra; биссектриса — angle_bisector
-- НЕ строй высоту через Line + PerpendicularLine + Intersect: бесконечная прямая останется на чертеже
-
-СТЕРЕОМЕТРИЯ (app=3d, сначала view_3d):
-- правильная призма — regular_prism (a, h, n); пирамида — regular_pyramid (a, h, n)
-- параллелепипед — parallelepiped (a, b, c), диагональ Segment(A, G)
-- цилиндр — cylinder (a, b, r); конус — cone; сфера — sphere; куб — cube; тетраэдр — tetrahedron
-- Prism(многоугольник, высота) — высота числом > 0. Не Prism(основание, 0)
-- extra в 3D — только подписи и стиль, НЕ вторая копия фигуры точками A,B,C,D,V
-
-ГРАФИКИ (app=graphing): view_graph + function (expr без y=, например x^2-4). Производная/интеграл — derivative, integral.
-
-ОБЩИЕ ПРАВИЛА:
-- ТОЧКИ ТОЛЬКО С ЗАГЛАВНОЙ БУКВЫ: M = (3, 0) — точка, а m = (3, 0) — вектор, и всё построенное по нему разваливается
-- ИМЕНА фигур: минимум две буквы (hgt, diag, med, lab_a). Однобуквенные строчные a, b, c, d, h, r GeoGebra уже заняла под стороны многоугольника — такое имя ломает чертёж.
-- Запрещённые имена (это функции GeoGebra): ln, sec, alt, abs, exp, log, deg, rad, sin, cos, tan, sqrt
-- Подпись — это Text, а не имя: Text("h = 6", (3, 2.5)), а не h = Text(...)
-- Команд RegularPolygon и Circumcircle в GeoGebra НЕТ. Правильный n-угольник — Polygon(A, B, n) (две точки и число вершин). Описанная окружность — Circle(A, B, C) (три точки)
-- Polygon(A, B, n) работает только в 2D. В 3D правильное основание — куском regular_prism / regular_pyramid
-- Text только Text("подпись", (x,y)) или Text("...", (x,y,z)). Не 0.5, "top", "right", fontSize
-- SetFilling(obj, 0.3) — число от 0 до 1, не цвет. Цвет: SetColor(obj, "#3b82f6")
-- SetPerspective: 2D/графики SetPerspective("G") (Graphics). 3D SetPerspective("T"). Не "2" и не "T" на плоский чертёж.
-- ОБЯЗАТЕЛЬНО для каждого 2D и графика: последним в stack use fit_2d (xmin,ymin,xmax,ymax = габариты фигуры плюс запас ~1). 3D — fit_2d не ставить.
-- НЕ пиши JSX <GeoGebra setup=...>. НЕ пиши команды вне блока ```geogebra.
-- Один app на один блок: не мешай 2D и 3D в одном чертеже.
-
-КАТАЛОГ use (stack):
-{self.catalog_text()}
-
-КОМАНДЫ extra (английские имена):
+Допустимые команды (whitelist):
 {self.extra_catalog_text()}
 """
 
@@ -966,10 +931,40 @@ class GeoGebraBuilder:
         if isinstance(extra, str):
             extra = extra.splitlines()
 
+        # Прямой список команд (без use/stack) — основной формат для AI + статики.
+        raw_commands = spec.get("commands")
+        if isinstance(raw_commands, str):
+            raw_commands = [ln.strip() for ln in raw_commands.splitlines() if ln.strip()]
+        setup = spec.get("setup")
+        if setup and not raw_commands and not stack and not extra:
+            raw_commands = [ln.strip() for ln in str(setup).splitlines() if ln.strip()]
+
         commands: list[str] = []
         declared: set[str] = set()
         app = _norm_app(spec.get("app"))
         height = _norm_height(spec.get("height"))
+
+        if raw_commands and not stack:
+            for raw in raw_commands:
+                for line in _repair_extra_line(str(raw).strip()):
+                    if not line:
+                        continue
+                    commands.append(line)
+                    assign = ASSIGN_RE.match(line)
+                    if assign:
+                        declared.add(assign.group(1))
+            commands = _postprocess_commands(commands, self.extra_commands)
+            commands = _ensure_perspective(commands, app)
+            commands = _ensure_fit_2d(commands, app)
+            commands = _ensure_fit_3d(commands, app)
+            if not commands:
+                return None
+            return {
+                "app": app,
+                "height": height,
+                "commands": commands,
+                "setup": "\n".join(commands),
+            }
 
         for item in stack:
             if not isinstance(item, dict):

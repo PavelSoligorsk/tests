@@ -1,0 +1,19 @@
+section: Окружность
+topic: Планиметрия
+examples:
+  - title: Сектор 60 градусов
+    prompt: Круговой сектор радиуса 5 с углом 60°.
+    app: geometry
+    height: "400"
+    commands:
+      - 'SetPerspective("G")'
+      - ShowAxes(true)
+      - ShowGrid(true)
+      - O = (0, 0)
+      - P = (5, 0)
+      - Q = (2.5, 4.33)
+      - sect = CircularSector(O, P, Q)
+      - ShowLabel(O, true)
+      - ShowLabel(P, true)
+      - ShowLabel(Q, true)
+      - ZoomIn(-1, -1, 6, 5.5)

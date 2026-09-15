@@ -1,0 +1,43 @@
+section: Треугольник
+topic: Планиметрия
+examples:
+  - title: Треугольник с вписанной и описанной окружностью
+    prompt: Треугольник ABC, вписанная и описанная окружности.
+    app: geometry
+    height: "400"
+    commands:
+      - 'SetPerspective("G")'
+      - ShowAxes(true)
+      - ShowGrid(true)
+      - A = (0, 0)
+      - B = (8, 0)
+      - C = (3, 6)
+      - tri = Polygon(A, B, C)
+      - inc = Incircle(A, B, C)
+      - circ = Circle(A, B, C)
+      - 'SetColor(inc, "#ef4444")'
+      - 'SetColor(circ, "#22c55e")'
+      - ShowLabel(A, true)
+      - ShowLabel(B, true)
+      - ShowLabel(C, true)
+      - ZoomIn(-1.5, -3.5, 9.5, 7)
+  - title: Прямоугольный треугольник и высота к гипотенузе
+    prompt: Прямоугольный треугольник с катетами 6 и 8, высота из прямого угла.
+    app: geometry
+    height: "400"
+    commands:
+      - 'SetPerspective("G")'
+      - ShowAxes(true)
+      - ShowGrid(true)
+      - A = (0, 0)
+      - B = (6, 0)
+      - C = (0, 8)
+      - tri = Polygon(A, B, C)
+      - hyp = Line(B, C)
+      - hgt_foot = ClosestPoint(hyp, A)
+      - hgt = Segment(A, hgt_foot)
+      - 'SetColor(hgt, "#ef4444")'
+      - ShowLabel(A, true)
+      - ShowLabel(B, true)
+      - ShowLabel(C, true)
+      - ZoomIn(-1, -1, 7, 9)

@@ -8,6 +8,7 @@ from typing import List, Dict, Optional, Literal
 import httpx
 
 from services.geogebra_builder import geogebra_builder
+from services.geogebra_examples import catalog_text
 
 AIProvider = Literal["mistral", "deepseek"]
 
@@ -124,26 +125,72 @@ class AIService:
             logger.error(f"AI Error ({self.provider}): {type(e).__name__}: {e}", exc_info=True)
             raise Exception(f"AI Error ({self.provider}): {str(e)}")
     
-    async def get_hint(self, task: dict, topic_mastery: Optional[float] = None) -> str:
-        """Получить подсказку для задания"""
-        prompt = self._build_hint_prompt(task, topic_mastery)
-        
+    async def get_hint(
+        self,
+        task: dict,
+        topic_mastery: Optional[float] = None,
+        *,
+        examples: str = "",
+        with_geogebra: bool = True,
+    ) -> str:
+        """Подсказка (stage2 или одиночный вызов)."""
+        prompt = self._build_hint_prompt(
+            task, topic_mastery, examples=examples, with_geogebra=with_geogebra
+        )
         return await self._chat_completion(
             system_prompt="Ты — терпеливый ИИ-репетитор. Помогаешь понять, а не решаешь за студента. ВСЕ математические формулы и выражения ОБЯЗАТЕЛЬНО оформляй в $...$ (строчные) или $$...$$ (вынесенные).",
             user_prompt=prompt,
             temperature=0.7,
-            max_tokens=1600
+            max_tokens=1600,
         )
-    
-    async def get_solution(self, task: dict, topic_mastery: Optional[float] = None) -> str:
-        """Получить полное решение задачи"""
-        prompt = self._build_solution_prompt(task, topic_mastery)
-        
+
+    async def get_solution(
+        self,
+        task: dict,
+        topic_mastery: Optional[float] = None,
+        *,
+        examples: str = "",
+        with_geogebra: bool = True,
+    ) -> str:
+        """Полное решение (stage2 или одиночный вызов)."""
+        prompt = self._build_solution_prompt(
+            task, topic_mastery, examples=examples, with_geogebra=with_geogebra
+        )
         return await self._chat_completion(
             system_prompt="Ты — математический эксперт. Решай задачи подробно, показывай все шаги. В конце обязательно укажи ответ в формате '=== ОТВЕТ === ...'",
             user_prompt=prompt,
             temperature=0.3,
-            max_tokens=2500
+            max_tokens=2500,
+        )
+
+    async def route_or_answer_hint(
+        self, task: dict, topic_mastery: Optional[float] = None
+    ) -> str:
+        """Stage1: только JSON-роутинг needs_figure (ответ пишет stage2)."""
+        prompt = self._build_route_prompt(task, topic_mastery, mode="hint")
+        return await self._chat_completion(
+            system_prompt=(
+                "Ты классификатор чертежей. Отвечаешь ТОЛЬКО валидным JSON без markdown-текста "
+                "вокруг (можно в ```json). Никаких подсказок и решений."
+            ),
+            user_prompt=prompt,
+            temperature=0.1,
+            max_tokens=200,
+        )
+
+    async def route_or_answer_solution(
+        self, task: dict, topic_mastery: Optional[float] = None
+    ) -> str:
+        """Stage1: только JSON-роутинг needs_figure (решение пишет stage2)."""
+        prompt = self._build_route_prompt(task, topic_mastery, mode="solution")
+        return await self._chat_completion(
+            system_prompt=(
+                "Ты классификатор чертежей. Отвечаешь ТОЛЬКО валидным JSON без markdown-текста "
+                "вокруг (можно в ```json). Никаких решений и ответов."
+            ),
+            user_prompt=prompt,
+            temperature=0.1,
+            max_tokens=200,
         )
     
     async def get_theory_answer(self, question: str, theory_context: str, topic_name: str = "", section_name: str = "") -> str:
@@ -344,7 +391,14 @@ ShowLabel(HA, true)`} height="450" />
 
     # ── Prompt builders ──
 
-    def _build_hint_prompt(self, task: dict, topic_mastery: Optional[float]) -> str:
+    def _build_hint_prompt(
+        self,
+        task: dict,
+        topic_mastery: Optional[float],
+        *,
+        examples: str = "",
+        with_geogebra: bool = True,
+    ) -> str:
         prompt = f"""Ты — AI-репетитор по математике. Студент решает задание и просит подсказку.
 НЕ ДАВАЙ ГОТОВЫЙ ОТВЕТ. Объясни подход, метод, наведи на мысль.
 
@@ -366,18 +420,28 @@ ShowLabel(HA, true)`} height="450" />
 
 Варианты: {task.get('options', 'Нет (открытый вопрос)')}
 """
-        
         if topic_mastery is not None:
             prompt += f"""
 === УСВОЕНИЕ ТЕМЫ ===
 Решено задач по этой теме: {task.get('same_topic_total')}
 Правильно: {task.get('same_topic_correct')} ({topic_mastery}%)
 """
-        
-        prompt += self._get_format_instructions()
+        if examples:
+            prompt += f"""
+=== ПРИМЕРЫ ЧЕРТЕЖЕЙ (копируй стиль commands) ===
+{examples}
+"""
+        prompt += self._get_format_instructions(with_geogebra=with_geogebra)
         return prompt
-    
-    def _build_solution_prompt(self, task: dict, topic_mastery: Optional[float]) -> str:
+
+    def _build_solution_prompt(
+        self,
+        task: dict,
+        topic_mastery: Optional[float],
+        *,
+        examples: str = "",
+        with_geogebra: bool = True,
+    ) -> str:
         prompt = f"""Ты — AI-репетитор по математике. Реши задачу и дай полное, подробное решение.
 
 === ФОРМАТ ФОРМУЛ ===
@@ -398,16 +462,53 @@ ShowLabel(HA, true)`} height="450" />
 
 Варианты ответа: {task.get('options', 'Нет (открытый вопрос)')}
 """
-        
         if topic_mastery is not None:
             prompt += f"""
 === УСВОЕНИЕ ТЕМЫ ===
 Решено задач по этой теме: {task.get('same_topic_total')}
 Правильно: {task.get('same_topic_correct')} ({topic_mastery}%)
 """
-        
-        prompt += self._get_solution_requirements()
+        if examples:
+            prompt += f"""
+=== ПРИМЕРЫ ЧЕРТЕЖЕЙ (копируй стиль commands) ===
+{examples}
+"""
+        prompt += self._get_solution_requirements(with_geogebra=with_geogebra)
         return prompt
+
+    def _build_route_prompt(
+        self, task: dict, topic_mastery: Optional[float], *, mode: str
+    ) -> str:
+        catalog = catalog_text()
+        mastery = ""
+        if topic_mastery is not None:
+            mastery = f"\nУсвоение темы: {topic_mastery}% ({task.get('same_topic_correct')}/{task.get('same_topic_total')})"
+        return f"""Нужен ли чертёж GeoGebra (фигура / график / 3D), чтобы понять или объяснить задачу?
+
+Ответь ТОЛЬКО JSON, без другого текста.
+
+Если чертёж НЕ нужен:
+{{"needs_figure": false}}
+
+Если чертёж НУЖЕН — topic и section ТОЛЬКО из каталога ниже:
+{{"needs_figure": true, "topic": "Планиметрия", "section": "Трапеция"}}
+
+Каталог:
+{catalog}
+
+Задание:
+Класс: {task.get('task_class')}
+Тема: {task.get('topic', 'Не указана')}
+Раздел: {task.get('section', 'Не указан')}
+Сложность: {task.get('difficulty')}
+Тип: {'открытый' if task.get('is_open_answer') else 'выбор'}
+{mastery}
+
+Условие:
+{task.get('content')}
+
+Варианты: {task.get('options', 'нет')}
+"""
     
     def _build_theory_prompt(self, question: str, theory_context: str, topic_name: str, section_name: str) -> str:
         return f"""Ты — ИИ-репетитор по математике. Объясняешь теорию, отвечаешь на вопросы, решаешь задачи.
@@ -533,8 +634,8 @@ ShowLabel(HA, true)`} height="450" />
             print(f"[ERROR] AI task selection parsing failed: {e}")
         return []
     
-    def _get_format_instructions(self) -> str:
-        return """
+    def _get_format_instructions(self, *, with_geogebra: bool = True) -> str:
+        base = """
 === ИНСТРУКЦИЯ ДЛЯ AI ===
 
 Ты помогаешь студенту решить задачу, но НЕ даёшь готовый ответ.
@@ -549,10 +650,13 @@ ShowLabel(HA, true)`} height="450" />
 
 НЕ пиши: "Ответ: ..." или "Правильный вариант — ..."
 НЕ решай полностью — только направляй, показывая примеры преобразований.
-""" + geogebra_builder.prompt_instructions()
-    
-    def _get_solution_requirements(self) -> str:
-        return """
+"""
+        if with_geogebra:
+            return base + geogebra_builder.prompt_instructions()
+        return base + "\nНЕ вставляй блоки GeoGebra в этот ответ.\n"
+
+    def _get_solution_requirements(self, *, with_geogebra: bool = True) -> str:
+        base = """
 === ТРЕБОВАНИЯ ДЛЯ KATEX ===
 1. Реши задачу пошагово
 2. В конце напиши: "=== ОТВЕТ === ..."
@@ -576,4 +680,7 @@ ShowLabel(HA, true)`} height="450" />
 - Соответствие (А1Б3В2): последовательность пар БУКВА+ЦИФРА слитно
 
 ЗАПОМНИ: используй ТОЛЬКО $...$ и $$...$$, НИКОГДА не используй \\( ... \\) или \\[ ... \\]
-""" + geogebra_builder.prompt_instructions()
+"""
+        if with_geogebra:
+            return base + geogebra_builder.prompt_instructions()
+        return base + "\nНЕ вставляй блоки GeoGebra в этот ответ.\n"

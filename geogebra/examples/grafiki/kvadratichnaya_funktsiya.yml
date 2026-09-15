@@ -1,0 +1,14 @@
+section: Квадратичная функция
+topic: Графики
+examples:
+  - title: Парабола и производная
+    prompt: График y = x^2 - 4 и её производная.
+    app: graphing
+    height: "400"
+    commands:
+      - 'SetPerspective("G")'
+      - ShowAxes(true)
+      - ShowGrid(true)
+      - f(x) = x^2 - 4
+      - df = Derivative(f)
+      - ZoomIn(-8, -6, 8, 6)

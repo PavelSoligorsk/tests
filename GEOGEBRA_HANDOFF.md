@@ -8,47 +8,35 @@
 
 ## Как устроено
 
-- `geogebra/pieces/*.yml` — «куски» фигур. У каждого `id` (совпадает с именем файла), `params` с дефолтами, `creates` (какие имена появляются) и `commands` — шаблоны с подстановкой `{{param}}`.
-- `geogebra/commands.yml` — белый список команд для блока `extra`. Раздел `free` — команды, которым не нужны заранее объявленные имена.
-- `services/geogebra_builder.py` — сборка спеки в список команд: подстановка кусков, валидация `extra`, починка типовых ошибок модели, автокадрирование.
-- `services/ai_service.py` и `services/student_service.py` — вызов модели и разбор блоков ```geogebra``` из ответа.
-- `tests/test_geogebra_builder.py` — 51 тест. Запуск: `.\.venv\Scripts\python.exe -m pytest tests/test_geogebra_builder.py -q --noconftest` (с conftest тесты тянут БД и работают долго).
+- `geogebra/examples/` — **статические few-shot** по теме/разделу. `index.yml` — каталог для stage1. Файлы `examples/{topic_slug}/{section_slug}.yml` содержат `commands:` (сырой GeoGebra Script), **без** `use`/`stack`.
+- `services/geogebra_examples.py` — `list_catalog()`, `load_examples(topic, section)`, `parse_figure_route(text)`.
+- `geogebra/pieces/*.yml` — внутренние куски для сборки (бэкенд); AI их **не** видит в промпте stage2.
+- `geogebra/commands.yml` — whitelist команд.
+- `services/geogebra_builder.py` — `render_spec` принимает JSON с полем `commands` (основной формат) или legacy `stack`/`extra`; починка имён, автокадрирование.
+- Hint/solution — **двухэтапные**:
+  1. `route_or_answer_*` — либо финальный текст без чертежа, либо `{"needs_figure":true,"topic":"...","section":"..."}`.
+  2. Если нужен чертёж — `load_examples` + `get_hint`/`get_solution(..., examples=..., with_geogebra=True)`.
+- Модель пишет блок:
 
-Модель присылает JSON внутри ограды ```geogebra``` с полями `app` (geometry | graphing | 3d), `height`, `stack` (массив `{"use": ..., "params": {...}}`) и `extra` (сырые команды GeoGebra Script).
+```geogebra
+{"app":"geometry","height":400,"commands":["SetPerspective(\"G\")","A = (0, 0)", "..."]}
+```
 
-## Факты о GeoGebra, проверенные в настоящем апплете
+Фронт без изменений: `geogebra[]` + `{{geogebra:N}}`.
 
-Это не догадки — каждый пункт проверен через `evalCommand` в реальном GeoGebra. Не откатывай их.
+## Факты о GeoGebra (проверено в апплете)
 
-1. **Команды `RegularPolygon` не существует.** Правильный n-угольник — `Polygon(A, B, n)`.
-2. **Команды `Circumcircle` не существует.** Описанная окружность — `Circle(A, B, C)` через три точки.
-3. `Polygon(P, Q, n)` **падает, если у точек имена с подчёркиванием** (`ngon_P`). Работает с простыми именами (`K`, `L`) или с координатами прямо в вызове: `Polygon((0,0), (4,0), 6)`.
-4. **В 3D правильного многоугольника нет вообще.** Основание строится так:
-   `base = Polygon(Sequence((R cos(2pi k/n), R sin(2pi k/n), 0), k, 1, n))`, где `R = a / (2 sin(pi/n))`.
-5. `Pyramid(base, S)` с **именованной** точкой на таком основании падает. Работает `Pyramid(base, (0, 0, h))` с координатами в вызове.
-6. `Polygon(A,B,C,D)` сама создаёт стороны с именами `a`, `b`, `c`, `d`, а `Prism` — верхние вершины `E, F, G, H`. Переопределять их нельзя: команда молча не выполнится. Поэтому билдер переименовывает любое однобуквенное строчное имя в `obj_<буква>`.
-7. Зарезервированы имена встроенных функций: `ln`, `sec`, `alt`, `abs`, `exp`, `log`, `sgn`, `deg`, `rad`, `sin`, `cos`, `tan`, `sqrt` и т.п. Присваивание в них проваливается. Список — `GG_FUNCTION_NAMES` в билдере.
-8. `evalCommand` возвращает `false` для команд вида `SetColor`, `SetFilling`, `ZoomIn`, `ShowAxes`, `SetPerspective` — **даже когда они отработали**. Судить об успехе надо по `api.exists(имя)`, а не по возврату.
-9. Кадрирование: 2D — `ZoomIn(xmin, ymin, xmax, ymax)`, 3D — `ZoomIn(xmin, ymin, zmin, xmax, ymax, zmax)`. Билдер добавляет их сам (`_ensure_fit_2d`, `_ensure_fit_3d`), модель ставить их не должна.
-10. Высоту нельзя строить через `Line` + `PerpendicularLine` + `Intersect`: бесконечная прямая остаётся на чертеже. Работает `ClosestPoint(Line(A, B), C)` — есть готовый кусок `height`.
+1. Нет `RegularPolygon` → `Polygon(A, B, n)`. Нет `Circumcircle` → `Circle(A, B, C)`.
+2. `Polygon(P, Q, n)` падает на именах с `_` — используй `K`/`L` или `Polygon((0,0),(4,0),n)`.
+3. В 3D нет правильного многоугольника через Polygon(P,Q,n) — вершины явно или Sequence.
+4. Однобуквенные строчные `a,b,c,d,h,r` и имена функций `ln,sec,alt,...` ломают чертёж.
+5. Высота: `ClosestPoint(Line(A,B), C)` + `Segment`, не `PerpendicularLine`.
+6. 2D кадр: `ZoomIn(xmin,ymin,xmax,ymax)`; 3D: шесть аргументов. Билдер дописывает сам.
 
-## Что уже сделано
+## Тесты
 
-- Вложенные вызовы в `extra` больше не выбрасываются валидатором (`_refs_ok` различает имена функций и ссылки на объекты).
-- Hex-цвета в строках больше не ломают валидацию (`SetColor(obj, "#ef4444")` раньше молча выкидывался, потому что `ef4444` считался неизвестным идентификатором).
-- Опасные имена переименовываются сквозняком, ссылки в последующих строках обновляются, но внутрь строковых литералов переименование не лезет (`Text("h", ...)` остаётся как есть).
-- `RegularPolygon` и `Circumcircle` автоматически переписываются в `Polygon` и `Circle` — даже если модель их напишет.
-- Добавлены куски: `height`, `diagonal`, `incircle_ngon`, `circumcircle_ngon`.
-- Все однобуквенные имена по умолчанию в кусках заменены на многобуквенные.
-- Автокадрирование понимает `Centroid`, `Midpoint`, `Vertex(poly, i)`, `Distance(P, Q)` и правильные многоугольники.
+- `tests/test_geogebra_examples.py` — каталог, лоадер, парсер stage1, commands-only render.
+- `tests/test_geogebra_builder.py` — билдер.
+- `tests/test_student_async.py` — hint/solution с моками `route_or_answer_*` и двухэтапный сценарий.
 
-## Как проверять изменения
-
-Юнит-тесты не ловят расхождения с реальным GeoGebra. Для настоящей проверки собери HTML-страницу, которая грузит `https://www.geogebra.org/apps/deployggb.js`, создаёт апплеты `geometry` и `3d`, в `appletOnLoad` прогоняет команды через `evalCommand` и отчитывается об ошибках по `api.exists()`. Отдавать страницу надо по http (`python -m http.server`) — `file://` браузерный инструмент не открывает. Между случаями чисти сцену через `api.newConstruction()`.
-
-## Что стоит сделать дальше
-
-1. Прогнать сквозной тест на живой модели: убедиться, что она реально пользуется кусками `height`, `diagonal`, `incircle_ngon`, а не пишет геометрию руками в `extra`.
-2. Покрыть остальные 3D-тела автокадрированием: `_3d_bounds` сейчас понимает точки, `Prism`, `Cylinder`, `Cone`, `Sphere`, `Cube` и основание из `Sequence`; конусы и сечения по-прежнему могут выпадать из кадра.
-3. Проверить в апплете стереометрию шире — сечения, вписанные и описанные шары, развёртки (`Net`).
-4. `tests/test_student_async.py` ходит в реальный AI и идёт минутами — при массовых прогонах его лучше замокать.
+Запуск юнитов без БД: `.\.venv\Scripts\python.exe -m pytest tests/test_geogebra_examples.py tests/test_geogebra_builder.py -q --noconftest`

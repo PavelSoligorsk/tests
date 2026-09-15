@@ -592,11 +592,11 @@ async def test_student_ai_hint_success(
         "options": ["1", "2", "3", "4"],
         "difficulty": 2, "hint": "Subtract 5", "solution": "2x=4, x=2",
     })
-    # Mock AI
+    # Mock AI stage1 (plain text — используем как финальный ответ)
     from unittest.mock import AsyncMock, patch
-    with patch("services.ai_service.AIService.get_hint",
-               new_callable=AsyncMock) as mock_hint:
-        mock_hint.return_value = "Попробуй перенести 5 в правую часть"
+    with patch("services.ai_service.AIService.route_or_answer_hint",
+               new_callable=AsyncMock) as mock_route:
+        mock_route.return_value = "Попробуй перенести 5 в правую часть"
         resp = await async_client.post(
             f"/student/tasks/{task['id']}/hint",
             headers=_bearer(student_token))
@@ -625,16 +625,16 @@ async def test_student_ai_hint_inline_geogebra(
     raw = (
         "Посмотри на окружность:\n"
         "```geogebra\n"
-        '{"app":"geometry","height":400,"stack":['
-        '{"use":"view_2d","params":{}},'
-        '{"use":"circle","params":{"name":"c","r":2}}'
-        '],"extra":["SetColor(c, \\"#3b82f6\\")"]}\n'
+        '{"app":"geometry","height":400,"commands":['
+        '"SetPerspective(\\"G\\")","A = (0, 0)","c = Circle(A, 2)",'
+        '"SetColor(c, \\"#3b82f6\\")","ZoomIn(-3, -3, 3, 3)"'
+        ']}\n'
         "```\n"
         "Радиус равен 2."
     )
-    with patch("services.ai_service.AIService.get_hint",
-               new_callable=AsyncMock) as mock_hint:
-        mock_hint.return_value = raw
+    with patch("services.ai_service.AIService.route_or_answer_hint",
+               new_callable=AsyncMock) as mock_route:
+        mock_route.return_value = raw
         resp = await async_client.post(
             f"/student/tasks/{task['id']}/hint",
             headers=_bearer(student_token))
@@ -646,6 +646,80 @@ async def test_student_ai_hint_inline_geogebra(
     assert isinstance(d["geogebra"], list)
     assert d["geogebra"][0]["id"] == 0
     assert any("Circle" in c for c in d["geogebra"][0]["commands"])
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_student_ai_hint_two_stage_with_examples(
+    async_client: AsyncClient, student_token: str, admin_token: str
+) -> None:
+    """Stage1 JSON → stage2 с примерами; get_hint вызывается один раз с examples."""
+    task = await async_create_task(async_client, admin_token, {
+        "task_class": "10", "topic_number": "1",
+        "topic": "geometry", "section": "trapezoid",
+        "content": "Площадь трапеции a=13 b=7 h=6",
+        "answer": "60", "is_open_answer": True,
+        "difficulty": 1, "hint": "h", "solution": "s",
+    })
+    from unittest.mock import AsyncMock, patch
+    stage2 = (
+        "Смотри на трапецию:\n"
+        "```geogebra\n"
+        '{"app":"geometry","height":400,"commands":["A = (0, 0)","B = (13, 0)",'
+        '"C = (10, 6)","D = (3, 6)","trap = Polygon(A, B, C, D)"]}\n'
+        "```\n"
+        "Средняя линия равна полусумме оснований."
+    )
+    with patch("services.ai_service.AIService.route_or_answer_hint",
+               new_callable=AsyncMock) as mock_route, \
+         patch("services.ai_service.AIService.get_hint",
+               new_callable=AsyncMock) as mock_hint:
+        mock_route.return_value = (
+            '{"needs_figure": true, "topic": "Планиметрия", "section": "Трапеция"}'
+        )
+        mock_hint.return_value = stage2
+        resp = await async_client.post(
+            f"/student/tasks/{task['id']}/hint",
+            headers=_bearer(student_token))
+    assert resp.status_code == 200, resp.text
+    mock_hint.assert_awaited_once()
+    kwargs = mock_hint.await_args.kwargs
+    assert kwargs.get("with_geogebra") is True
+    assert "Трапеция" in (kwargs.get("examples") or "") or "trap" in (kwargs.get("examples") or "").lower()
+    d = resp.json()
+    assert "{{geogebra:0}}" in d["hint"]
+    assert any("Polygon" in c for c in d["geogebra"][0]["commands"])
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_student_ai_solution_needs_figure_false_still_solves(
+    async_client: AsyncClient, student_token: str, admin_token: str
+) -> None:
+    """Stage1 {"needs_figure":false} → всё равно stage2 get_solution."""
+    task = await async_create_task(async_client, admin_token, {
+        "task_class": "10", "topic_number": "1",
+        "topic": "algebra", "section": "equations",
+        "content": "2+2",
+        "answer": "4", "is_open_answer": True,
+        "difficulty": 1, "hint": "h", "solution": "s",
+    })
+    from unittest.mock import AsyncMock, patch
+    with patch("services.ai_service.AIService.route_or_answer_solution",
+               new_callable=AsyncMock) as mock_route, \
+         patch("services.ai_service.AIService.get_solution",
+               new_callable=AsyncMock) as mock_sol:
+        mock_route.return_value = '```json\n{"needs_figure": false}\n```'
+        mock_sol.return_value = "Складываем.\n=== ОТВЕТ ===\n4"
+        resp = await async_client.post(
+            f"/student/tasks/{task['id']}/ai-solve",
+            headers=_bearer(student_token))
+    assert resp.status_code == 200, resp.text
+    mock_sol.assert_awaited_once()
+    assert mock_sol.await_args.kwargs.get("with_geogebra") is False
+    d = resp.json()
+    assert d["success"] is True
+    assert d["ai_answer"] == "4"
 
 
 @pytest.mark.student
@@ -663,7 +737,7 @@ async def test_student_ai_solution_success(
         "difficulty": 2, "hint": "Subtract 5", "solution": "2x=4, x=2",
     })
     from unittest.mock import AsyncMock, patch
-    with patch("services.ai_service.AIService.get_solution",
+    with patch("services.ai_service.AIService.route_or_answer_solution",
                new_callable=AsyncMock) as mock_sol:
         mock_sol.return_value = "Решение:\n2x + 5 = 9\n2x = 4\nx = 2\n=== ОТВЕТ ===\n2"
         resp = await async_client.post(

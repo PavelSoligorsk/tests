@@ -1,0 +1,21 @@
+section: Пирамида
+topic: Стереометрия
+examples:
+  - title: Правильная четырёхугольная пирамида
+    prompt: Объём правильной четырёхугольной пирамиды со стороной основания 6 и высотой 5.
+    app: "3d"
+    height: "400"
+    commands:
+      - 'SetPerspective("T")'
+      - CenterView((0,0,0))
+      - ShowAxes(false)
+      - ShowGrid(false)
+      - A = (0, 0, 0)
+      - B = (6, 0, 0)
+      - C = (6, 6, 0)
+      - D = (0, 6, 0)
+      - base = Polygon(A, B, C, D)
+      - apex = (3, 3, 5)
+      - pyr = Pyramid(base, apex)
+      - 'lab_h = Text("h = 5", (3, 3, 2.5))'
+      - ZoomIn(-2, -2, -1, 8, 8, 7)

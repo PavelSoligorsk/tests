@@ -1,0 +1,27 @@
+section: Трапеция
+topic: Планиметрия
+examples:
+  - title: Равнобедренная трапеция с высотой
+    prompt: Площадь равнобедренной трапеции с основаниями 13 и 7 и высотой 6.
+    app: geometry
+    height: "400"
+    commands:
+      - 'SetPerspective("G")'
+      - ShowAxes(true)
+      - ShowGrid(true)
+      - A = (0, 0)
+      - B = (13, 0)
+      - C = (10, 6)
+      - D = (3, 6)
+      - trap = Polygon(A, B, C, D)
+      - hgt_foot = (3, 0)
+      - hgt = Segment(D, hgt_foot)
+      - 'SetColor(hgt, "#ef4444")'
+      - SetFilling(trap, 0.3)
+      - 'lab_a = Text("13", (6.5, -0.8))'
+      - 'lab_h = Text("6", (3.3, 3))'
+      - ShowLabel(A, true)
+      - ShowLabel(B, true)
+      - ShowLabel(C, true)
+      - ShowLabel(D, true)
+      - ZoomIn(-1, -1, 14, 7)

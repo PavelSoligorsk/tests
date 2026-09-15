@@ -9,6 +9,7 @@ from repositories.assignment_repository import AssignmentRepository
 from repositories.theory_repository import TheoryRepository
 from services.ai_service import AIService
 from services.geogebra_builder import geogebra_builder
+from services.geogebra_examples import load_examples, parse_figure_route
 from dto_schemas import *
 from dto_schemas.cached import (
     StudentHistoryItemResponse,
@@ -392,29 +393,46 @@ class StudentService:
         return await self._build_test_start_response(user_id, test)
     
     async def get_ai_hint(self, task_id: int, user_id: int):
-        """Получить AI подсказку для задания"""
+        """Получить AI подсказку для задания (двухэтапный GeoGebra при необходимости)."""
         task = await self.task_repo.get_task_by_id(task_id)
         if not task:
             raise ValueError("Задание не найдено")
-        
+
         topic_mastery = await self._calculate_topic_mastery(user_id, task.topic_number)
-        
-        task_dict = {
-            'task_class': task.task_class,
-            'topic_number': task.topic_number,
-            'topic': task.topic,
-            'section': task.section,
-            'difficulty': task.difficulty,
-            'is_open_answer': task.is_open_answer,
-            'content': task.content,
-            'options': task.options,
-            'same_topic_total': topic_mastery['total'],
-            'same_topic_correct': topic_mastery['correct']
-        }
-        
-        hint = await self.ai_service.get_hint(task_dict, topic_mastery['percentage'])
+        task_dict = self._task_dict_for_ai(task, topic_mastery)
+
+        raw1 = await self.ai_service.route_or_answer_hint(
+            task_dict, topic_mastery["percentage"]
+        )
+        decision = parse_figure_route(raw1)
+        examples = ""
+        with_geogebra = False
+        if decision and decision.get("needs_figure"):
+            examples = load_examples(decision.get("topic") or "", decision.get("section") or "")
+            with_geogebra = True
+        elif decision is None and raw1.strip() and not raw1.strip().startswith("{"):
+            # Stage1 внезапно дал готовый текст — используем его.
+            hint, geogebra = self._apply_geogebra(raw1)
+            return AIHintResponse(
+                task_id=task_id,
+                hint=hint,
+                geogebra=geogebra,
+                context=AIHintContext(
+                    task_class=task.task_class,
+                    topic_number=task.topic_number,
+                    difficulty=task.difficulty,
+                    topic_mastery_percent=topic_mastery["percentage"],
+                ),
+            )
+
+        hint = await self.ai_service.get_hint(
+            task_dict,
+            topic_mastery["percentage"],
+            examples=examples,
+            with_geogebra=with_geogebra,
+        )
         hint, geogebra = self._apply_geogebra(hint)
-        
+
         return AIHintResponse(
             task_id=task_id,
             hint=hint,
@@ -423,38 +441,57 @@ class StudentService:
                 task_class=task.task_class,
                 topic_number=task.topic_number,
                 difficulty=task.difficulty,
-                topic_mastery_percent=topic_mastery['percentage'],
+                topic_mastery_percent=topic_mastery["percentage"],
             ),
         )
-    
+
     async def get_ai_solution(self, task_id: int, user_id: int):
-        """Получить AI решение задачи"""
+        """Получить AI решение задачи (двухэтапный GeoGebra при необходимости)."""
         task = await self.task_repo.get_task_by_id(task_id)
         if not task:
             raise ValueError("Задание не найдено")
-        
+
         topic_mastery = await self._calculate_topic_mastery(user_id, task.topic_number)
-        
-        task_dict = {
-            'task_class': task.task_class,
-            'topic_number': task.topic_number,
-            'topic': task.topic,
-            'section': task.section,
-            'difficulty': task.difficulty,
-            'is_open_answer': task.is_open_answer,
-            'content': task.content,
-            'options': task.options,
-            'same_topic_total': topic_mastery['total'],
-            'same_topic_correct': topic_mastery['correct']
-        }
-        
-        ai_solution = await self.ai_service.get_solution(task_dict, topic_mastery['percentage'])
+        task_dict = self._task_dict_for_ai(task, topic_mastery)
+        context = AISolutionContext(
+            task_class=task.task_class,
+            topic_number=task.topic_number,
+            difficulty=task.difficulty,
+            topic_mastery_percent=topic_mastery["percentage"],
+        )
+
+        raw1 = await self.ai_service.route_or_answer_solution(
+            task_dict, topic_mastery["percentage"]
+        )
+        decision = parse_figure_route(raw1)
+        examples = ""
+        with_geogebra = False
+        if decision and decision.get("needs_figure"):
+            examples = load_examples(decision.get("topic") or "", decision.get("section") or "")
+            with_geogebra = True
+        elif decision is None and "=== ОТВЕТ ===" in (raw1 or "").upper():
+            # Stage1 внезапно дал готовое решение.
+            ai_solution, geogebra = self._apply_geogebra(raw1)
+            return self._build_solution_response(
+                task_id, task, ai_solution, geogebra, context
+            )
+
+        ai_solution = await self.ai_service.get_solution(
+            task_dict,
+            topic_mastery["percentage"],
+            examples=examples,
+            with_geogebra=with_geogebra,
+        )
         ai_solution, geogebra = self._apply_geogebra(ai_solution)
-        
-        # Извлечение ответа ИИ
+        return self._build_solution_response(
+            task_id, task, ai_solution, geogebra, context
+        )
+
+    def _build_solution_response(
+        self, task_id: int, task, ai_solution: str, geogebra, context: AISolutionContext
+    ) -> AISolutionResponse:
         answer_pattern = r'=== ОТВЕТ ===\s*(.+?)(?:\n|$)'
         match = re.search(answer_pattern, ai_solution, re.IGNORECASE)
-        
         if not match:
             return AISolutionResponse(
                 task_id=task_id,
@@ -463,27 +500,39 @@ class StudentService:
                 message="Решение ИИ не найдено (нет маркера '=== ОТВЕТ ===')",
                 ai_solution=ai_solution,
                 geogebra=geogebra,
+                context=context,
             )
-        
         ai_answer = self._clean_ai_answer(match.group(1))
         is_correct = self._verify_answer(ai_answer, task.answer)
-        
         return AISolutionResponse(
             task_id=task_id,
             success=True,
             verified=is_correct,
-            message="Решение найдено и проверено. Ответ совпадает." if is_correct else "Решение найдено, но ответ не совпадает с правильным.",
+            message=(
+                "Решение найдено и проверено. Ответ совпадает."
+                if is_correct
+                else "Решение найдено, но ответ не совпадает с правильным."
+            ),
             ai_solution=ai_solution,
             ai_answer=ai_answer,
             correct_answer=task.answer,
             geogebra=geogebra,
-            context=AISolutionContext(
-                task_class=task.task_class,
-                topic_number=task.topic_number,
-                difficulty=task.difficulty,
-                topic_mastery_percent=topic_mastery['percentage'],
-            ),
+            context=context,
         )
+
+    def _task_dict_for_ai(self, task, topic_mastery: dict) -> dict:
+        return {
+            "task_class": task.task_class,
+            "topic_number": task.topic_number,
+            "topic": task.topic,
+            "section": task.section,
+            "difficulty": task.difficulty,
+            "is_open_answer": task.is_open_answer,
+            "content": task.content,
+            "options": task.options,
+            "same_topic_total": topic_mastery["total"],
+            "same_topic_correct": topic_mastery["correct"],
+        }
     
     async def get_theory_topics(self):
         """Получить все темы теории"""

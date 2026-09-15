@@ -1,0 +1,24 @@
+section: Квадрат
+topic: Планиметрия
+examples:
+  - title: Квадрат с вписанной окружностью
+    prompt: Квадрат со стороной 6 и вписанная окружность.
+    app: geometry
+    height: "400"
+    commands:
+      - 'SetPerspective("G")'
+      - ShowAxes(true)
+      - ShowGrid(true)
+      - A = (0, 0)
+      - B = (6, 0)
+      - C = (6, 6)
+      - D = (0, 6)
+      - sq = Polygon(A, B, C, D)
+      - O = (3, 3)
+      - inc = Circle(O, 3)
+      - 'SetColor(inc, "#ef4444")'
+      - ShowLabel(A, true)
+      - ShowLabel(B, true)
+      - ShowLabel(C, true)
+      - ShowLabel(D, true)
+      - ZoomIn(-1, -1, 7, 7)
