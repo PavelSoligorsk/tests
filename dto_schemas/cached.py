@@ -166,6 +166,12 @@ class TheorySectionSummaryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
+class TheoryMetaResponse(RootModel[dict[str, list[str]]]):
+    """Структура теории: { topic: [section, ...] }."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class TeacherGroupStudentResponse(BaseModel):
     id: int
     first_name: str

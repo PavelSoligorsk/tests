@@ -61,8 +61,12 @@ class TheoryRepository:
         )
         return r.scalars().first()
     
-    async def get_theory_sections_count(self, topic: str):
+    async def get_topic_section_pairs(self):
+        """Уникальные пары (topic, section) для мета-структуры."""
         r = await self.db.execute(
-            select(func.count()).select_from(Theory).where(Theory.topic == topic)
+            select(Theory.topic, Theory.section)
+            .where(Theory.topic.is_not(None))
+            .order_by(Theory.topic, Theory.section)
+            .distinct()
         )
-        return r.scalar()
+        return r.all()

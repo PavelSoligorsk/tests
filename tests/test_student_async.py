@@ -290,6 +290,41 @@ async def test_student_start_assigned_test(
 
 @pytest.mark.student
 @pytest.mark.asyncio
+async def test_student_get_theory_meta(
+    async_client: AsyncClient, student_token: str, admin_token: str
+) -> None:
+    """Мета теории: { topic: [section, ...] }."""
+    from tests.helpers_async import async_create_theory
+    await async_create_theory(async_client, admin_token, {
+        "topic": "Стереометрия",
+        "section": "Куб",
+        "content": "Куб — правильный многогранник.",
+    })
+    await async_create_theory(async_client, admin_token, {
+        "topic": "Стереометрия",
+        "section": "Пирамида",
+        "content": "Пирамида — многогранник.",
+    })
+    await async_create_theory(async_client, admin_token, {
+        "topic": "Планиметрия",
+        "section": "Треугольник",
+        "content": "Треугольник — многоугольник.",
+    })
+
+    resp = await async_client.get(
+        "/student/theory/meta",
+        headers={"Authorization": f"Bearer {student_token}"},
+    )
+    assert resp.status_code == 200, resp.text
+    data = resp.json()
+    assert "Стереометрия" in data
+    assert "Куб" in data["Стереометрия"]
+    assert "Пирамида" in data["Стереометрия"]
+    assert data["Планиметрия"] == ["Треугольник"]
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
 async def test_student_get_theory_topics(
     async_client: AsyncClient, student_token: str
 ) -> None:

@@ -6,7 +6,7 @@ from dto_schemas import (
     UserUpdate, AITestRequest, TheoryResponse,
     StudentHistoryItemResponse, DetailedResultResponse,
     StudentAssignmentItemResponse, TheoryTopicSummaryResponse,
-    TheorySectionSummaryResponse, StudentAssignmentMetaItemResponse,
+    TheorySectionSummaryResponse, TheoryMetaResponse, StudentAssignmentMetaItemResponse,
     StudentAITestItemResponse, AvailableTestMetaResponse,
     TheoryQuestionRequest, TestAnswerSubmission, StartAssignedTestResponse,
     RetakeTestResponse,
@@ -283,6 +283,21 @@ async def get_ai_solution(
 
 
 # ============= ТЕОРЕТИЧЕСКИЕ ЭНДПОИНТЫ =============
+
+@router.get("/theory/meta", response_model=TheoryMetaResponse)
+async def get_theory_meta(
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user)
+):
+    """Структура теории: { topic: [section, ...] }. TTL 6 часов."""
+    return await async_cache_result(
+        "theory_meta",
+        None,
+        lambda: service.get_theory_meta(),
+        model_class=TheoryMetaResponse,
+        ttl=21600,
+    )
+
 
 @router.get("/theory/topics")
 async def get_theory_topics(

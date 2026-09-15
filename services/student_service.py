@@ -21,6 +21,7 @@ from dto_schemas.cached import (
     TaskShortResponse,
     StudentAITestItemResponse,
     TheoryTopicSummaryResponse,
+    TheoryMetaResponse,
     StartAssignedTestResponse,
     StartTestTaskItem,
     SubmitTestResponse,
@@ -534,6 +535,20 @@ class StudentService:
             "same_topic_correct": topic_mastery["correct"],
         }
     
+    async def get_theory_meta(self):
+        """Мета теории: { topic: [section, ...] }."""
+        pairs = await self.theory_repo.get_topic_section_pairs()
+        result: dict[str, list[str]] = {}
+        for topic, section in pairs:
+            if not topic:
+                continue
+            if topic not in result:
+                result[topic] = []
+            name = section or "Без раздела"
+            if name not in result[topic]:
+                result[topic].append(name)
+        return TheoryMetaResponse(result)
+
     async def get_theory_topics(self):
         """Получить все темы теории"""
         topics = await self.theory_repo.get_all_topics()
