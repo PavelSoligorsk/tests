@@ -38,6 +38,7 @@ from dto_schemas.cached import (
     TeacherTaskMetaResponse,
     TeacherTaskMetaByTopicSectionResponse,
     TeacherTaskDetailResponse,
+    AdminTheoryMetaResponse,
 )
 
 logger = logging.getLogger(__name__)
@@ -406,9 +407,19 @@ class AdminService:
             raise ValueError(f"Теория для темы '{topic}' и раздела '{section}' уже существует")
         
         return await self.theory_repo.create_theory(theory_data)
-    
-    async def get_all_theory(self):
-        return await self.theory_repo.get_all_theory()
+
+    async def get_theory_meta(self):
+        """Мета теории: { topic: { section: theory_id } } без content."""
+        rows = await self.theory_repo.get_theory_meta_rows()
+        result: dict[str, dict[str, int]] = {}
+        for theory_id, topic, section in rows:
+            if not topic:
+                continue
+            name = section or "Без раздела"
+            if topic not in result:
+                result[topic] = {}
+            result[topic][name] = theory_id
+        return AdminTheoryMetaResponse(result)
     
     async def get_theory_by_id(self, theory_id: int):
         theory = await self.theory_repo.get_theory_by_id(theory_id)

@@ -117,7 +117,9 @@
 
 ## Теория
 
-### GET /admin/theory/getall
+### GET /admin/theory-meta
+Структура без контента: `{ "algebra": { "quadratic_equations": 12 } }` — `topic → section → theory_id`.
+
 ### POST /admin/theory
 ### GET/PUT/DELETE /admin/theory/{id}
 

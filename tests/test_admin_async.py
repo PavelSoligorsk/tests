@@ -664,13 +664,14 @@ async def test_admin_theory_crud(
     theory_id = theory["id"]
     assert theory["topic"] == "algebra"
 
-    # Get all
-    all_resp = await async_client.get(
-        "/admin/theory/getall",
+    # Meta: { topic: { section: theory_id } }
+    meta_resp = await async_client.get(
+        "/admin/theory-meta",
         headers={"Authorization": f"Bearer {admin_token}"},
     )
-    assert all_resp.status_code == 200
-    assert any(t["id"] == theory_id for t in all_resp.json())
+    assert meta_resp.status_code == 200
+    meta = meta_resp.json()
+    assert meta["algebra"]["quadratic_equations"] == theory_id
 
     # Get by id
     get_resp = await async_client.get(

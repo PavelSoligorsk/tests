@@ -70,3 +70,18 @@ class TheoryRepository:
             .distinct()
         )
         return r.all()
+
+    async def get_theory_meta_rows(self):
+        """id + topic + section без content — для админской мета-карты."""
+        r = await self.db.execute(
+            select(Theory.id, Theory.topic, Theory.section)
+            .where(Theory.topic.is_not(None))
+            .order_by(Theory.topic, Theory.section)
+        )
+        return r.all()
+
+    async def get_theory_sections_count(self, topic: str) -> int:
+        r = await self.db.execute(
+            select(func.count(Theory.id)).where(Theory.topic == topic)
+        )
+        return r.scalar() or 0

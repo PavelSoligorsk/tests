@@ -17,7 +17,7 @@ from dto_schemas import (
     TestResponse, TeacherTaskMetaResponse,
     TeacherTaskMetaByTopicSectionResponse,
     TeacherTaskDetailResponse,
-    FullStatsResponse,
+    FullStatsResponse, AdminTheoryMetaResponse,
 )
 from core import auth
 from core.cache import invalidate_cache_pattern, async_cache_result, invalidate_user_cache
@@ -49,6 +49,11 @@ def _invalidate_theory_caches() -> None:
     invalidate_cache_pattern("theory_topics:*")
     invalidate_cache_pattern("theory_by_topic*")
     invalidate_cache_pattern("theory_sections*")
+    invalidate_cache_pattern("theory_meta")
+    invalidate_cache_pattern("theory_meta:*")
+    invalidate_cache_pattern("admin_theory_meta")
+    invalidate_cache_pattern("admin_theory_meta:*")
+    invalidate_cache_pattern("admin_theory*")
 
 
 # ==================== ПОЛЬЗОВАТЕЛИ ====================
@@ -366,14 +371,6 @@ async def create_theory(
         raise HTTPException(status_code=400, detail=str(e))
 
 
-@router.get("/theory/getall", response_model=list[TheoryResponse])
-async def get_all_theory(
-    service: AdminService = Depends(get_admin_service),
-    current_admin: User = Depends(auth.check_admin)
-):
-    return await service.get_all_theory()
-
-
 @router.get("/theory/{theory_id}", response_model=TheoryResponse)
 async def get_theory_by_id(
     theory_id: int,
@@ -381,7 +378,14 @@ async def get_theory_by_id(
     current_admin: User = Depends(auth.check_admin)
 ):
     try:
-        return await service.get_theory_by_id(theory_id)
+        return await async_cache_result(
+            "admin_theory",
+            None,
+            lambda: service.get_theory_by_id(theory_id),
+            model_class=TheoryResponse,
+            ttl=3600,
+            entity_id=theory_id,
+        )
     except ValueError as e:
         raise HTTPException(status_code=404, detail=str(e))
 
@@ -499,6 +503,21 @@ async def get_tasks_meta_by_topic_section(
         lambda: service.get_tasks_meta_by_topic_section(),
         model_class=TeacherTaskMetaByTopicSectionResponse,
         ttl=7200
+    )
+
+
+@router.get("/theory-meta", response_model=AdminTheoryMetaResponse)
+async def get_theory_meta(
+    service: AdminService = Depends(get_admin_service),
+    current_admin: User = Depends(auth.check_admin)
+):
+    """Структура теории без контента: { topic: { section: theory_id } }"""
+    return await async_cache_result(
+        "admin_theory_meta",
+        None,
+        lambda: service.get_theory_meta(),
+        model_class=AdminTheoryMetaResponse,
+        ttl=7200,
     )
 
 

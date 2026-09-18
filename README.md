@@ -148,7 +148,7 @@ fastapi/
 - **Результаты:** `GET /admin/results/{result_id}`
 - **Allow-list email:** `GET /admin/allowed/emails`, `POST /admin/allowed-emails`, `DELETE /admin/allowed-emails/{email}`
 - **Связи:** `POST /admin/assign-student-to-teacher`, `DELETE /admin/remove-student-from-teacher/{student_id}`
-- **Теория:** `POST /admin/theory`, `GET /admin/theory/getall`, `GET/PUT/DELETE /admin/theory/{id}`
+- **Теория:** `POST /admin/theory`, `GET /admin/theory-meta` (`{ topic: { section: id } }`), `GET/PUT/DELETE /admin/theory/{id}`
 - **Прочее:** `POST /admin/upload-image` (Cloudflare R2), `POST /admin/tasks/{id}/send-to-tg`, `POST /admin/classify-tasks` (AI-классификация), `POST /admin/rebuild-all-static-tests`
 
 ### Учитель: тесты/группы — `api/teacher_api.py` (prefix: `/teacher`, tags: Teacher API)

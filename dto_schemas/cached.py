@@ -172,6 +172,12 @@ class TheoryMetaResponse(RootModel[dict[str, list[str]]]):
     model_config = ConfigDict(from_attributes=True)
 
 
+class AdminTheoryMetaResponse(RootModel[dict[str, dict[str, int]]]):
+    """Админская мета теории: { topic: { section: theory_id } }."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+
 class TeacherGroupStudentResponse(BaseModel):
     id: int
     first_name: str
