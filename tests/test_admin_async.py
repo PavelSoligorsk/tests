@@ -656,6 +656,8 @@ async def test_admin_theory_crud(
             "topic": "algebra",
             "section": "quadratic_equations",
             "content": "A quadratic equation is ax² + bx + c = 0.",
+            "theory_class": 9,
+            "priority": 2,
         },
         headers={"Authorization": f"Bearer {admin_token}"},
     )
@@ -663,23 +665,29 @@ async def test_admin_theory_crud(
     theory = create_resp.json()
     theory_id = theory["id"]
     assert theory["topic"] == "algebra"
+    assert theory["theory_class"] == 9
+    assert "priority" not in theory
 
-    # Meta: { topic: { section: theory_id } }
+    # Meta: { class: { topic: { priority, sections: { section: id } } } }
     meta_resp = await async_client.get(
         "/admin/theory-meta",
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert meta_resp.status_code == 200
     meta = meta_resp.json()
-    assert meta["algebra"]["quadratic_equations"] == theory_id
+    assert meta["9"]["algebra"]["sections"]["quadratic_equations"] == theory_id
+    assert meta["9"]["algebra"]["priority"] == 2
 
-    # Get by id
+    # Get by id — class есть, priority нет
     get_resp = await async_client.get(
         f"/admin/theory/{theory_id}",
         headers={"Authorization": f"Bearer {admin_token}"},
     )
     assert get_resp.status_code == 200
-    assert get_resp.json()["id"] == theory_id
+    by_id = get_resp.json()
+    assert by_id["id"] == theory_id
+    assert by_id["theory_class"] == 9
+    assert "priority" not in by_id
 
     # Update
     update_resp = await async_client.put(
@@ -1441,6 +1449,8 @@ async def test_admin_create_theory_duplicate(
         "topic": "duplicate_topic",
         "section": "dup_section",
         "content": "Some theory content.",
+        "theory_class": 8,
+        "priority": 1,
     }
     # First — OK
     create1 = await async_client.post(

@@ -1,5 +1,5 @@
 import enum
-from sqlalchemy import Column, Integer, BigInteger, String, Boolean, JSON, ForeignKey, Enum, Text, DateTime, UniqueConstraint
+from sqlalchemy import CheckConstraint, Column, Integer, BigInteger, String, Boolean, JSON, ForeignKey, Enum, Text, DateTime, UniqueConstraint
 from sqlalchemy.orm import relationship
 from core.database import Base
 import datetime
@@ -189,9 +189,12 @@ class Theory(Base):
     topic = Column(String(255), nullable=False, index=True)
     section = Column(String(255), nullable=False, index=True)
     content = Column(Text, nullable=False)
-    
+    theory_class = Column(Integer, nullable=False, index=True)
+    priority = Column(Integer, nullable=False, default=0)
+
     __table_args__ = (
-        UniqueConstraint('topic', 'section', name='unique_topic_section'),
+        UniqueConstraint('theory_class', 'topic', 'section', name='unique_class_topic_section'),
+        CheckConstraint('theory_class >= 5 AND theory_class <= 11', name='ck_theory_class_range'),
     )
 
 

@@ -118,10 +118,37 @@
 ## Теория
 
 ### GET /admin/theory-meta
-Структура без контента: `{ "algebra": { "quadratic_equations": 12 } }` — `topic → section → theory_id`.
+Структура без контента, с классом и порядком тем:
+
+```json
+{
+  "9": {
+    "algebra": {
+      "priority": 2,
+      "sections": { "quadratic_equations": 12 }
+    }
+  }
+}
+```
+
+`theory_class → topic → { priority, sections: { section: theory_id } }`. Меньший `priority` — раньше в программе.
 
 ### POST /admin/theory
-### GET/PUT/DELETE /admin/theory/{id}
+```json
+{
+  "topic": "algebra",
+  "section": "quadratic_equations",
+  "content": "...",
+  "theory_class": 9,
+  "priority": 2
+}
+```
+`theory_class`: целое 5–11. `priority`: порядок темы внутри класса.
+
+### GET /admin/theory/{id}
+`id`, `topic`, `section`, `content`, `theory_class`. **`priority` нет.**
+
+### PUT/DELETE /admin/theory/{id}
 
 ## Email-доступ
 

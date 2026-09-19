@@ -22,6 +22,7 @@ from dto_schemas.cached import (
     StudentAITestItemResponse,
     TheoryTopicSummaryResponse,
     TheoryMetaResponse,
+    TheoryTopicMetaItem,
     StartAssignedTestResponse,
     StartTestTaskItem,
     SubmitTestResponse,
@@ -536,17 +537,28 @@ class StudentService:
         }
     
     async def get_theory_meta(self):
-        """Мета теории: { topic: [section, ...] }."""
-        pairs = await self.theory_repo.get_topic_section_pairs()
-        result: dict[str, list[str]] = {}
-        for topic, section in pairs:
+        """Мета: { class: { topic: { priority, sections: [section, ...] } } }."""
+        rows = await self.theory_repo.get_theory_meta_rows()
+        result: dict[str, dict[str, TheoryTopicMetaItem]] = {}
+        for _theory_id, topic, section, theory_class, priority in rows:
             if not topic:
                 continue
-            if topic not in result:
-                result[topic] = []
+            cls_key = str(theory_class)
             name = section or "Без раздела"
-            if name not in result[topic]:
-                result[topic].append(name)
+            if cls_key not in result:
+                result[cls_key] = {}
+            if topic not in result[cls_key]:
+                result[cls_key][topic] = TheoryTopicMetaItem(
+                    priority=priority or 0,
+                    sections=[],
+                )
+            else:
+                result[cls_key][topic].priority = min(
+                    result[cls_key][topic].priority,
+                    priority or 0,
+                )
+            if name not in result[cls_key][topic].sections:
+                result[cls_key][topic].sections.append(name)
         return TheoryMetaResponse(result)
 
     async def get_theory_topics(self):

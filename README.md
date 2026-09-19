@@ -114,7 +114,7 @@ fastapi/
 | `TestResult` | `test_results` | Попытка прохождения: баллы, completed_at, тайминг (started_at, time_spent_seconds) |
 | `UserAnswer` | `user_answers` | Ответ на задание: текст, is_correct, points_earned |
 | `TestAssignment` | `test_assignments` | Назначение теста студенту или группе, due_date, is_completed (уникальность test_id+user_id) |
-| `Theory` | `theory` | Теория по теме+разделу (уникальность topic+section) |
+| `Theory` | `theory` | Теория: класс 5–11 + topic + section (уникальность), `priority` для порядка тем |
 | `AllowedEmail` | `allowed_emails` | Allow-list email для регистрации |
 | `TeacherStudent` | `teacher_students` | Связь учитель↔ученик (M2M) |
 | `PasswordResetToken` | `password_reset_tokens` | Токены сброса пароля (email, token, expires_at, is_used) |
@@ -148,7 +148,7 @@ fastapi/
 - **Результаты:** `GET /admin/results/{result_id}`
 - **Allow-list email:** `GET /admin/allowed/emails`, `POST /admin/allowed-emails`, `DELETE /admin/allowed-emails/{email}`
 - **Связи:** `POST /admin/assign-student-to-teacher`, `DELETE /admin/remove-student-from-teacher/{student_id}`
-- **Теория:** `POST /admin/theory`, `GET /admin/theory-meta` (`{ topic: { section: id } }`), `GET/PUT/DELETE /admin/theory/{id}`
+- **Теория:** `POST /admin/theory`, `GET /admin/theory-meta` (`{ class: { topic: { priority, sections: { section: id } } } }`), `GET/PUT/DELETE /admin/theory/{id}` (`theory_class`, без `priority`)
 - **Прочее:** `POST /admin/upload-image` (Cloudflare R2), `POST /admin/tasks/{id}/send-to-tg`, `POST /admin/classify-tasks` (AI-классификация), `POST /admin/rebuild-all-static-tests`
 
 ### Учитель: тесты/группы — `api/teacher_api.py` (prefix: `/teacher`, tags: Teacher API)
@@ -170,7 +170,7 @@ fastapi/
 - **Тесты:** `GET /student/tests`, `GET /student/tests/{id}`, `POST /student/tests/{id}/submit`, `POST /student/tests/{id}/save-progress`, `POST /student/start-test/{test_id}`, `POST /student/retake/{result_id}`, `GET /student/tests-meta`
 - **AI:** `POST /student/tasks/{id}/hint`, `POST /student/tasks/{id}/ai-solve`, `POST /student/generate-test`, `POST /student/start-ai-test/{test_id}`
 - **История:** `GET /student/history`, `GET /student/results/{result_id}`, `GET /student/my-assignments`, `GET /student/my-assignments-meta`, `GET /student/ai-tests`, `GET /student/ai-tests/incomplete`
-- **Теория:** `GET /student/theory/topics`, `GET /student/theory/by-topic/{topic}`, `GET /student/theory/sections/{topic}`, `GET /student/theory/by-topic/{topic}/section/{section}`, `POST /student/theory/ask-ai`
+- **Теория:** `GET /student/theory/meta` (`{ class: { topic: { priority, sections } } }`), `GET /student/theory/topics`, `GET /student/theory/by-topic/{topic}`, `GET /student/theory/sections/{topic}`, `GET /student/theory/by-topic/{topic}/section/{section}`, `POST /student/theory/ask-ai`
 
 ### Статистика — `api/stats_api.py` (prefix: `/stats`, tags: Statistics)
 - **Своя:** `GET /stats/me/period`, `GET /stats/me/topics`, `GET /stats/me/difficulty`, `GET /stats/me/full` (параметр: period = month/all/week)

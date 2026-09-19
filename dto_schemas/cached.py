@@ -166,14 +166,30 @@ class TheorySectionSummaryResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
 
-class TheoryMetaResponse(RootModel[dict[str, list[str]]]):
-    """Структура теории: { topic: [section, ...] }."""
+class TheoryTopicMetaItem(BaseModel):
+    """Тема в студенческой мете: порядок + список разделов."""
+    priority: int
+    sections: list[str] = Field(default_factory=list)
 
     model_config = ConfigDict(from_attributes=True)
 
 
-class AdminTheoryMetaResponse(RootModel[dict[str, dict[str, int]]]):
-    """Админская мета теории: { topic: { section: theory_id } }."""
+class TheoryMetaResponse(RootModel[dict[str, dict[str, TheoryTopicMetaItem]]]):
+    """Студенческая мета: { theory_class: { topic: { priority, sections: [...] } } }."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminTheoryTopicMetaItem(BaseModel):
+    """Тема в админской мете: порядок + section → id."""
+    priority: int
+    sections: dict[str, int] = Field(default_factory=dict)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class AdminTheoryMetaResponse(RootModel[dict[str, dict[str, AdminTheoryTopicMetaItem]]]):
+    """Админская мета: { theory_class: { topic: { priority, sections: { section: id } } } }."""
 
     model_config = ConfigDict(from_attributes=True)
 

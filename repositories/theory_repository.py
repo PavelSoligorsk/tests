@@ -33,7 +33,7 @@ class TheoryRepository:
     async def get_all_theory(self):
         """Получить весь теоретический материал"""
         r = await self.db.execute(
-            select(Theory).order_by(Theory.topic, Theory.section)
+            select(Theory).order_by(Theory.theory_class, Theory.priority, Theory.topic, Theory.section)
         )
         return r.scalars().all()
     
@@ -41,18 +41,18 @@ class TheoryRepository:
         r = await self.db.execute(
             select(Theory)
             .where(Theory.topic == topic)
-            .order_by(Theory.section)
+            .order_by(Theory.priority, Theory.section)
         )
         return r.scalars().all()
     
-    async def get_theory_by_topic_and_section(self, topic: str, section: str):
-        r = await self.db.execute(
-            select(Theory)
-            .where(
-                Theory.topic == topic,
-                Theory.section == section
-            )
+    async def get_theory_by_topic_and_section(self, topic: str, section: str, theory_class: int | None = None):
+        stmt = select(Theory).where(
+            Theory.topic == topic,
+            Theory.section == section,
         )
+        if theory_class is not None:
+            stmt = stmt.where(Theory.theory_class == theory_class)
+        r = await self.db.execute(stmt)
         return r.scalars().first()
     
     async def get_theory_by_id(self, theory_id: int):
@@ -72,11 +72,17 @@ class TheoryRepository:
         return r.all()
 
     async def get_theory_meta_rows(self):
-        """id + topic + section без content — для админской мета-карты."""
+        """id + topic + section + class + priority без content."""
         r = await self.db.execute(
-            select(Theory.id, Theory.topic, Theory.section)
+            select(
+                Theory.id,
+                Theory.topic,
+                Theory.section,
+                Theory.theory_class,
+                Theory.priority,
+            )
             .where(Theory.topic.is_not(None))
-            .order_by(Theory.topic, Theory.section)
+            .order_by(Theory.theory_class, Theory.priority, Theory.topic, Theory.section)
         )
         return r.all()
 

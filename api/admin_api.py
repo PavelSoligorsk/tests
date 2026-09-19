@@ -511,7 +511,7 @@ async def get_theory_meta(
     service: AdminService = Depends(get_admin_service),
     current_admin: User = Depends(auth.check_admin)
 ):
-    """Структура теории без контента: { topic: { section: theory_id } }"""
+    """Структура теории без контента: { class: { topic: { priority, sections: { section: id } } } }"""
     return await async_cache_result(
         "admin_theory_meta",
         None,

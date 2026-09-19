@@ -293,22 +293,28 @@ async def test_student_start_assigned_test(
 async def test_student_get_theory_meta(
     async_client: AsyncClient, student_token: str, admin_token: str
 ) -> None:
-    """Мета теории: { topic: [section, ...] }."""
+    """Мета теории: { class: { topic: { priority, sections } } }."""
     from tests.helpers_async import async_create_theory
     await async_create_theory(async_client, admin_token, {
         "topic": "Стереометрия",
         "section": "Куб",
         "content": "Куб — правильный многогранник.",
+        "theory_class": 10,
+        "priority": 2,
     })
     await async_create_theory(async_client, admin_token, {
         "topic": "Стереометрия",
         "section": "Пирамида",
         "content": "Пирамида — многогранник.",
+        "theory_class": 10,
+        "priority": 2,
     })
     await async_create_theory(async_client, admin_token, {
         "topic": "Планиметрия",
         "section": "Треугольник",
         "content": "Треугольник — многоугольник.",
+        "theory_class": 8,
+        "priority": 1,
     })
 
     resp = await async_client.get(
@@ -317,10 +323,11 @@ async def test_student_get_theory_meta(
     )
     assert resp.status_code == 200, resp.text
     data = resp.json()
-    assert "Стереометрия" in data
-    assert "Куб" in data["Стереометрия"]
-    assert "Пирамида" in data["Стереометрия"]
-    assert data["Планиметрия"] == ["Треугольник"]
+    assert "Куб" in data["10"]["Стереометрия"]["sections"]
+    assert "Пирамида" in data["10"]["Стереометрия"]["sections"]
+    assert data["10"]["Стереометрия"]["priority"] == 2
+    assert data["8"]["Планиметрия"]["sections"] == ["Треугольник"]
+    assert data["8"]["Планиметрия"]["priority"] == 1
 
 
 @pytest.mark.student

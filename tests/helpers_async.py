@@ -25,6 +25,7 @@ async def async_create_theory(
     ac: AsyncClient, token: str, theory_data: dict
 ) -> dict[str, Any]:
     """Helper: create theory via async client, return response JSON."""
-    resp = await ac.post("/admin/theory", json=theory_data, headers=_bearer(token))
+    payload = {"theory_class": 9, "priority": 0, **theory_data}
+    resp = await ac.post("/admin/theory", json=payload, headers=_bearer(token))
     assert resp.status_code == 200, f"Failed to create theory: {resp.text}"
     return resp.json()

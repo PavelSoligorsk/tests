@@ -39,6 +39,7 @@ from dto_schemas.cached import (
     TeacherTaskMetaByTopicSectionResponse,
     TeacherTaskDetailResponse,
     AdminTheoryMetaResponse,
+    AdminTheoryTopicMetaItem,
 )
 
 logger = logging.getLogger(__name__)
@@ -401,24 +402,38 @@ class AdminService:
     async def create_theory(self, theory_data: dict):
         topic = theory_data.get("topic")
         section = theory_data.get("section")
+        theory_class = theory_data.get("theory_class")
         
-        existing = await self.theory_repo.get_theory_by_topic_and_section(topic, section)
+        existing = await self.theory_repo.get_theory_by_topic_and_section(topic, section, theory_class)
         if existing:
-            raise ValueError(f"Теория для темы '{topic}' и раздела '{section}' уже существует")
+            raise ValueError(
+                f"Теория для {theory_class} класса, темы '{topic}' и раздела '{section}' уже существует"
+            )
         
         return await self.theory_repo.create_theory(theory_data)
 
     async def get_theory_meta(self):
-        """Мета теории: { topic: { section: theory_id } } без content."""
+        """Мета: { class: { topic: { priority, sections: { section: id } } } }."""
         rows = await self.theory_repo.get_theory_meta_rows()
-        result: dict[str, dict[str, int]] = {}
-        for theory_id, topic, section in rows:
+        result: dict[str, dict[str, AdminTheoryTopicMetaItem]] = {}
+        for theory_id, topic, section, theory_class, priority in rows:
             if not topic:
                 continue
+            cls_key = str(theory_class)
             name = section or "Без раздела"
-            if topic not in result:
-                result[topic] = {}
-            result[topic][name] = theory_id
+            if cls_key not in result:
+                result[cls_key] = {}
+            if topic not in result[cls_key]:
+                result[cls_key][topic] = AdminTheoryTopicMetaItem(
+                    priority=priority or 0,
+                    sections={},
+                )
+            else:
+                result[cls_key][topic].priority = min(
+                    result[cls_key][topic].priority,
+                    priority or 0,
+                )
+            result[cls_key][topic].sections[name] = theory_id
         return AdminTheoryMetaResponse(result)
     
     async def get_theory_by_id(self, theory_id: int):
@@ -431,6 +446,15 @@ class AdminService:
         theory = await self.theory_repo.get_theory_by_id(theory_id)
         if not theory:
             raise ValueError("Теория не найдена")
+
+        topic = update_data.get("topic", theory.topic)
+        section = update_data.get("section", theory.section)
+        theory_class = update_data.get("theory_class", theory.theory_class)
+        existing = await self.theory_repo.get_theory_by_topic_and_section(topic, section, theory_class)
+        if existing and existing.id != theory.id:
+            raise ValueError(
+                f"Теория для {theory_class} класса, темы '{topic}' и раздела '{section}' уже существует"
+            )
         
         return await self.theory_repo.update_theory(theory, update_data)
     

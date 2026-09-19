@@ -289,7 +289,7 @@ async def get_theory_meta(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
-    """Структура теории: { topic: [section, ...] }. TTL 6 часов."""
+    """Структура теории: { class: { topic: { priority, sections } } }. TTL 6 часов."""
     return await async_cache_result(
         "theory_meta",
         None,
