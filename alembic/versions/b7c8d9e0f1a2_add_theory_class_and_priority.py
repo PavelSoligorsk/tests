@@ -65,6 +65,26 @@ def upgrade() -> None:
         if ix.get("unique") and {"topic", "section"} <= cols and name != "unique_class_topic_section":
             op.drop_index(name, table_name="theory")
 
+    # Прод уже содержит дубли topic+section (констрейнта не было).
+    # После default theory_class=5 уникальный индекс иначе не создастся.
+    # Оставляем самую новую строку в группе (max id).
+    op.execute(
+        sa.text(
+            """
+            DELETE FROM theory AS t
+            USING (
+                SELECT id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY theory_class, topic, section
+                           ORDER BY id DESC
+                       ) AS rn
+                FROM theory
+            ) AS d
+            WHERE t.id = d.id AND d.rn > 1
+            """
+        )
+    )
+
     inspector = inspect(bind)
     if not _has_constraint(inspector, "theory", "unique_class_topic_section"):
         op.create_unique_constraint(
