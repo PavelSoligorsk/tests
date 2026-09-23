@@ -64,3 +64,4 @@ redis
 asyncpg
 openai
 alembic
+mcp<2

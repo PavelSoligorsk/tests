@@ -144,7 +144,7 @@ fastapi/
 
 ### Админка — `api/admin_api.py` (prefix: `/admin`, tags: Admin)
 - **Пользователи:** `GET /admin/users`, `PATCH /admin/users/{id}/role`, `DELETE /admin/users/{id}`, `GET /admin/users/{id}/profile`, `GET /admin/users/{id}/history`
-- **Банк заданий:** `GET /admin/` (все задания), `GET/POST/PUT/DELETE /admin/tasks[/{id}]`, батч-операции `POST/PUT/DELETE /admin/tasks/batch` (до 500), `GET /admin/{task_id}` (короткая ссылка)
+- **Банк заданий:** `GET /admin/` (все задания), `GET/POST/PUT/DELETE /admin/tasks[/{id}]`, батч-операции `POST/PUT/DELETE /admin/tasks/batch` (до 500), MCP `python -m mcp_admin` (`create_tasks` / `update_tasks` / `delete_tasks` / `apply_tasks`), `GET /admin/{task_id}` (короткая ссылка)
 - **Результаты:** `GET /admin/results/{result_id}`
 - **Allow-list email:** `GET /admin/allowed/emails`, `POST /admin/allowed-emails`, `DELETE /admin/allowed-emails/{email}`
 - **Связи:** `POST /admin/assign-student-to-teacher`, `DELETE /admin/remove-student-from-teacher/{student_id}`

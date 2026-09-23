@@ -33,48 +33,69 @@
 ## Пакетные операции
 
 ### POST /admin/tasks/batch
-Пакетное создание заданий (до 500 за раз).
-```json
-{
-  "tasks": [
-    {
-      "task_class": "10",
-      "topic_number": "1.1",
-      "content": "Решите уравнение \\\\(x^2 - 5x + 6 = 0\\\\)",
-      "answer": "2; 3",
-      "is_open_answer": true,
-      "difficulty": 2,
-      "topic": "Алгебра",
-      "section": "Квадратные уравнения"
-    },
-    {
-      "task_class": "10",
-      "topic_number": "1.1",
-      "content": "Сколько корней?",
-      "options": ["0", "1", "2"],
-      "answer": "2",
-      "is_open_answer": false,
-      "difficulty": 1
-    }
-  ]
-}
+Пакетное создание заданий (до 500 за раз). Тело запроса — JSON `{"tasks": [ ... ]}` с теми же полями, что в YAML ниже. Для агента удобнее `create_tasks_yaml`.
+
+```yaml
+- task_class: "Выражения и их преобразования"
+  topic_number: "Рациональная дробь"
+  content: |
+    Упростите выражение.
+
+    $$
+    \left(\frac{x}{5} - \frac{x}{3}\right) \cdot \frac{9}{x^2}
+    $$
+  options:
+    - '$-\frac{6}{5x}$'
+    - '$\frac{6}{5x}$'
+    - '$-\frac{6x}{5}$'
+    - '$-\frac{5}{6x}$'
+  answer: "1"
+  is_open_answer: false
+  difficulty: 2
+  topic: "expressions"
+  section: "Рациональная дробь"
+
+- task_class: "Выражения и их преобразования"
+  topic_number: "Рациональная дробь"
+  content: |
+    Найдите значение выражения.
+
+    $$
+    \left(\frac{2}{m} - \frac{1}{n}\right) : \frac{2n - m}{3mn}
+    $$
+
+    {{image}}
+  answer: "3"
+  is_open_answer: true
+  difficulty: 2
+  topic: "expressions"
+  section: "Рациональная дробь"
+  image: "screenshots/figura.png"
 ```
 
-**Валидация:**
-- `task_class`, `topic_number`, `content`, `answer` — обязательны
-- `is_open_answer: false` → `options` обязателен (массив строк)
-- `is_open_answer: true` (или не указано) → `options` не нужен
-- `difficulty` — 1..5
+**Поля**
+- `task_class` — название блока программы, не номер класса (`"Выражения и их преобразования"`).
+- `topic_number` — название подтемы (`"Рациональная дробь"`).
+- `topic` — короткий код (`"expressions"`). `section` — то же имя раздела, что у `topic_number`.
+- `content` — условие. Формулы в `$$ ... $$`.
+- Закрытое (`is_open_answer: false`): `options` — формулы вариантов, `answer` — номер варианта с 1 (`"1"`, `"2"`, …), не текст варианта.
+- Открытое (`is_open_answer: true`): `options` нет, `answer` — само значение (`"3"`, `"14"`, `"-1"`).
+- `difficulty` — 1..5.
+- Картинка: `image` / `screenshot` — путь к png или base64 (в HTTP это делает MCP, не сам JSON). `{{image}}` в `content` заменяется на `![](url)`. Без плейсхолдера ссылка дописывается в конец условия. Несколько файлов — список `images`.
 
 ### PUT /admin/tasks/batch
-Пакетное обновление заданий (до 500). Каждый объект должен содержать `id` + поля для обновления:
-```json
-{
-  "tasks": [
-    { "id": 1, "difficulty": 3, "topic": "Алгебра", "section": "Квадратные уравнения" },
-    { "id": 2, "answer": "4", "hint": "Подумайте" }
-  ]
-}
+Пакетное обновление (до 500). У каждого объекта обязателен `id`, остальные поля — как при создании: закрытому `answer` остаётся номером варианта, формулы в `$...$`.
+
+```yaml
+- id: 12
+  difficulty: 3
+  topic: "expressions"
+  section: "Рациональная дробь"
+- id: 13
+  answer: "2"
+  options:
+    - '$-\frac{6}{5x}$'
+    - '$\frac{6}{5x}$'
 ```
 
 ### DELETE /admin/tasks/batch
@@ -82,6 +103,33 @@
 ```json
 { "ids": [1, 2, 3] }
 ```
+
+## MCP для агента (пакетные задания)
+
+stdio-сервер `python -m mcp_admin`. Ходит в те же `/admin/tasks/batch` под админом. Формат заданий — YAML из раздела пакетного создания.
+
+Инструменты: `tasks_meta`, `list_tasks`, `list_tasks_by_class`, `get_task`, `create_tasks`, `create_tasks_yaml`, `update_tasks`, `delete_tasks`, `apply_tasks` (create → update → delete в одном вызове), `upload_task_image`.
+
+`upload_task_image(file_path)` только загружает png и возвращает `url` вместе с `![](url)`, если картинку нужно вставить вручную.
+
+```json
+{
+  "mcpServers": {
+    "admin-tasks": {
+      "command": "D:/python/fastapi/.venv/Scripts/python.exe",
+      "args": ["-m", "mcp_admin"],
+      "cwd": "D:/python/fastapi",
+      "env": {
+        "ADMIN_API_BASE": "https://tests-production-46d5.up.railway.app",
+        "ADMIN_USERNAME": "admin@example.com",
+        "ADMIN_PASSWORD": "..."
+      }
+    }
+  }
+}
+```
+
+Вместо логина можно `ADMIN_TOKEN` (JWT админа).
 
 ---
 
@@ -158,7 +206,10 @@
 
 ## Изображения
 
-### POST /admin/upload-image — `{ "image": "base64..." }`
+### POST /admin/upload-image
+Тело: `{ "image": "<base64 png>" }`. Ответ: `{ "url": "https://.../tasks/<id>.png" }`.
+
+В условие задания URL кладётся так: `![](https://.../tasks/<id>.png)`. MCP подставляет эту строку вместо `{{image}}` в `content`.
 
 ## Результаты
 
