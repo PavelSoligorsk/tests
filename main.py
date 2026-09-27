@@ -13,6 +13,11 @@ from api.teacher_schedule_api import router as schedule_router
 from api.student_api import router as student_router
 from api.stats_api import router as stats_router
 from api.telegram_api import router as telegram_router
+from api.board_api import (
+    student_board_router,
+    teacher_board_router,
+    template_router,
+)
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -71,6 +76,9 @@ app.include_router(schedule_router)
 app.include_router(student_router)
 app.include_router(stats_router)  # ← Добавляем эту строку
 app.include_router(telegram_router)  # Telegram Bot API
+app.include_router(student_board_router)
+app.include_router(teacher_board_router)
+app.include_router(template_router)
 
 @app.options("/{rest_of_path:path}")
 async def options_handler():

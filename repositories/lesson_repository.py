@@ -188,7 +188,8 @@ class LessonRepository:
         self.db.add(new_lesson)
         await self.db.flush()
 
-        # Удаляем оригинал
+        # Удаляем оригинал вместе с холстами и картинками
+        await self._purge_boards(lesson.id)
         await self.db.delete(lesson)
         await self.db.flush()
 
@@ -295,6 +296,7 @@ class LessonRepository:
         )
         to_delete = list(r.scalars().all())
         for lesson in to_delete:
+            await self._purge_boards(lesson.id)
             await self.db.delete(lesson)
         if to_delete:
             await self.db.flush()
@@ -320,12 +322,18 @@ class LessonRepository:
             if dow not in keep_prefixes:
                 to_delete.append(lesson)
         for l in to_delete:
+            await self._purge_boards(l.id)
             await self.db.delete(l)
         if to_delete:
             await self.db.flush()
         return len(to_delete)
 
+    async def _purge_boards(self, lesson_id: int) -> None:
+        from services.board_service import purge_lesson_boards
+        await purge_lesson_boards(self.db, lesson_id)
+
     async def delete(self, lesson: Lesson) -> None:
+        await self._purge_boards(lesson.id)
         await self.db.delete(lesson)
         await self.db.flush()
 

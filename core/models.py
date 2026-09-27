@@ -1,5 +1,6 @@
 import enum
-from sqlalchemy import CheckConstraint, Column, Integer, BigInteger, String, Boolean, JSON, ForeignKey, Enum, Text, DateTime, UniqueConstraint
+import uuid
+from sqlalchemy import CheckConstraint, Column, Index, Integer, BigInteger, String, Boolean, JSON, ForeignKey, Enum, Text, DateTime, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import relationship
 from core.database import Base
 import datetime
@@ -343,3 +344,78 @@ class Payment(Base):
     # Relationships
     lesson = relationship("Lesson", back_populates="payments", foreign_keys=[lesson_id])
     student = relationship("User", foreign_keys=[student_id])
+
+
+class Board(Base):
+    """Холст занятия или черновик ученика. Документ хранится целиком."""
+    __tablename__ = "boards"
+
+    id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    title = Column(String(255), nullable=False, default="")
+    lesson_id = Column(Integer, ForeignKey("lessons.id", ondelete="CASCADE"), nullable=True, index=True)
+    kind = Column(String(20), nullable=False)
+    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
+    revision = Column(Integer, nullable=False, default=1)
+    camera = Column(JSON, nullable=False)
+    objects = Column(JSON, nullable=False)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    lesson = relationship("Lesson", foreign_keys=[lesson_id])
+    owner = relationship("User", foreign_keys=[owner_id])
+    images = relationship("BoardImage", cascade="all, delete-orphan")
+
+    __table_args__ = (
+        CheckConstraint("kind IN ('class', 'student', 'draft')", name="ck_boards_kind"),
+        CheckConstraint(
+            "(kind = 'class' AND owner_id IS NULL AND lesson_id IS NOT NULL) OR "
+            "(kind = 'student' AND owner_id IS NOT NULL AND lesson_id IS NOT NULL) OR "
+            "(kind = 'draft' AND owner_id IS NOT NULL AND lesson_id IS NULL)",
+            name="ck_boards_kind_owner",
+        ),
+        Index(
+            "uq_boards_one_class_per_lesson",
+            "lesson_id",
+            unique=True,
+            sqlite_where=text("kind = 'class'"),
+            postgresql_where=text("kind = 'class'"),
+        ),
+        Index(
+            "uq_boards_student_per_lesson",
+            "lesson_id",
+            "owner_id",
+            unique=True,
+            sqlite_where=text("kind = 'student'"),
+            postgresql_where=text("kind = 'student'"),
+        ),
+    )
+
+
+class BoardImage(Base):
+    """Файл картинки доски в R2. К доске привязывается, когда fileId попадает в документ."""
+    __tablename__ = "board_images"
+
+    file_id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    board_id = Column(Uuid(as_uuid=True), ForeignKey("boards.id", ondelete="CASCADE"), nullable=True, index=True)
+    r2_key = Column(String(512), nullable=False)
+    name = Column(String(255), nullable=False, default="")
+    content_type = Column(String(64), nullable=False)
+    uploaded_by = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+
+class GeogebraTemplate(Base):
+    """Шаблон GeoGebra учителя. id — строка, которую фронт кладёт в templateId."""
+    __tablename__ = "geogebra_templates"
+
+    teacher_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    id = Column(String(64), primary_key=True)
+    title = Column(String(255), nullable=False)
+    app_name = Column(String(20), nullable=False)
+    ggb_base64 = Column(Text, nullable=False)
+
+    teacher = relationship("User", foreign_keys=[teacher_id])
+
+    __table_args__ = (
+        CheckConstraint("app_name IN ('geometry', 'graphing')", name="ck_ggb_app_name"),
+    )
