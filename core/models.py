@@ -1,6 +1,6 @@
 import enum
 import uuid
-from sqlalchemy import CheckConstraint, Column, Index, Integer, BigInteger, String, Boolean, JSON, ForeignKey, Enum, Text, DateTime, UniqueConstraint, Uuid, text
+from sqlalchemy import CheckConstraint, Column, Integer, BigInteger, String, Boolean, JSON, ForeignKey, Enum, Text, DateTime, UniqueConstraint, Uuid
 from sqlalchemy.orm import relationship
 from core.database import Base
 import datetime
@@ -347,48 +347,31 @@ class Payment(Base):
 
 
 class Board(Base):
-    """Холст занятия или черновик ученика. Документ хранится целиком."""
+    """Именной холст учителя. Привязан к ученикам или к группе, не к занятию."""
     __tablename__ = "boards"
 
     id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    teacher_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    group_id = Column(Integer, ForeignKey("groups.id", ondelete="SET NULL"), nullable=True, index=True)
     title = Column(String(255), nullable=False, default="")
-    lesson_id = Column(Integer, ForeignKey("lessons.id", ondelete="CASCADE"), nullable=True, index=True)
-    kind = Column(String(20), nullable=False)
-    owner_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=True, index=True)
     revision = Column(Integer, nullable=False, default=1)
     camera = Column(JSON, nullable=False)
     objects = Column(JSON, nullable=False)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow)
 
-    lesson = relationship("Lesson", foreign_keys=[lesson_id])
-    owner = relationship("User", foreign_keys=[owner_id])
+    teacher = relationship("User", foreign_keys=[teacher_id])
+    group = relationship("Group", foreign_keys=[group_id])
     images = relationship("BoardImage", cascade="all, delete-orphan")
+    members = relationship("BoardStudent", cascade="all, delete-orphan")
 
-    __table_args__ = (
-        CheckConstraint("kind IN ('class', 'student', 'draft')", name="ck_boards_kind"),
-        CheckConstraint(
-            "(kind = 'class' AND owner_id IS NULL AND lesson_id IS NOT NULL) OR "
-            "(kind = 'student' AND owner_id IS NOT NULL AND lesson_id IS NOT NULL) OR "
-            "(kind = 'draft' AND owner_id IS NOT NULL AND lesson_id IS NULL)",
-            name="ck_boards_kind_owner",
-        ),
-        Index(
-            "uq_boards_one_class_per_lesson",
-            "lesson_id",
-            unique=True,
-            sqlite_where=text("kind = 'class'"),
-            postgresql_where=text("kind = 'class'"),
-        ),
-        Index(
-            "uq_boards_student_per_lesson",
-            "lesson_id",
-            "owner_id",
-            unique=True,
-            sqlite_where=text("kind = 'student'"),
-            postgresql_where=text("kind = 'student'"),
-        ),
-    )
+
+class BoardStudent(Base):
+    """Ученики именной доски, если она не на всю группу."""
+    __tablename__ = "board_students"
+
+    board_id = Column(Uuid(as_uuid=True), ForeignKey("boards.id", ondelete="CASCADE"), primary_key=True)
+    student_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
 
 
 class BoardImage(Base):

@@ -1,6 +1,7 @@
-"""Документ доски целиком: ревизия, две доски занятия, картинки и шаблоны."""
+"""Документ доски целиком: ревизия, картинки и шаблоны."""
 from __future__ import annotations
 
+import asyncio
 import base64
 import math
 import re
@@ -8,10 +9,9 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.models import Board, BoardImage, GeogebraTemplate, Lesson, User
+from core.models import Board, BoardImage, BoardStudent, GeogebraTemplate, User
 from dto_schemas.board import (
     BoardDocument,
     BoardImageUpload,
@@ -19,10 +19,9 @@ from dto_schemas.board import (
     Camera,
     GeogebraTemplateDocument,
     GeogebraTemplateMeta,
-    StudentLessonBoards,
-    TeacherLessonBoards,
 )
 from repositories.board_repository import BoardRepository, new_board
+from services.board_events import board_events
 from services.board_files import delete_keys, public_src, put_bytes
 
 OBJECT_TYPES = {"sticky", "text", "shape", "arrow", "draw", "image", "geogebra"}
@@ -54,97 +53,93 @@ class BoardService:
     async def list_student_boards(self, student: User) -> list[BoardMeta]:
         self._require_student(student)
         boards = await self.repo.list_for_student(student.id)
-        return [self._meta(board) for board in boards]
+        return await self._metas(boards)
 
-    async def create_draft(self, student: User, title: str) -> BoardDocument:
-        self._require_student(student)
-        clean = (title or "").strip()
-        if not clean:
-            raise BoardServiceError(400, "Нужно название черновика")
-        if len(clean) > 255:
-            raise BoardServiceError(400, "Название длиннее 255 символов")
-        board = new_board(title=clean, kind="draft", lesson_id=None, owner_id=student.id)
+    async def list_teacher_boards(self, teacher: User) -> list[BoardMeta]:
+        self._require_teacher(teacher)
+        boards = await self.repo.list_for_teacher(teacher.id)
+        return await self._metas(boards)
+
+    async def create_board(
+        self, teacher: User, title: str, student_ids: Optional[list[int]], group_id: Optional[int]
+    ) -> BoardDocument:
+        self._require_teacher(teacher)
+        clean = _clean_board_title(title)
+        group_id, members = await self._audience(teacher.id, student_ids, group_id)
+        board = new_board(title=clean, teacher_id=teacher.id, group_id=group_id)
         self.repo.add_board(board)
+        for student_id in members:
+            self.repo.add_member(BoardStudent(board_id=board.id, student_id=student_id))
         await self.repo.commit()
         return await self._document(board)
 
     async def get_for_student(self, student: User, board_id: uuid.UUID) -> BoardDocument:
         self._require_student(student)
         board = await self._board_or_404(board_id)
-        lesson = await self._lesson_of(board)
-        if not await self._student_can_read(student.id, board, lesson):
+        if not await self._student_can_access(student.id, board):
             raise BoardServiceError(403, "Нет доступа к этой доске")
         return await self._document(board)
 
     async def put_for_student(self, student: User, board_id: uuid.UUID, body: dict) -> BoardDocument:
         self._require_student(student)
         board = await self._board_or_404(board_id)
-        lesson = await self._lesson_of(board)
-        if not await self._student_can_read(student.id, board, lesson):
+        if not await self._student_can_access(student.id, board):
             raise BoardServiceError(403, "Нет доступа к этой доске")
-        if board.kind not in ("student", "draft") or board.owner_id != student.id:
-            raise BoardServiceError(403, "Эту доску можно только читать")
-        return await self._save(board, lesson, body, student_id=student.id)
+        return await self._save(board, body)
 
-    async def delete_draft(self, student: User, board_id: uuid.UUID) -> None:
+    async def open_student_events(
+        self, student: User, board_id: uuid.UUID
+    ) -> tuple[asyncio.Queue, dict[str, Any]]:
         self._require_student(student)
-        board = await self._board_or_404(board_id)
-        if board.kind != "draft" or board.owner_id != student.id:
-            raise BoardServiceError(403, "Удалить можно только свой черновик")
-        await self._delete_board(board)
-        await self.repo.commit()
 
-    async def open_student_lesson(self, student: User, lesson_id: int) -> StudentLessonBoards:
-        self._require_student(student)
-        lesson = await self.repo.get_lesson(lesson_id)
-        if lesson is None:
-            raise BoardServiceError(404, "Занятие не найдено")
-        if not await self._student_in_lesson(student.id, lesson):
-            raise BoardServiceError(403, "Нет доступа к этому занятию")
-        lesson_id = lesson.id
-        await self._ensure(lesson)
-        boards = await self.repo.list_for_lesson(lesson_id)
-        class_board = next((b for b in boards if b.kind == "class"), None)
-        mine = next((b for b in boards if b.kind == "student" and b.owner_id == student.id), None)
-        if class_board is None or mine is None:
-            raise BoardServiceError(404, "Доска занятия не найдена")
-        return StudentLessonBoards(
-            class_board=await self._document(class_board),
-            mine=await self._document(mine),
-        )
+        async def allowed(board: Board) -> bool:
+            return await self._student_can_access(student.id, board)
 
-    async def open_teacher_lesson(self, teacher: User, lesson_id: int) -> TeacherLessonBoards:
+        return await self._open_events(board_id, allowed)
+
+    async def open_teacher_events(
+        self, teacher: User, board_id: uuid.UUID
+    ) -> tuple[asyncio.Queue, dict[str, Any]]:
         self._require_teacher(teacher)
-        lesson = await self._teacher_lesson(teacher, lesson_id)
-        await self._ensure(lesson)
-        boards = await self.repo.list_for_lesson(lesson_id)
-        class_board = next((b for b in boards if b.kind == "class"), None)
-        if class_board is None:
-            raise BoardServiceError(404, "Доска занятия не найдена")
-        notebooks = [self._meta(b) for b in boards if b.kind == "student"]
-        notebooks.sort(key=lambda item: item.owner_id or 0)
-        return TeacherLessonBoards(
-            class_board=await self._document(class_board),
-            notebooks=notebooks,
-        )
+
+        async def allowed(board: Board) -> bool:
+            return board.teacher_id == teacher.id
+
+        return await self._open_events(board_id, allowed)
+
+    async def _open_events(self, board_id: uuid.UUID, allowed) -> tuple[asyncio.Queue, dict[str, Any]]:
+        key = str(board_id)
+        queue = board_events.subscribe(key)
+        try:
+            board = await self._board_or_404(board_id)
+            if not await allowed(board):
+                raise BoardServiceError(403, "Нет доступа к этой доске")
+            return queue, {
+                "id": key,
+                "revision": board.revision,
+                "updatedAt": _iso(board.updated_at),
+            }
+        except Exception:
+            board_events.unsubscribe(key, queue)
+            raise
 
     async def get_for_teacher(self, teacher: User, board_id: uuid.UUID) -> BoardDocument:
         self._require_teacher(teacher)
-        board = await self._board_or_404(board_id)
-        lesson = await self._lesson_of(board)
-        if lesson is None or lesson.teacher_id != teacher.id:
-            raise BoardServiceError(403, "Нет доступа к этой доске")
+        board = await self._owned_board(teacher, board_id)
         return await self._document(board)
 
     async def put_for_teacher(self, teacher: User, board_id: uuid.UUID, body: dict) -> BoardDocument:
         self._require_teacher(teacher)
-        board = await self._board_or_404(board_id)
-        lesson = await self._lesson_of(board)
-        if lesson is None or lesson.teacher_id != teacher.id:
-            raise BoardServiceError(403, "Нет доступа к этой доске")
-        if board.kind != "class":
-            raise BoardServiceError(403, "Тетрадь ученика учитель не перезаписывает")
-        return await self._save(board, lesson, body, student_id=None)
+        board = await self._owned_board(teacher, board_id)
+        return await self._save(board, body)
+
+    async def delete_for_teacher(self, teacher: User, board_id: uuid.UUID) -> None:
+        self._require_teacher(teacher)
+        board = await self._owned_board(teacher, board_id)
+        board_key = str(board.id)
+        await self._delete_board(board)
+        await self.repo.commit()
+        board_events.publish(board_key, {"event": "delete", "id": board_key})
 
     async def upload_image(self, user: User, filename: str, data: bytes) -> BoardImageUpload:
         if user.role not in ("student", "teacher", "admin"):
@@ -257,9 +252,7 @@ class BoardService:
         await self.repo.delete_template(row)
         await self.repo.commit()
 
-    async def _save(
-        self, board: Board, lesson: Optional[Lesson], body: dict, *, student_id: Optional[int]
-    ) -> BoardDocument:
+    async def _save(self, board: Board, body: dict) -> BoardDocument:
         client_revision = body.get("revision")
         if not isinstance(client_revision, int) or isinstance(client_revision, bool):
             raise BoardServiceError(400, "Нужна целочисленная revision")
@@ -267,28 +260,26 @@ class BoardService:
             raise BoardServiceError(409, (await self._document(board)).model_dump(by_alias=True))
 
         title = body.get("title", board.title)
-        if not isinstance(title, str) or not title.strip():
-            raise BoardServiceError(400, "Нужно название")
-        title = title.strip()
-        if len(title) > 255:
-            raise BoardServiceError(400, "Название длиннее 255 символов")
-
         camera, objects = _validate_scene(body.get("camera"), body.get("objects"))
-        await self._fill_templates(objects, lesson, student_id if board.kind == "draft" else None)
+        await self._fill_templates(objects, board.teacher_id)
         _reject_huge(camera, objects)
-
-        board.title = title
+        board.title = _clean_board_title(title)
         board.camera = camera
         board.objects = objects
         board.revision = board.revision + 1
         board.updated_at = datetime.utcnow()
         await self.repo.attach_images(board.id, _image_ids(objects))
         await self.repo.commit()
-        return await self._document(board)
+        document = await self._document(board)
+        board_events.publish(str(board.id), {
+            "event": "update",
+            "id": str(board.id),
+            "revision": document.revision,
+            "updatedAt": document.updated_at,
+        })
+        return document
 
-    async def _fill_templates(
-        self, objects: list[dict], lesson: Optional[Lesson], draft_owner_id: Optional[int]
-    ) -> None:
+    async def _fill_templates(self, objects: list[dict], teacher_id: int) -> None:
         for obj in objects:
             if obj.get("type") != "geogebra":
                 continue
@@ -299,46 +290,10 @@ class BoardService:
             current = props.get("ggbBase64")
             if isinstance(current, str) and current.strip():
                 continue
-            row = await self._template_for_board(template_id.strip(), lesson, draft_owner_id)
+            row = await self.repo.get_template(teacher_id, template_id.strip())
             if row is not None:
                 props["ggbBase64"] = row.ggb_base64
                 obj["props"] = props
-
-    async def _template_for_board(
-        self, template_id: str, lesson: Optional[Lesson], draft_owner_id: Optional[int]
-    ) -> Optional[GeogebraTemplate]:
-        if lesson is not None:
-            return await self.repo.get_template(lesson.teacher_id, template_id)
-        if draft_owner_id is None:
-            return None
-        teacher_ids = await self.repo.teacher_ids_for_student(draft_owner_id)
-        return await self.repo.first_template(teacher_ids, template_id)
-
-    async def _ensure(self, lesson: Lesson) -> None:
-        await self._create_missing(lesson)
-        try:
-            await self.repo.commit()
-        except IntegrityError:
-            await self.repo.rollback()
-
-    async def _create_missing(self, lesson: Lesson) -> None:
-        existing = await self.repo.list_for_lesson(lesson.id)
-        if not any(board.kind == "class" for board in existing):
-            self.repo.add_board(new_board(
-                title=lesson.title, kind="class", lesson_id=lesson.id, owner_id=None,
-            ))
-        owners = {board.owner_id for board in existing if board.kind == "student"}
-        if lesson.lesson_type == "group" and lesson.group_id:
-            student_ids = await self.repo.group_student_ids(lesson.group_id)
-        elif lesson.student_id:
-            student_ids = [lesson.student_id]
-        else:
-            student_ids = []
-        for student_id in student_ids:
-            if student_id not in owners:
-                self.repo.add_board(new_board(
-                    title=lesson.title, kind="student", lesson_id=lesson.id, owner_id=student_id,
-                ))
 
     async def _delete_board(self, board: Board) -> None:
         keys = await self.repo.image_keys(board.id)
@@ -358,12 +313,13 @@ class BoardService:
             props["src"] = public_src(image.r2_key) if image else ""
             obj["props"] = props
         camera = board.camera or {"x": 0, "y": 0, "zoom": 1}
+        student_ids = [] if board.group_id else await self._member_ids(board.id)
         return BoardDocument(
             id=str(board.id),
             title=board.title,
-            lesson_id=board.lesson_id,
-            kind=board.kind,
-            owner_id=board.owner_id,
+            teacher_id=board.teacher_id,
+            group_id=board.group_id,
+            student_ids=student_ids,
             revision=board.revision,
             created_at=_iso(board.created_at),
             updated_at=_iso(board.updated_at),
@@ -371,16 +327,58 @@ class BoardService:
             objects=objects,
         )
 
-    def _meta(self, board: Board) -> BoardMeta:
+    async def _metas(self, boards: list[Board]) -> list[BoardMeta]:
+        direct = [board.id for board in boards if board.group_id is None]
+        members = await self.repo.student_ids_map(direct)
+        return [self._meta(board, members.get(board.id, [])) for board in boards]
+
+    def _meta(self, board: Board, student_ids: list[int]) -> BoardMeta:
         return BoardMeta(
             id=str(board.id),
             title=board.title,
-            lesson_id=board.lesson_id,
-            kind=board.kind,
-            owner_id=board.owner_id,
+            teacher_id=board.teacher_id,
+            group_id=board.group_id,
+            student_ids=[] if board.group_id else student_ids,
             updated_at=_iso(board.updated_at),
             object_count=len(board.objects or []),
         )
+
+    async def _member_ids(self, board_id: uuid.UUID) -> list[int]:
+        found = await self.repo.student_ids_map([board_id])
+        return found.get(board_id, [])
+
+    async def _audience(
+        self, teacher_id: int, student_ids: Optional[list[int]], group_id: Optional[int]
+    ) -> tuple[Optional[int], list[int]]:
+        has_students = bool(student_ids)
+        has_group = group_id is not None
+        if has_students == has_group:
+            raise BoardServiceError(400, "Нужны ученики или группа, что-то одно")
+        if has_group:
+            group = await self.repo.owned_group(group_id, teacher_id)
+            if group is None:
+                raise BoardServiceError(404, "Группа не найдена")
+            return group_id, []
+        unique: list[int] = []
+        for student_id in student_ids or []:
+            if isinstance(student_id, bool) or not isinstance(student_id, int):
+                raise BoardServiceError(400, "studentIds — список id учеников")
+            if student_id not in unique:
+                unique.append(student_id)
+        if not await self.repo.owns_students(teacher_id, unique):
+            raise BoardServiceError(400, "Ученик не привязан к учителю")
+        return None, unique
+
+    async def _student_can_access(self, student_id: int, board: Board) -> bool:
+        if board.group_id is not None:
+            return await self.repo.student_in_group(board.group_id, student_id)
+        return student_id in await self._member_ids(board.id)
+
+    async def _owned_board(self, teacher: User, board_id: uuid.UUID) -> Board:
+        board = await self._board_or_404(board_id)
+        if board.teacher_id != teacher.id:
+            raise BoardServiceError(403, "Нет доступа к этой доске")
+        return board
 
     async def _board_or_404(self, board_id: uuid.UUID) -> Board:
         board = await self.repo.get_board(board_id)
@@ -388,28 +386,16 @@ class BoardService:
             raise BoardServiceError(404, "Доска не найдена")
         return board
 
-    async def _lesson_of(self, board: Board) -> Optional[Lesson]:
-        if board.lesson_id is None:
-            return None
-        return await self.repo.get_lesson(board.lesson_id)
-
-    async def _teacher_lesson(self, teacher: User, lesson_id: int) -> Lesson:
+    async def _teacher_lesson(self, teacher: User, lesson_id: int):
         lesson = await self.repo.get_lesson(lesson_id)
         if lesson is None or lesson.teacher_id != teacher.id:
             raise BoardServiceError(404, "Занятие не найдено")
         return lesson
 
-    async def _student_in_lesson(self, student_id: int, lesson: Lesson) -> bool:
+    async def _student_in_lesson(self, student_id: int, lesson) -> bool:
         if lesson.lesson_type == "group" and lesson.group_id:
             return await self.repo.student_in_group(lesson.group_id, student_id)
         return lesson.student_id == student_id
-
-    async def _student_can_read(self, student_id: int, board: Board, lesson: Optional[Lesson]) -> bool:
-        if board.kind in ("draft", "student"):
-            return board.owner_id == student_id
-        if board.kind == "class" and lesson is not None:
-            return await self._student_in_lesson(student_id, lesson)
-        return False
 
     async def _template_teacher_ids(self, user: User) -> list[int]:
         if user.role in ("teacher", "admin"):
@@ -447,16 +433,15 @@ class BoardService:
             raise BoardServiceError(403, "Нужна роль учителя")
 
 
-async def purge_lesson_boards(db: AsyncSession, lesson_id: int) -> None:
-    """Стереть холсты занятия и их файлы в R2. Вызывается до удаления урока."""
-    repo = BoardRepository(db)
-    boards = await repo.list_for_lesson(lesson_id)
-    for board in boards:
-        keys = await repo.image_keys(board.id)
-        await delete_keys(keys)
-        await repo.delete_board(board)
-    if boards:
-        await repo.flush()
+def _clean_board_title(value: Any) -> str:
+    if not isinstance(value, str):
+        raise BoardServiceError(400, "Нужно название")
+    cleaned = value.strip()
+    if not cleaned:
+        raise BoardServiceError(400, "Нужно название")
+    if len(cleaned) > 255:
+        raise BoardServiceError(400, "Название длиннее 255 символов")
+    return cleaned
 
 
 def _iso(value: Optional[datetime]) -> str:

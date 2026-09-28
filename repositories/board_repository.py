@@ -4,10 +4,10 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import delete, select, update
+from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.models import Board, BoardImage, GeogebraTemplate, GroupStudent, Lesson, TeacherStudent
+from core.models import Board, BoardImage, BoardStudent, GeogebraTemplate, Group, GroupStudent, Lesson, TeacherStudent
 
 
 class BoardRepository:
@@ -22,20 +22,51 @@ class BoardRepository:
         result = await self.db.execute(select(Board).where(Board.id == board_id))
         return result.scalars().first()
 
-    async def list_for_lesson(self, lesson_id: int) -> list[Board]:
-        result = await self.db.execute(select(Board).where(Board.lesson_id == lesson_id))
-        return list(result.scalars().all())
-
-    async def list_for_student(self, student_id: int) -> list[Board]:
+    async def list_for_teacher(self, teacher_id: int) -> list[Board]:
         result = await self.db.execute(
             select(Board)
-            .where(
-                Board.owner_id == student_id,
-                Board.kind.in_(("draft", "student")),
-            )
+            .where(Board.teacher_id == teacher_id)
             .order_by(Board.updated_at.desc(), Board.created_at.desc())
         )
         return list(result.scalars().all())
+
+    async def list_for_student(self, student_id: int) -> list[Board]:
+        assigned = select(BoardStudent.board_id).where(BoardStudent.student_id == student_id)
+        groups = select(GroupStudent.group_id).where(GroupStudent.student_id == student_id)
+        result = await self.db.execute(
+            select(Board)
+            .where(or_(Board.id.in_(assigned), Board.group_id.in_(groups)))
+            .order_by(Board.updated_at.desc(), Board.created_at.desc())
+        )
+        return list(result.scalars().all())
+
+    async def student_ids_map(self, board_ids: list[uuid.UUID]) -> dict[uuid.UUID, list[int]]:
+        if not board_ids:
+            return {}
+        result = await self.db.execute(
+            select(BoardStudent.board_id, BoardStudent.student_id)
+            .where(BoardStudent.board_id.in_(board_ids))
+            .order_by(BoardStudent.student_id.asc())
+        )
+        found: dict[uuid.UUID, list[int]] = {}
+        for board_id, student_id in result.all():
+            found.setdefault(board_id, []).append(student_id)
+        return found
+
+    async def owns_students(self, teacher_id: int, student_ids: list[int]) -> bool:
+        result = await self.db.execute(
+            select(TeacherStudent.student_id).where(
+                TeacherStudent.teacher_id == teacher_id,
+                TeacherStudent.student_id.in_(student_ids),
+            )
+        )
+        return {row[0] for row in result.all()} == set(student_ids)
+
+    async def owned_group(self, group_id: int, teacher_id: int) -> Optional[Group]:
+        result = await self.db.execute(
+            select(Group).where(Group.id == group_id, Group.teacher_id == teacher_id)
+        )
+        return result.scalars().first()
 
     async def group_student_ids(self, group_id: int) -> list[int]:
         result = await self.db.execute(
@@ -62,6 +93,9 @@ class BoardRepository:
 
     def add_board(self, board: Board) -> None:
         self.db.add(board)
+
+    def add_member(self, member: BoardStudent) -> None:
+        self.db.add(member)
 
     async def delete_board(self, board: Board) -> None:
         await self.db.execute(delete(BoardImage).where(BoardImage.board_id == board.id))
@@ -143,14 +177,13 @@ def empty_camera() -> dict:
     return {"x": 0, "y": 0, "zoom": 1}
 
 
-def new_board(*, title: str, kind: str, lesson_id: Optional[int], owner_id: Optional[int]) -> Board:
+def new_board(*, title: str, teacher_id: int, group_id: Optional[int]) -> Board:
     now = datetime.utcnow()
     return Board(
         id=uuid.uuid4(),
+        teacher_id=teacher_id,
+        group_id=group_id,
         title=title,
-        lesson_id=lesson_id,
-        kind=kind,
-        owner_id=owner_id,
         revision=1,
         camera=empty_camera(),
         objects=[],

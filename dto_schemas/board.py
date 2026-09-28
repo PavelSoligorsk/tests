@@ -17,9 +17,9 @@ class BoardDocument(BaseModel):
 
     id: str
     title: str
-    lesson_id: Optional[int] = Field(None, alias="lessonId")
-    kind: str
-    owner_id: Optional[int] = Field(None, alias="ownerId")
+    teacher_id: int = Field(alias="teacherId")
+    group_id: Optional[int] = Field(None, alias="groupId")
+    student_ids: list[int] = Field(default_factory=list, alias="studentIds")
     revision: int
     created_at: str = Field(alias="createdAt")
     updated_at: str = Field(alias="updatedAt")
@@ -32,29 +32,19 @@ class BoardMeta(BaseModel):
 
     id: str
     title: str
-    lesson_id: Optional[int] = Field(None, alias="lessonId")
-    kind: str
-    owner_id: Optional[int] = Field(None, alias="ownerId")
+    teacher_id: int = Field(alias="teacherId")
+    group_id: Optional[int] = Field(None, alias="groupId")
+    student_ids: list[int] = Field(default_factory=list, alias="studentIds")
     updated_at: str = Field(alias="updatedAt")
     object_count: int = Field(alias="objectCount")
 
 
-class DraftCreate(BaseModel):
+class BoardCreate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     title: str
-
-
-class StudentLessonBoards(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    class_board: BoardDocument = Field(alias="class")
-    mine: BoardDocument
-
-
-class TeacherLessonBoards(BaseModel):
-    model_config = ConfigDict(populate_by_name=True)
-
-    class_board: BoardDocument = Field(alias="class")
-    notebooks: list[BoardMeta]
+    student_ids: Optional[list[int]] = Field(None, alias="studentIds")
+    group_id: Optional[int] = Field(None, alias="groupId")
 
 
 class BoardImageUpload(BaseModel):

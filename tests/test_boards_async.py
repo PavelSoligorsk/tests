@@ -1,17 +1,13 @@
-"""Доски занятия: документ, ревизия, картинки, шаблоны."""
+"""Именная доска учителя: ученики или группа, без расписания."""
 from __future__ import annotations
 
+import asyncio
 import base64
-from datetime import datetime, timedelta
+import json
 
 import pytest
-from fastapi.testclient import TestClient
 from httpx import AsyncClient
-from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.models import TeacherStudent
-from main import app
-from tests.conftest import register_user
 from tests.helpers_async import _bearer
 
 MINI_PNG = base64.b64decode(
@@ -39,16 +35,12 @@ def r2(monkeypatch: pytest.MonkeyPatch) -> _FakeS3:
     return fake
 
 
-def _sticky(object_id: str = "s1", **props) -> dict:
+def _sticky(object_id: str = "s1") -> dict:
     return {
         "id": object_id,
         "type": "sticky",
-        "x": 10,
-        "y": 20,
-        "w": 200,
-        "h": 160,
-        "rotation": 0,
-        "props": {"text": "привет", "color": "#fde68a", "fontSize": 16, **props},
+        "x": 10, "y": 20, "w": 200, "h": 160, "rotation": 0,
+        "props": {"text": "привет", "color": "#fde68a"},
     }
 
 
@@ -56,9 +48,9 @@ def _put_body(board: dict, objects: list | None = None, revision: int | None = N
     return {
         "id": board["id"],
         "title": board["title"],
-        "lessonId": board["lessonId"],
-        "kind": board["kind"],
-        "ownerId": board["ownerId"],
+        "teacherId": board["teacherId"],
+        "groupId": board["groupId"],
+        "studentIds": board["studentIds"],
         "revision": board["revision"] if revision is None else revision,
         "createdAt": board["createdAt"],
         "updatedAt": board["updatedAt"],
@@ -67,11 +59,10 @@ def _put_body(board: dict, objects: list | None = None, revision: int | None = N
     }
 
 
-async def _ids(ac: AsyncClient, admin_token: str, teacher_token: str, student_token: str) -> tuple[int, int]:
+async def _link(ac: AsyncClient, admin_token: str, teacher_token: str, student_token: str) -> tuple[int, int]:
     users = (await ac.get("/admin/users", headers=_bearer(admin_token))).json()
     teacher_id = next(user["id"] for user in users if user["role"] == "teacher")
-    student = (await ac.get("/student/me", headers=_bearer(student_token))).json()
-    student_id = student["user"]["id"]
+    student_id = (await ac.get("/student/me", headers=_bearer(student_token))).json()["user"]["id"]
     link = await ac.post(
         "/admin/assign-student-to-teacher",
         json={"teacher_id": teacher_id, "student_id": student_id},
@@ -81,231 +72,105 @@ async def _ids(ac: AsyncClient, admin_token: str, teacher_token: str, student_to
     return teacher_id, student_id
 
 
-async def _lesson(ac: AsyncClient, teacher_token: str, student_id: int | None = None, **extra) -> dict:
-    slot = datetime.utcnow().replace(microsecond=0) + timedelta(days=3)
-    payload = {
-        "title": "Урок дробей",
-        "lesson_type": "individual",
-        "scheduled_date": slot.isoformat(),
-        "duration_minutes": 60,
-    }
-    if student_id is not None:
-        payload["student_id"] = student_id
-    payload.update(extra)
-    resp = await ac.post("/teacher/lessons", json=payload, headers=_bearer(teacher_token))
-    assert resp.status_code == 200, resp.text
-    return resp.json()
-
-
 @pytest.mark.asyncio
-async def test_open_lesson_creates_two_boards_once(
-    async_client: AsyncClient, teacher_token: str, student_token: str, admin_token: str
+async def test_teacher_names_a_board_for_students(
+    async_client: AsyncClient, teacher_token: str, student_token: str, student2_token: str, admin_token: str
 ) -> None:
-    _, student_id = await _ids(async_client, admin_token, teacher_token, student_token)
-    lesson = await _lesson(async_client, teacher_token, student_id)
-
-    before = await async_client.get("/student/boards", headers=_bearer(student_token))
-    assert before.status_code == 200
-    assert before.json() == []
-
-    first = await async_client.get(
-        f"/student/lessons/{lesson['id']}/board", headers=_bearer(student_token)
-    )
-    assert first.status_code == 200, first.text
-    opened = first.json()
-    assert opened["class"]["kind"] == "class"
-    assert opened["class"]["ownerId"] is None
-    assert opened["class"]["lessonId"] == lesson["id"]
-    assert opened["class"]["revision"] == 1
-    assert opened["class"]["objects"] == []
-    assert opened["mine"]["kind"] == "student"
-    assert opened["mine"]["ownerId"] == student_id
-    assert "objects" not in (await async_client.get("/student/boards", headers=_bearer(student_token))).json()[0]
-    assert (await async_client.get("/student/boards", headers=_bearer(student_token))).json()[0]["objectCount"] == 0
-
-    second = await async_client.get(
-        f"/student/lessons/{lesson['id']}/board", headers=_bearer(student_token)
-    )
-    assert second.json()["class"]["id"] == opened["class"]["id"]
-    assert second.json()["mine"]["id"] == opened["mine"]["id"]
-
-
-@pytest.mark.asyncio
-async def test_revision_conflict_and_permissions(
-    async_client: AsyncClient, teacher_token: str, student_token: str, admin_token: str, student2_token: str
-) -> None:
-    _, student_id = await _ids(async_client, admin_token, teacher_token, student_token)
-    lesson = await _lesson(async_client, teacher_token, student_id)
-    opened = (
-        await async_client.get(f"/student/lessons/{lesson['id']}/board", headers=_bearer(student_token))
-    ).json()
-
-    saved = await async_client.put(
-        f"/student/boards/{opened['mine']['id']}",
-        json=_put_body(opened["mine"], [_sticky()]),
-        headers=_bearer(student_token),
-    )
-    assert saved.status_code == 200, saved.text
-    assert saved.json()["revision"] == 2
-    assert saved.json()["objects"][0]["props"]["text"] == "привет"
-
-    stale = await async_client.put(
-        f"/student/boards/{opened['mine']['id']}",
-        json=_put_body(opened["mine"], [_sticky("s2")], revision=1),
-        headers=_bearer(student_token),
-    )
-    assert stale.status_code == 409
-    assert stale.json()["revision"] == 2
-    assert stale.json()["objects"][0]["id"] == "s1"
-
-    forbidden = await async_client.put(
-        f"/student/boards/{opened['class']['id']}",
-        json=_put_body(opened["class"], [_sticky()]),
-        headers=_bearer(student_token),
-    )
-    assert forbidden.status_code == 403
-
-    removed = await async_client.delete(
-        f"/student/boards/{opened['class']['id']}", headers=_bearer(student_token)
-    )
-    assert removed.status_code == 403
-
-    teacher_write = await async_client.put(
-        f"/teacher/boards/{opened['mine']['id']}",
-        json=_put_body(saved.json(), [_sticky("no")]),
-        headers=_bearer(teacher_token),
-    )
-    assert teacher_write.status_code == 403
-
-    teacher_class = await async_client.put(
-        f"/teacher/boards/{opened['class']['id']}",
-        json=_put_body(opened["class"], [_sticky("t1")]),
-        headers=_bearer(teacher_token),
-    )
-    assert teacher_class.status_code == 200, teacher_class.text
-    assert teacher_class.json()["revision"] == 2
-
-    stranger = await async_client.get(
-        f"/student/lessons/{lesson['id']}/board", headers=_bearer(student2_token)
-    )
-    assert stranger.status_code == 403
-
-    too_many = _put_body(teacher_class.json(), [_sticky(str(i)) for i in range(201)], revision=2)
-    overflow = await async_client.put(
-        f"/teacher/boards/{opened['class']['id']}",
-        json=too_many,
-        headers=_bearer(teacher_token),
-    )
-    assert overflow.status_code == 400
-
-
-@pytest.mark.asyncio
-async def test_draft_delete_removes_images(
-    async_client: AsyncClient, student_token: str, r2: _FakeS3
-) -> None:
-    created = await async_client.post(
-        "/student/boards", json={"title": "Черновик"}, headers=_bearer(student_token)
-    )
-    assert created.status_code == 200, created.text
-    draft = created.json()
-    assert draft["kind"] == "draft"
-    assert draft["lessonId"] is None
-    assert draft["revision"] == 1
-
-    uploaded = await async_client.post(
-        "/student/boards/images",
-        files={"file": ("чертёж.png", MINI_PNG, "image/png")},
-        headers=_bearer(student_token),
-    )
-    assert uploaded.status_code == 200, uploaded.text
-    image = uploaded.json()
-    assert image["fileId"]
-    assert image["name"] == "чертёж.png"
-    assert image["src"].endswith(f"boards/{image['fileId']}.png")
-    assert list(r2.store)
-
-    image_object = {
-        "id": "img1",
-        "type": "image",
-        "x": 0, "y": 0, "w": 10, "h": 10, "rotation": 0,
-        "props": {"fileId": image["fileId"], "src": "", "name": image["name"], "note": "keep"},
-    }
-    saved = await async_client.put(
-        f"/student/boards/{draft['id']}",
-        json=_put_body(draft, [image_object]),
-        headers=_bearer(student_token),
-    )
-    assert saved.status_code == 200, saved.text
-    assert saved.json()["objects"][0]["props"]["note"] == "keep"
-    assert saved.json()["objects"][0]["props"]["src"].endswith(".png")
-
-    deleted = await async_client.delete(f"/student/boards/{draft['id']}", headers=_bearer(student_token))
-    assert deleted.status_code == 200, deleted.text
-    assert r2.deleted
-    assert r2.store == {}
-
-    missing = await async_client.get(f"/student/boards/{draft['id']}", headers=_bearer(student_token))
-    assert missing.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_lesson_delete_removes_board_images(
-    async_client: AsyncClient, teacher_token: str, student_token: str, admin_token: str, r2: _FakeS3
-) -> None:
-    _, student_id = await _ids(async_client, admin_token, teacher_token, student_token)
-    lesson = await _lesson(async_client, teacher_token, student_id)
-    opened = (
-        await async_client.get(f"/teacher/lessons/{lesson['id']}/boards", headers=_bearer(teacher_token))
-    ).json()
-    assert opened["class"]["kind"] == "class"
-    assert len(opened["notebooks"]) == 1
-    assert "objects" not in opened["notebooks"][0]
-    assert opened["notebooks"][0]["ownerId"] == student_id
-
-    uploaded = await async_client.post(
-        "/teacher/boards/images",
-        files={"file": ("a.png", MINI_PNG, "image/png")},
-        headers=_bearer(teacher_token),
-    )
-    assert uploaded.status_code == 200, uploaded.text
-    file_id = uploaded.json()["fileId"]
-    image_object = {
-        "id": "img1", "type": "image", "x": 1, "y": 1, "w": 2, "h": 2, "rotation": 0,
-        "props": {"fileId": file_id, "src": "", "name": "a.png"},
-    }
-    saved = await async_client.put(
-        f"/teacher/boards/{opened['class']['id']}",
-        json=_put_body(opened["class"], [image_object]),
-        headers=_bearer(teacher_token),
-    )
-    assert saved.status_code == 200, saved.text
-
-    removed = await async_client.delete(f"/teacher/lessons/{lesson['id']}", headers=_bearer(teacher_token))
-    assert removed.status_code == 200, removed.text
-    assert r2.store == {}
-    gone = await async_client.get(
-        f"/student/lessons/{lesson['id']}/board", headers=_bearer(student_token)
-    )
-    assert gone.status_code == 404
-
-
-@pytest.mark.asyncio
-async def test_group_lesson_one_notebook_each(
-    async_client: AsyncClient,
-    teacher_token: str,
-    student_token: str,
-    student2_token: str,
-    admin_token: str,
-) -> None:
-    teacher_id, student_id = await _ids(async_client, admin_token, teacher_token, student_token)
-    student2 = (await async_client.get("/student/me", headers=_bearer(student2_token))).json()
-    student2_id = student2["user"]["id"]
-    link = await async_client.post(
+    teacher_id, student_id = await _link(async_client, admin_token, teacher_token, student_token)
+    student2_id = (await async_client.get("/student/me", headers=_bearer(student2_token))).json()["user"]["id"]
+    linked = await async_client.post(
         "/admin/assign-student-to-teacher",
         json={"teacher_id": teacher_id, "student_id": student2_id},
         headers=_bearer(admin_token),
     )
-    assert link.status_code == 200, link.text
+    assert linked.status_code == 200, linked.text
+
+    created = await async_client.post(
+        "/teacher/boards",
+        json={"title": "Дроби", "studentIds": [student_id, student2_id]},
+        headers=_bearer(teacher_token),
+    )
+    assert created.status_code == 200, created.text
+    board = created.json()
+    assert board["title"] == "Дроби"
+    assert board["teacherId"] == teacher_id
+    assert board["groupId"] is None
+    assert board["studentIds"] == [student_id, student2_id]
+    assert "lessonId" not in board
+    assert board["revision"] == 1
+    assert board["objects"] == []
+
+    listed = await async_client.get("/student/boards", headers=_bearer(student_token))
+    assert listed.status_code == 200
+    assert listed.json()[0]["id"] == board["id"]
+    assert listed.json()[0]["objectCount"] == 0
+    assert "objects" not in listed.json()[0]
+
+    stranger = await async_client.post(
+        "/admin/assign-student-to-teacher",
+        json={"teacher_id": teacher_id, "student_id": student2_id},
+        headers=_bearer(admin_token),
+    )
+    assert stranger.status_code == 200
+    # Второй ученик всё ещё в studentIds, он видит ту же доску.
+    same = await async_client.get(f"/student/boards/{board['id']}", headers=_bearer(student2_token))
+    assert same.status_code == 200
+    assert same.json()["id"] == board["id"]
+
+    saved = await async_client.put(
+        f"/student/boards/{board['id']}",
+        json=_put_body(board, [_sticky()]),
+        headers=_bearer(student_token),
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["revision"] == 2
+
+    teacher_saved = await async_client.put(
+        f"/teacher/boards/{board['id']}",
+        json=_put_body(saved.json(), [_sticky("t1")]),
+        headers=_bearer(teacher_token),
+    )
+    assert teacher_saved.status_code == 200, teacher_saved.text
+    assert teacher_saved.json()["objects"][0]["id"] == "t1"
+
+    stale = await async_client.put(
+        f"/student/boards/{board['id']}",
+        json=_put_body(board, [_sticky("old")], revision=1),
+        headers=_bearer(student_token),
+    )
+    assert stale.status_code == 409
+    assert stale.json()["revision"] == 3
+
+    neither = await async_client.post(
+        "/teacher/boards", json={"title": "Пусто"}, headers=_bearer(teacher_token)
+    )
+    assert neither.status_code == 400
+    both = await async_client.post(
+        "/teacher/boards",
+        json={"title": "И то и то", "studentIds": [student_id], "groupId": 1},
+        headers=_bearer(teacher_token),
+    )
+    assert both.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_group_board_is_one_canvas(
+    async_client: AsyncClient, teacher_token: str, student_token: str, student2_token: str, admin_token: str
+) -> None:
+    teacher_id, student_id = await _link(async_client, admin_token, teacher_token, student_token)
+    student2_id = (await async_client.get("/student/me", headers=_bearer(student2_token))).json()["user"]["id"]
+    # assign заменяет учителя, поэтому второго ученика привязываем до группы и не трогаем первого повторно.
+    # Оба должны быть у этого учителя. create_link удаляет прежнюю связь ученика, не учителя.
+    await async_client.post(
+        "/admin/assign-student-to-teacher",
+        json={"teacher_id": teacher_id, "student_id": student2_id},
+        headers=_bearer(admin_token),
+    )
+    await async_client.post(
+        "/admin/assign-student-to-teacher",
+        json={"teacher_id": teacher_id, "student_id": student_id},
+        headers=_bearer(admin_token),
+    )
     group = await async_client.post(
         "/teacher/groups/",
         json={"name": "Группа", "description": ""},
@@ -320,107 +185,204 @@ async def test_group_lesson_one_notebook_each(
     )
     assert added.status_code == 200, added.text
 
-    lesson = await _lesson(
-        async_client,
-        teacher_token,
-        lesson_type="group",
-        group_id=group_id,
-        title="Групповой",
+    created = await async_client.post(
+        "/teacher/boards",
+        json={"title": "Групповая доска", "groupId": group_id},
+        headers=_bearer(teacher_token),
     )
-    teacher_view = await async_client.get(
-        f"/teacher/lessons/{lesson['id']}/boards", headers=_bearer(teacher_token)
-    )
-    assert teacher_view.status_code == 200, teacher_view.text
-    owners = {item["ownerId"] for item in teacher_view.json()["notebooks"]}
-    assert owners == {student_id, student2_id}
+    assert created.status_code == 200, created.text
+    board = created.json()
+    assert board["groupId"] == group_id
+    assert board["studentIds"] == []
 
-    mine = await async_client.get(
-        f"/student/lessons/{lesson['id']}/board", headers=_bearer(student2_token)
-    )
-    assert mine.status_code == 200, mine.text
-    assert mine.json()["mine"]["ownerId"] == student2_id
-    assert mine.json()["class"]["id"] == teacher_view.json()["class"]["id"]
+    first = await async_client.get("/student/boards", headers=_bearer(student_token))
+    second = await async_client.get("/student/boards", headers=_bearer(student2_token))
+    assert first.json()[0]["id"] == board["id"]
+    assert second.json()[0]["id"] == board["id"]
 
 
 @pytest.mark.asyncio
-async def test_templates_follow_the_lesson_teacher(
-    async_client: AsyncClient,
-    teacher_token: str,
-    student_token: str,
-    admin_token: str,
-    db: AsyncSession,
+async def test_delete_board_removes_images(
+    async_client: AsyncClient, teacher_token: str, student_token: str, admin_token: str, r2: _FakeS3
 ) -> None:
-    _, student_id = await _ids(async_client, admin_token, teacher_token, student_token)
-    other = await register_user(
-        TestClient(app), db, "teacher2_boards@test.com", "Teacher123!", "Второй", "Учитель", role="teacher"
+    _, student_id = await _link(async_client, admin_token, teacher_token, student_token)
+    created = await async_client.post(
+        "/teacher/boards",
+        json={"title": "С картинкой", "studentIds": [student_id]},
+        headers=_bearer(teacher_token),
     )
-    # /admin/assign-student-to-teacher заменяет учителя, а каталог читает все связи.
-    db.add(TeacherStudent(teacher_id=other["id"], student_id=student_id))
-    await db.commit()
-
-    async def _upload(token: str, payload: bytes) -> None:
-        resp = await async_client.post(
-            "/teacher/geogebra-templates",
-            data={"id": "circle", "title": "Окружность", "appName": "geometry"},
-            files={"file": ("circle.ggb", payload, "application/octet-stream")},
-            headers=_bearer(token),
-        )
-        assert resp.status_code == 200, resp.text
-
-    await _upload(teacher_token, b"AAA")
-    await _upload(other["token"], b"BBB")
-
-    catalog = await async_client.get("/board/geogebra-templates", headers=_bearer(student_token))
-    assert catalog.status_code == 200, catalog.text
-    rows = catalog.json()
-    assert len(rows) == 2
-    assert {row["id"] for row in rows} == {"circle"}
-    assert "ggbBase64" not in rows[0]
-    assert len({row["teacherId"] for row in rows}) == 2
-
-    lesson = await _lesson(async_client, teacher_token, student_id)
-    lesson_teacher = (
-        await async_client.get(f"/teacher/lessons/{lesson['id']}", headers=_bearer(teacher_token))
-    ).json()["teacher_id"]
-    expected = base64.b64encode(b"AAA").decode("ascii")
-    fetched = await async_client.get(
-        f"/board/geogebra-templates/circle?lessonId={lesson['id']}",
-        headers=_bearer(student_token),
+    board = created.json()
+    uploaded = await async_client.post(
+        "/teacher/boards/images",
+        files={"file": ("a.png", MINI_PNG, "image/png")},
+        headers=_bearer(teacher_token),
     )
-    assert fetched.status_code == 200, fetched.text
-    assert fetched.json()["ggbBase64"] == expected
-    assert fetched.json()["teacherId"] == lesson_teacher
+    assert uploaded.status_code == 200, uploaded.text
+    image = {
+        "id": "img1", "type": "image", "x": 0, "y": 0, "w": 10, "h": 10, "rotation": 0,
+        "props": {"fileId": uploaded.json()["fileId"], "src": "", "name": "a.png"},
+    }
+    saved = await async_client.put(
+        f"/teacher/boards/{board['id']}",
+        json=_put_body(board, [image]),
+        headers=_bearer(teacher_token),
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["objects"][0]["props"]["src"].endswith(".png")
 
-    opened = (
-        await async_client.get(f"/student/lessons/{lesson['id']}/board", headers=_bearer(student_token))
-    ).json()
+    deleted = await async_client.delete(f"/teacher/boards/{board['id']}", headers=_bearer(teacher_token))
+    assert deleted.status_code == 200, deleted.text
+    assert r2.store == {}
+    missing = await async_client.get(f"/student/boards/{board['id']}", headers=_bearer(student_token))
+    assert missing.status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_template_comes_from_the_board_teacher(
+    async_client: AsyncClient, teacher_token: str, student_token: str, admin_token: str
+) -> None:
+    teacher_id, student_id = await _link(async_client, admin_token, teacher_token, student_token)
+    uploaded = await async_client.post(
+        "/teacher/geogebra-templates",
+        data={"id": "circle", "title": "Окружность", "appName": "geometry"},
+        files={"file": ("circle.ggb", b"AAA", "application/octet-stream")},
+        headers=_bearer(teacher_token),
+    )
+    assert uploaded.status_code == 200, uploaded.text
+    created = await async_client.post(
+        "/teacher/boards",
+        json={"title": "Чертёж", "studentIds": [student_id]},
+        headers=_bearer(teacher_token),
+    )
+    board = created.json()
     ggb = {
-        "id": "g1",
-        "type": "geogebra",
-        "x": 0, "y": 0, "w": 100, "h": 80, "rotation": 0,
+        "id": "g1", "type": "geogebra", "x": 0, "y": 0, "w": 10, "h": 10, "rotation": 0,
         "props": {"appName": "geometry", "ggbBase64": "", "templateId": "circle", "custom": True},
     }
     saved = await async_client.put(
-        f"/student/boards/{opened['mine']['id']}",
-        json=_put_body(opened["mine"], [ggb]),
+        f"/student/boards/{board['id']}",
+        json=_put_body(board, [ggb]),
         headers=_bearer(student_token),
     )
     assert saved.status_code == 200, saved.text
     props = saved.json()["objects"][0]["props"]
-    assert props["ggbBase64"] == expected
+    assert props["ggbBase64"] == base64.b64encode(b"AAA").decode("ascii")
     assert props["custom"] is True
+    assert saved.json()["teacherId"] == teacher_id
 
-    draft = (
-        await async_client.post("/student/boards", json={"title": "Свой"}, headers=_bearer(student_token))
-    ).json()
-    draft_ggb = {**ggb, "props": {**ggb["props"], "ggbBase64": ""}}
-    draft_saved = await async_client.put(
-        f"/student/boards/{draft['id']}",
-        json=_put_body(draft, [draft_ggb]),
-        headers=_bearer(student_token),
+
+def _take_sse(buffer: str) -> tuple[str, dict, str] | None:
+    if "\n\n" not in buffer:
+        return None
+    chunk, rest = buffer.split("\n\n", 1)
+    if chunk.startswith(":"):
+        return _take_sse(rest)
+    event = "message"
+    data = None
+    for line in chunk.split("\n"):
+        if line.startswith("event:"):
+            event = line.split(":", 1)[1].strip()
+        elif line.startswith("data:"):
+            data = line.split(":", 1)[1].strip()
+    if data is None:
+        return None
+    return event, json.loads(data), rest
+
+
+async def _open_events(path: str, token: str):
+    """Читает SSE по мере чанков. httpx в тестах ждёт конец тела и для потока не годится."""
+    from main import app
+
+    chunks: asyncio.Queue = asyncio.Queue()
+    disconnected = asyncio.Event()
+    sent_request = False
+
+    scope = {
+        "type": "http",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "method": "GET",
+        "headers": [(b"authorization", f"Bearer {token}".encode())],
+        "scheme": "http",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": b"",
+        "server": ("test", 80),
+        "client": ("test", 123),
+        "root_path": "",
+    }
+
+    async def receive():
+        nonlocal sent_request
+        if not sent_request:
+            sent_request = True
+            return {"type": "http.request", "body": b"", "more_body": False}
+        await disconnected.wait()
+        return {"type": "http.disconnect"}
+
+    async def send(message):
+        await chunks.put(message)
+
+    task = asyncio.create_task(app(scope, receive, send))
+    start = await asyncio.wait_for(chunks.get(), timeout=3)
+    assert start["type"] == "http.response.start"
+    assert start["status"] == 200
+    return task, chunks, disconnected
+
+
+async def _next_event(chunks: asyncio.Queue, pending: str) -> tuple[str, dict, str]:
+    while True:
+        parsed = _take_sse(pending)
+        if parsed is not None:
+            return parsed
+        message = await asyncio.wait_for(chunks.get(), timeout=3)
+        assert message["type"] == "http.response.body"
+        pending += message.get("body", b"").decode()
+
+
+@pytest.mark.asyncio
+async def test_events_push_revision_not_the_document(
+    async_client: AsyncClient, teacher_token: str, student_token: str, student2_token: str, admin_token: str
+) -> None:
+    _, student_id = await _link(async_client, admin_token, teacher_token, student_token)
+    created = await async_client.post(
+        "/teacher/boards",
+        json={"title": "Живая", "studentIds": [student_id]},
+        headers=_bearer(teacher_token),
     )
-    assert draft_saved.status_code == 200, draft_saved.text
-    filled = draft_saved.json()["objects"][0]["props"]["ggbBase64"]
-    smallest = min(row["teacherId"] for row in rows)
-    expected_draft = base64.b64encode(b"AAA" if smallest == lesson_teacher else b"BBB").decode("ascii")
-    assert filled == expected_draft
+    board = created.json()
+    stranger = await async_client.get(
+        f"/student/boards/{board['id']}/events",
+        headers=_bearer(student2_token),
+    )
+    assert stranger.status_code == 403
+
+    task, chunks, disconnected = await _open_events(
+        f"/student/boards/{board['id']}/events", student_token
+    )
+    event, payload, pending = await _next_event(chunks, "")
+    assert event == "update"
+    assert payload["revision"] == 1
+    assert "objects" not in payload
+
+    saved = await async_client.put(
+        f"/teacher/boards/{board['id']}",
+        json=_put_body(board, [_sticky()]),
+        headers=_bearer(teacher_token),
+    )
+    assert saved.status_code == 200, saved.text
+    event, payload, pending = await _next_event(chunks, pending)
+    assert event == "update"
+    assert payload["revision"] == 2
+    assert "objects" not in payload
+
+    deleted = await async_client.delete(
+        f"/teacher/boards/{board['id']}", headers=_bearer(teacher_token)
+    )
+    assert deleted.status_code == 200, deleted.text
+    event, payload, _pending = await _next_event(chunks, pending)
+    assert event == "delete"
+    assert payload["id"] == board["id"]
+
+    disconnected.set()
+    await asyncio.wait_for(task, timeout=3)

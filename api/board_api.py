@@ -5,22 +5,21 @@ import uuid
 from typing import Optional
 
 from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, UploadFile
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from core import auth
 from core.database import get_db
 from core.models import User
 from dto_schemas.board import (
+    BoardCreate,
     BoardDocument,
     BoardImageUpload,
     BoardMeta,
-    DraftCreate,
     GeogebraTemplateDocument,
     GeogebraTemplateMeta,
-    StudentLessonBoards,
-    TeacherLessonBoards,
 )
+from services.board_events import iter_sse
 from services.board_service import BoardService, BoardServiceError
 
 student_board_router = APIRouter(prefix="/student", tags=["Student boards"])
@@ -30,6 +29,18 @@ template_router = APIRouter(prefix="/board", tags=["GeoGebra templates"])
 
 def get_board_service(db: AsyncSession = Depends(get_db)) -> BoardService:
     return BoardService(db)
+
+
+def _sse(queue, snapshot) -> StreamingResponse:
+    return StreamingResponse(
+        iter_sse(queue, snapshot),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
 
 
 def _error(exc: BoardServiceError):
@@ -52,18 +63,6 @@ async def list_student_boards(
 ):
     try:
         return await service.list_student_boards(current_user)
-    except BoardServiceError as exc:
-        return _error(exc)
-
-
-@student_board_router.post("/boards", response_model=BoardDocument)
-async def create_draft(
-    body: DraftCreate,
-    current_user: User = Depends(auth.get_current_user),
-    service: BoardService = Depends(get_board_service),
-):
-    try:
-        return await service.create_draft(current_user, body.title)
     except BoardServiceError as exc:
         return _error(exc)
 
@@ -93,6 +92,20 @@ async def get_student_board(
         return _error(exc)
 
 
+@student_board_router.get("/boards/{board_id}/events")
+async def student_board_events(
+    board_id: uuid.UUID,
+    current_user: User = Depends(auth.get_current_user),
+    service: BoardService = Depends(get_board_service),
+):
+    try:
+        queue, snapshot = await service.open_student_events(current_user, board_id)
+    except BoardServiceError as exc:
+        return _error(exc)
+    await service.db.close()
+    return _sse(queue, snapshot)
+
+
 @student_board_router.put("/boards/{board_id}", response_model=BoardDocument)
 async def put_student_board(
     board_id: uuid.UUID,
@@ -106,42 +119,28 @@ async def put_student_board(
         return _error(exc)
 
 
-@student_board_router.delete("/boards/{board_id}")
-async def delete_student_draft(
-    board_id: uuid.UUID,
-    current_user: User = Depends(auth.get_current_user),
-    service: BoardService = Depends(get_board_service),
-):
-    try:
-        await service.delete_draft(current_user, board_id)
-        return {"ok": True}
-    except BoardServiceError as exc:
-        return _error(exc)
-
-
-@student_board_router.get("/lessons/{lesson_id}/board", response_model=StudentLessonBoards)
-async def open_student_lesson_board(
-    lesson_id: int,
-    current_user: User = Depends(auth.get_current_user),
-    service: BoardService = Depends(get_board_service),
-):
-    try:
-        return await service.open_student_lesson(current_user, lesson_id)
-    except BoardServiceError as exc:
-        return _error(exc)
-
-
 # ── Учитель ───────────────────────────────────────────────────
 
 
-@teacher_board_router.get("/lessons/{lesson_id}/boards", response_model=TeacherLessonBoards)
-async def open_teacher_lesson_boards(
-    lesson_id: int,
+@teacher_board_router.get("/boards", response_model=list[BoardMeta])
+async def list_teacher_boards(
     current_user: User = Depends(auth.check_teacher),
     service: BoardService = Depends(get_board_service),
 ):
     try:
-        return await service.open_teacher_lesson(current_user, lesson_id)
+        return await service.list_teacher_boards(current_user)
+    except BoardServiceError as exc:
+        return _error(exc)
+
+
+@teacher_board_router.post("/boards", response_model=BoardDocument)
+async def create_board(
+    body: BoardCreate,
+    current_user: User = Depends(auth.check_teacher),
+    service: BoardService = Depends(get_board_service),
+):
+    try:
+        return await service.create_board(current_user, body.title, body.student_ids, body.group_id)
     except BoardServiceError as exc:
         return _error(exc)
 
@@ -169,6 +168,33 @@ async def get_teacher_board(
         return await service.get_for_teacher(current_user, board_id)
     except BoardServiceError as exc:
         return _error(exc)
+
+
+@teacher_board_router.delete("/boards/{board_id}")
+async def delete_teacher_board(
+    board_id: uuid.UUID,
+    current_user: User = Depends(auth.check_teacher),
+    service: BoardService = Depends(get_board_service),
+):
+    try:
+        await service.delete_for_teacher(current_user, board_id)
+        return {"ok": True}
+    except BoardServiceError as exc:
+        return _error(exc)
+
+
+@teacher_board_router.get("/boards/{board_id}/events")
+async def teacher_board_events(
+    board_id: uuid.UUID,
+    current_user: User = Depends(auth.check_teacher),
+    service: BoardService = Depends(get_board_service),
+):
+    try:
+        queue, snapshot = await service.open_teacher_events(current_user, board_id)
+    except BoardServiceError as exc:
+        return _error(exc)
+    await service.db.close()
+    return _sse(queue, snapshot)
 
 
 @teacher_board_router.put("/boards/{board_id}", response_model=BoardDocument)
