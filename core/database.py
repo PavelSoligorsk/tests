@@ -51,6 +51,11 @@ async_session_maker = async_sessionmaker(
 Base = declarative_base()
 
 
+def get_session_factory() -> async_sessionmaker[AsyncSession]:
+    """Для долгих соединений: открыть короткую сессию тогда, когда она нужна."""
+    return async_session_maker
+
+
 async def get_db() -> AsyncGenerator[AsyncSession, None]:
     """Async dependency that yields an SQLAlchemy AsyncSession."""
     async with async_session_maker() as session:

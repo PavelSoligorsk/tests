@@ -1,13 +1,11 @@
-"""Документ доски целиком: ревизия, картинки и шаблоны."""
+"""Доски: доступ, создание, удаление, картинки и шаблоны. Правки идут через живую комнату."""
 from __future__ import annotations
 
-import asyncio
 import base64
-import math
 import re
 import uuid
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any, Callable, Optional
 
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,12 +19,10 @@ from dto_schemas.board import (
     GeogebraTemplateMeta,
 )
 from repositories.board_repository import BoardRepository, new_board
-from services.board_events import board_events
+from services import board_scene as scene
 from services.board_files import delete_keys, public_src, put_bytes
+from services.board_room import board_rooms
 
-OBJECT_TYPES = {"sticky", "text", "shape", "arrow", "draw", "image", "geogebra"}
-MAX_OBJECTS = 200
-MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_GGB_BYTES = 8 * 1024 * 1024
 TEMPLATE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
@@ -74,72 +70,36 @@ class BoardService:
         return await self._document(board)
 
     async def get_for_student(self, student: User, board_id: uuid.UUID) -> BoardDocument:
-        self._require_student(student)
-        board = await self._board_or_404(board_id)
-        if not await self._student_can_access(student.id, board):
-            raise BoardServiceError(403, "Нет доступа к этой доске")
-        return await self._document(board)
-
-    async def put_for_student(self, student: User, board_id: uuid.UUID, body: dict) -> BoardDocument:
-        self._require_student(student)
-        board = await self._board_or_404(board_id)
-        if not await self._student_can_access(student.id, board):
-            raise BoardServiceError(403, "Нет доступа к этой доске")
-        return await self._save(board, body)
-
-    async def open_student_events(
-        self, student: User, board_id: uuid.UUID
-    ) -> tuple[asyncio.Queue, dict[str, Any]]:
-        self._require_student(student)
-
-        async def allowed(board: Board) -> bool:
-            return await self._student_can_access(student.id, board)
-
-        return await self._open_events(board_id, allowed)
-
-    async def open_teacher_events(
-        self, teacher: User, board_id: uuid.UUID
-    ) -> tuple[asyncio.Queue, dict[str, Any]]:
-        self._require_teacher(teacher)
-
-        async def allowed(board: Board) -> bool:
-            return board.teacher_id == teacher.id
-
-        return await self._open_events(board_id, allowed)
-
-    async def _open_events(self, board_id: uuid.UUID, allowed) -> tuple[asyncio.Queue, dict[str, Any]]:
-        key = str(board_id)
-        queue = board_events.subscribe(key)
-        try:
-            board = await self._board_or_404(board_id)
-            if not await allowed(board):
-                raise BoardServiceError(403, "Нет доступа к этой доске")
-            return queue, {
-                "id": key,
-                "revision": board.revision,
-                "updatedAt": _iso(board.updated_at),
-            }
-        except Exception:
-            board_events.unsubscribe(key, queue)
-            raise
+        board = await self._student_board(student, board_id)
+        return await self._live_or_stored(board)
 
     async def get_for_teacher(self, teacher: User, board_id: uuid.UUID) -> BoardDocument:
         self._require_teacher(teacher)
         board = await self._owned_board(teacher, board_id)
-        return await self._document(board)
+        return await self._live_or_stored(board)
 
-    async def put_for_teacher(self, teacher: User, board_id: uuid.UUID, body: dict) -> BoardDocument:
-        self._require_teacher(teacher)
-        board = await self._owned_board(teacher, board_id)
-        return await self._save(board, body)
+    async def authorize_room(self, user: User, board_id: uuid.UUID, as_teacher: bool) -> None:
+        if as_teacher:
+            self._require_teacher(user)
+            await self._owned_board(user, board_id)
+        else:
+            await self._student_board(user, board_id)
+
+    async def load_document(self, board_id: uuid.UUID) -> Optional[BoardDocument]:
+        board = await self.repo.get_board(board_id)
+        if board is None:
+            return None
+        return await self._document(board)
 
     async def delete_for_teacher(self, teacher: User, board_id: uuid.UUID) -> None:
         self._require_teacher(teacher)
         board = await self._owned_board(teacher, board_id)
         board_key = str(board.id)
-        await self._delete_board(board)
+        keys = await self.repo.image_keys(board.id)
+        await self.repo.delete_board(board)
         await self.repo.commit()
-        board_events.publish(board_key, {"event": "delete", "id": board_key})
+        await board_rooms.close_board(board_key)
+        await delete_keys(keys)
 
     async def upload_image(self, user: User, filename: str, data: bytes) -> BoardImageUpload:
         if user.role not in ("student", "teacher", "admin"):
@@ -252,62 +212,20 @@ class BoardService:
         await self.repo.delete_template(row)
         await self.repo.commit()
 
-    async def _save(self, board: Board, body: dict) -> BoardDocument:
-        client_revision = body.get("revision")
-        if not isinstance(client_revision, int) or isinstance(client_revision, bool):
-            raise BoardServiceError(400, "Нужна целочисленная revision")
-        if client_revision != board.revision:
-            raise BoardServiceError(409, (await self._document(board)).model_dump(by_alias=True))
-
-        title = _clean_board_title(body.get("title", board.title))
-        camera, objects = _validate_scene(body.get("camera"), body.get("objects"))
-        _reject_huge(camera, objects)
-        saved = await self.repo.update_document(
-            board.id,
-            client_revision,
-            title=title,
-            camera=camera,
-            objects=objects,
-            object_count=len(objects),
-            updated_at=datetime.utcnow(),
-        )
-        if saved is None:
-            fresh = await self.repo.get_board(board.id, refresh=True)
-            if fresh is None:
-                raise BoardServiceError(404, "Доска не найдена")
-            raise BoardServiceError(409, (await self._document(fresh)).model_dump(by_alias=True))
-        new_revision, updated_at = saved
-        await self.repo.attach_images(board.id, _image_ids(objects))
-        await self.repo.commit()
-        board.title = title
-        board.camera = camera
-        board.objects = objects
-        board.object_count = len(objects)
-        board.revision = new_revision
-        board.updated_at = updated_at
-        document = await self._document(board)
-        board_events.publish(str(board.id), {
-            "event": "update",
-            "id": str(board.id),
-            "revision": document.revision,
-            "updatedAt": document.updated_at,
-        })
-        return document
-
-    async def _delete_board(self, board: Board) -> None:
-        keys = await self.repo.image_keys(board.id)
-        await delete_keys(keys)
-        await self.repo.delete_board(board)
+    async def _live_or_stored(self, board: Board) -> BoardDocument:
+        live = board_rooms.live_document(str(board.id))
+        if live is not None:
+            return BoardDocument.model_validate(live)
+        return await self._document(board)
 
     async def _document(self, board: Board) -> BoardDocument:
         objects = [dict(obj) for obj in (board.objects or [])]
-        file_ids = _image_ids(objects)
-        images = await self.repo.images_by_ids(file_ids)
+        images = await self.repo.images_for_board(board.id, scene.image_ids(objects))
         for obj in objects:
             if obj.get("type") != "image":
                 continue
             props = dict(obj.get("props") or {})
-            parsed = _parse_uuid(props.get("fileId"))
+            parsed = scene.parse_uuid(props.get("fileId"))
             image = images.get(parsed) if parsed else None
             props["src"] = public_src(image.r2_key) if image else ""
             obj["props"] = props
@@ -320,8 +238,8 @@ class BoardService:
             group_id=board.group_id,
             student_ids=student_ids,
             revision=board.revision,
-            created_at=_iso(board.created_at),
-            updated_at=_iso(board.updated_at),
+            created_at=scene.iso_time(board.created_at),
+            updated_at=scene.iso_time(board.updated_at),
             camera=Camera(x=camera["x"], y=camera["y"], zoom=camera["zoom"]),
             objects=objects,
         )
@@ -338,7 +256,7 @@ class BoardService:
             teacher_id=board.teacher_id,
             group_id=board.group_id,
             student_ids=[] if board.group_id else student_ids,
-            updated_at=_iso(board.updated_at),
+            updated_at=scene.iso_time(board.updated_at),
             object_count=board.object_count,
         )
 
@@ -368,10 +286,16 @@ class BoardService:
             raise BoardServiceError(400, "Ученик не привязан к учителю")
         return None, unique
 
-    async def _student_can_access(self, student_id: int, board: Board) -> bool:
+    async def _student_board(self, student: User, board_id: uuid.UUID) -> Board:
+        self._require_student(student)
+        board = await self._board_or_404(board_id)
         if board.group_id is not None:
-            return await self.repo.student_in_group(board.group_id, student_id)
-        return student_id in await self._member_ids(board.id)
+            allowed = await self.repo.student_in_group(board.group_id, student.id)
+        else:
+            allowed = await self.repo.is_board_member(board.id, student.id)
+        if not allowed:
+            raise BoardServiceError(403, "Нет доступа к этой доске")
+        return board
 
     async def _owned_board(self, teacher: User, board_id: uuid.UUID) -> Board:
         board = await self._board_or_404(board_id)
@@ -432,108 +356,51 @@ class BoardService:
             raise BoardServiceError(403, "Нужна роль учителя")
 
 
+class DbBoardStore:
+    """Через него живая комната читает и пишет базу. Каждый вызов — своя короткая сессия."""
+
+    def __init__(self, session_factory: Callable[[], AsyncSession]):
+        self._factory = session_factory
+
+    async def load(self, board_id: str) -> Optional[dict]:
+        async with self._factory() as db:
+            document = await BoardService(db).load_document(uuid.UUID(board_id))
+        return document.model_dump(by_alias=True) if document else None
+
+    async def save(self, board_id: str, title: str, camera: dict, objects: list[dict]) -> Optional[int]:
+        async with self._factory() as db:
+            repo = BoardRepository(db)
+            saved = await repo.update_document(
+                uuid.UUID(board_id),
+                None,
+                title=title,
+                camera=camera,
+                objects=objects,
+                object_count=len(objects),
+                updated_at=datetime.utcnow(),
+            )
+            if saved is None:
+                return None
+            await repo.commit()
+            return saved[0]
+
+    async def image_src(self, board_id: str, file_id: uuid.UUID) -> str:
+        key = uuid.UUID(board_id)
+        async with self._factory() as db:
+            repo = BoardRepository(db)
+            image = (await repo.images_for_board(key, [file_id])).get(file_id)
+            if image is None:
+                return ""
+            await repo.attach_images(key, [file_id])
+            await repo.commit()
+            return public_src(image.r2_key)
+
+
 def _clean_board_title(value: Any) -> str:
-    if not isinstance(value, str):
-        raise BoardServiceError(400, "Нужно название")
-    cleaned = value.strip()
-    if not cleaned:
-        raise BoardServiceError(400, "Нужно название")
-    if len(cleaned) > 255:
-        raise BoardServiceError(400, "Название длиннее 255 символов")
-    return cleaned
-
-
-def _iso(value: Optional[datetime]) -> str:
-    moment = value or datetime.utcnow()
-    return moment.strftime("%Y-%m-%dT%H:%M:%S.") + f"{moment.microsecond // 1000:03d}Z"
-
-
-def _finite(value: Any, label: str) -> int | float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
-        raise BoardServiceError(400, f"Поле {label} должно быть конечным числом")
-    return value
-
-
-def _validate_scene(camera: Any, objects: Any) -> tuple[dict, list]:
-    if not isinstance(camera, dict):
-        raise BoardServiceError(400, "camera должен быть объектом")
-    clean_camera = {
-        "x": _finite(camera.get("x"), "camera.x"),
-        "y": _finite(camera.get("y"), "camera.y"),
-        "zoom": _finite(camera.get("zoom"), "camera.zoom"),
-    }
-    if not isinstance(objects, list):
-        raise BoardServiceError(400, "objects должен быть массивом")
-    if len(objects) > MAX_OBJECTS:
-        raise BoardServiceError(400, "На доске не больше 200 объектов")
-    clean_objects: list[dict] = []
-    for index, raw in enumerate(objects):
-        if not isinstance(raw, dict):
-            raise BoardServiceError(400, f"Объект {index} должен быть объектом")
-        object_id = raw.get("id")
-        object_type = raw.get("type")
-        if not isinstance(object_id, str) or not object_id:
-            raise BoardServiceError(400, f"У объекта {index} нужен строковый id")
-        if object_type not in OBJECT_TYPES:
-            raise BoardServiceError(400, f"Неизвестный type у объекта {index}")
-        props = raw.get("props", {})
-        if not isinstance(props, dict):
-            raise BoardServiceError(400, f"props объекта {index} должен быть объектом")
-        _assert_finite_tree(props, f"objects[{index}].props")
-        clean_objects.append({
-            "id": object_id,
-            "type": object_type,
-            "x": _finite(raw.get("x"), f"objects[{index}].x"),
-            "y": _finite(raw.get("y"), f"objects[{index}].y"),
-            "w": _finite(raw.get("w"), f"objects[{index}].w"),
-            "h": _finite(raw.get("h"), f"objects[{index}].h"),
-            "rotation": _finite(raw.get("rotation"), f"objects[{index}].rotation"),
-            "props": props,
-        })
-    return clean_camera, clean_objects
-
-
-def _assert_finite_tree(value: Any, label: str) -> None:
-    if isinstance(value, bool):
-        return
-    if isinstance(value, (int, float)):
-        if not math.isfinite(float(value)):
-            raise BoardServiceError(400, f"Поле {label} должно быть конечным числом")
-        return
-    if isinstance(value, dict):
-        for key, item in value.items():
-            _assert_finite_tree(item, f"{label}.{key}")
-        return
-    if isinstance(value, list):
-        for index, item in enumerate(value):
-            _assert_finite_tree(item, f"{label}[{index}]")
-
-
-def _reject_huge(camera: dict, objects: list) -> None:
-    import json
-    raw = json.dumps({"camera": camera, "objects": objects}, ensure_ascii=False).encode("utf-8")
-    if len(raw) > MAX_DOCUMENT_BYTES:
-        raise BoardServiceError(400, "Документ больше 8 МБ")
-
-
-def _image_ids(objects: list[dict]) -> list[uuid.UUID]:
-    found: list[uuid.UUID] = []
-    for obj in objects:
-        if obj.get("type") != "image":
-            continue
-        parsed = _parse_uuid((obj.get("props") or {}).get("fileId"))
-        if parsed is not None:
-            found.append(parsed)
-    return found
-
-
-def _parse_uuid(value: Any) -> Optional[uuid.UUID]:
-    if not isinstance(value, str) or not value:
-        return None
     try:
-        return uuid.UUID(value)
-    except ValueError:
-        return None
+        return scene.clean_board_title(value)
+    except scene.SceneError as exc:
+        raise BoardServiceError(400, str(exc)) from exc
 
 
 def _sniff_image(data: bytes) -> Optional[str]:

@@ -39,25 +39,29 @@ def create_access_token(data: dict) -> str:
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 
+async def user_from_token(token: Optional[str], db: AsyncSession) -> Optional[models.User]:
+    if not token:
+        return None
+    try:
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
+    except JWTError:
+        return None
+    username: Optional[str] = payload.get("sub")
+    if username is None:
+        return None
+    result = await db.execute(
+        select(models.User).where(models.User.username == username)
+    )
+    return result.scalar_one_or_none()
+
+
 async def get_current_user(
     token: str = Depends(oauth2_scheme),
     db: AsyncSession = Depends(get_db),
 ) -> models.User:
-    credentials_exception = HTTPException(status_code=401, detail="Invalid token")
-    try:
-        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM])
-        username: Optional[str] = payload.get("sub")
-        if username is None:
-            raise credentials_exception
-    except JWTError:
-        raise credentials_exception
-
-    result = await db.execute(
-        select(models.User).where(models.User.username == username)
-    )
-    user = result.scalar_one_or_none()
+    user = await user_from_token(token, db)
     if user is None:
-        raise credentials_exception
+        raise HTTPException(status_code=401, detail="Invalid token")
     return user
 
 

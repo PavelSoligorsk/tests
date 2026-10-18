@@ -18,6 +18,7 @@ from api.board_api import (
     teacher_board_router,
     template_router,
 )
+from services.board_room import board_rooms
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -48,6 +49,7 @@ def _run_alembic_migrations() -> None:
 async def lifespan(app: FastAPI):
     _run_alembic_migrations()
     yield
+    await board_rooms.flush_all()
 
 
 app = FastAPI(title="Education Platform API", lifespan=lifespan)

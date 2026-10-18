@@ -1,4 +1,4 @@
-"""Именная доска учителя: ученики или группа, без расписания."""
+"""Именная доска учителя: ученики или группа, живые правки через WebSocket."""
 from __future__ import annotations
 
 import asyncio
@@ -47,18 +47,12 @@ def _sticky(object_id: str = "s1") -> dict:
     }
 
 
-def _put_body(board: dict, objects: list | None = None, revision: int | None = None) -> dict:
+def _draw(object_id: str = "d1") -> dict:
     return {
-        "id": board["id"],
-        "title": board["title"],
-        "teacherId": board["teacherId"],
-        "groupId": board["groupId"],
-        "studentIds": board["studentIds"],
-        "revision": board["revision"] if revision is None else revision,
-        "createdAt": board["createdAt"],
-        "updatedAt": board["updatedAt"],
-        "camera": board["camera"],
-        "objects": board["objects"] if objects is None else objects,
+        "id": object_id,
+        "type": "draw",
+        "x": 0, "y": 0, "w": 100, "h": 100, "rotation": 0,
+        "props": {"points": [{"x": 0, "y": 0}], "color": "#111", "width": 2},
     }
 
 
@@ -73,6 +67,75 @@ async def _link(ac: AsyncClient, admin_token: str, teacher_token: str, student_t
     )
     assert link.status_code == 200, link.text
     return teacher_id, student_id
+
+
+async def _board_for(ac: AsyncClient, teacher_token: str, student_id: int, title: str = "Живая") -> dict:
+    created = await ac.post(
+        "/teacher/boards",
+        json={"title": title, "studentIds": [student_id]},
+        headers=_bearer(teacher_token),
+    )
+    assert created.status_code == 200, created.text
+    return created.json()
+
+
+class _Socket:
+    """WebSocket прямо через ASGI, в том же цикле событий, что и тест."""
+
+    def __init__(self, task: asyncio.Task, inbox: asyncio.Queue, outbox: asyncio.Queue) -> None:
+        self.task = task
+        self.inbox = inbox
+        self.outbox = outbox
+        self.close_code: int | None = None
+
+    async def send(self, payload: dict) -> None:
+        await self.inbox.put({"type": "websocket.receive", "text": json.dumps(payload)})
+
+    async def recv(self) -> dict:
+        message = await asyncio.wait_for(self.outbox.get(), timeout=3)
+        if message["type"] == "websocket.close":
+            self.close_code = message.get("code", 1000)
+            await self.inbox.put({"type": "websocket.disconnect", "code": self.close_code})
+            return {"type": "__closed__", "code": self.close_code}
+        return json.loads(message["text"])
+
+    async def expect(self, kind: str) -> dict:
+        while True:
+            message = await self.recv()
+            if message["type"] == kind:
+                return message
+            assert message["type"] != "__closed__", f"сокет закрылся, ждали {kind}"
+
+    async def close(self) -> None:
+        if self.close_code is None:
+            await self.inbox.put({"type": "websocket.disconnect", "code": 1000})
+        await asyncio.wait_for(self.task, timeout=3)
+
+
+async def _connect(path: str, token: str | None) -> _Socket:
+    from main import app
+
+    inbox: asyncio.Queue = asyncio.Queue()
+    outbox: asyncio.Queue = asyncio.Queue()
+    scope = {
+        "type": "websocket",
+        "asgi": {"version": "3.0"},
+        "http_version": "1.1",
+        "scheme": "ws",
+        "path": path,
+        "raw_path": path.encode(),
+        "query_string": (f"token={token}" if token else "").encode(),
+        "headers": [],
+        "server": ("test", 80),
+        "client": ("test", 123),
+        "root_path": "",
+        "subprotocols": [],
+    }
+    await inbox.put({"type": "websocket.connect"})
+    task = asyncio.create_task(app(scope, inbox.get, outbox.put))
+    accepted = await asyncio.wait_for(outbox.get(), timeout=3)
+    assert accepted["type"] == "websocket.accept", accepted
+    return _Socket(task, inbox, outbox)
 
 
 @pytest.mark.asyncio
@@ -109,46 +172,9 @@ async def test_teacher_names_a_board_for_students(
     assert listed.json()[0]["objectCount"] == 0
     assert "objects" not in listed.json()[0]
 
-    stranger = await async_client.post(
-        "/admin/assign-student-to-teacher",
-        json={"teacher_id": teacher_id, "student_id": student2_id},
-        headers=_bearer(admin_token),
-    )
-    assert stranger.status_code == 200
-    # Второй ученик всё ещё в studentIds, он видит ту же доску.
     same = await async_client.get(f"/student/boards/{board['id']}", headers=_bearer(student2_token))
     assert same.status_code == 200
     assert same.json()["id"] == board["id"]
-
-    saved = await async_client.put(
-        f"/student/boards/{board['id']}",
-        json=_put_body(board, [_sticky()]),
-        headers=_bearer(student_token),
-    )
-    assert saved.status_code == 200, saved.text
-    assert saved.json()["revision"] == 2
-
-    teacher_saved = await async_client.put(
-        f"/teacher/boards/{board['id']}",
-        json=_put_body(saved.json(), [_sticky("t1")]),
-        headers=_bearer(teacher_token),
-    )
-    assert teacher_saved.status_code == 200, teacher_saved.text
-    assert teacher_saved.json()["objects"][0]["id"] == "t1"
-
-    listed_after = await async_client.get("/teacher/boards", headers=_bearer(teacher_token))
-    assert listed_after.status_code == 200
-    saved_meta = next(item for item in listed_after.json() if item["id"] == board["id"])
-    assert saved_meta["objectCount"] == 1
-    assert "objects" not in saved_meta
-
-    stale = await async_client.put(
-        f"/student/boards/{board['id']}",
-        json=_put_body(board, [_sticky("old")], revision=1),
-        headers=_bearer(student_token),
-    )
-    assert stale.status_code == 409
-    assert stale.json()["revision"] == 3
 
     neither = await async_client.post(
         "/teacher/boards", json={"title": "Пусто"}, headers=_bearer(teacher_token)
@@ -209,38 +235,149 @@ async def test_group_board_is_one_canvas(
     assert first.json()[0]["id"] == board["id"]
     assert second.json()[0]["id"] == board["id"]
 
+    socket = await _connect(f"/student/boards/{board['id']}/ws", student2_token)
+    snapshot = await socket.expect("snapshot")
+    assert snapshot["board"]["groupId"] == group_id
+    await socket.close()
+
 
 @pytest.mark.asyncio
-async def test_delete_board_removes_images(
+async def test_ops_reach_the_other_participant(
+    async_client: AsyncClient, teacher_token: str, student_token: str, admin_token: str
+) -> None:
+    _, student_id = await _link(async_client, admin_token, teacher_token, student_token)
+    board = await _board_for(async_client, teacher_token, student_id)
+
+    teacher = await _connect(f"/teacher/boards/{board['id']}/ws", teacher_token)
+    first = await teacher.expect("snapshot")
+    assert first["board"]["objects"] == []
+    assert first["peers"] == []
+
+    student = await _connect(f"/student/boards/{board['id']}/ws", student_token)
+    snapshot = await student.expect("snapshot")
+    assert [peer["clientId"] for peer in snapshot["peers"]] == [first["clientId"]]
+    joined = await teacher.expect("join")
+    assert joined["peer"]["clientId"] == snapshot["clientId"]
+    assert joined["peer"]["role"] == "student"
+
+    await student.send({"type": "upsert", "opId": "a1", "object": _sticky()})
+    ack = await student.expect("ack")
+    assert ack["opId"] == "a1"
+    assert ack["seq"] == 1
+    seen = await teacher.expect("op")
+    assert seen["seq"] == 1
+    assert seen["clientId"] == snapshot["clientId"]
+    assert seen["op"] == {"type": "upsert", "object": _sticky()}
+
+    await teacher.send({"type": "patch", "opId": "t1", "id": "s1", "set": {"x": 99, "props": {"text": "ok"}}})
+    assert (await teacher.expect("ack"))["seq"] == 2
+    moved = await student.expect("op")
+    assert moved["op"] == {"type": "patch", "id": "s1", "set": {"x": 99, "props": {"text": "ok"}}}
+
+    await teacher.send({"type": "upsert", "opId": "t2", "object": _draw()})
+    await teacher.expect("ack")
+    await student.expect("op")
+    await student.send({"type": "append_points", "opId": "a2", "id": "d1", "points": [{"x": 5, "y": 6}]})
+    await student.expect("ack")
+    appended = await teacher.expect("op")
+    assert appended["op"] == {"type": "append_points", "id": "d1", "points": [{"x": 5, "y": 6}]}
+
+    await teacher.send({"type": "reorder", "opId": "t3", "ids": ["d1", "s1"]})
+    await teacher.expect("ack")
+    assert (await student.expect("op"))["op"] == {"type": "reorder", "ids": ["d1", "s1"]}
+
+    await student.send({"type": "title", "opId": "a3", "title": "Новая"})
+    await student.expect("ack")
+    assert (await teacher.expect("op"))["op"] == {"type": "title", "title": "Новая"}
+
+    await student.send({"type": "patch", "opId": "bad", "id": "nope", "set": {"x": 1}})
+    error = await student.expect("error")
+    assert error["opId"] == "bad"
+
+    await student.send({"type": "cursor", "x": 1.5, "y": 2})
+    cursor = await teacher.expect("cursor")
+    assert cursor == {"type": "cursor", "clientId": snapshot["clientId"], "x": 1.5, "y": 2}
+
+    live = await async_client.get(f"/teacher/boards/{board['id']}", headers=_bearer(teacher_token))
+    assert live.status_code == 200
+    assert [obj["id"] for obj in live.json()["objects"]] == ["d1", "s1"]
+
+    await student.close()
+    left = await teacher.expect("leave")
+    assert left["clientId"] == snapshot["clientId"]
+    await teacher.close()
+
+    stored = await async_client.get(f"/student/boards/{board['id']}", headers=_bearer(student_token))
+    assert stored.status_code == 200
+    document = stored.json()
+    assert document["title"] == "Новая"
+    assert document["revision"] >= 2
+    assert [obj["id"] for obj in document["objects"]] == ["d1", "s1"]
+    assert document["objects"][0]["props"]["points"] == [{"x": 0, "y": 0}, {"x": 5, "y": 6}]
+    assert document["objects"][1]["x"] == 99
+    assert document["objects"][1]["props"] == {"text": "ok", "color": "#fde68a"}
+
+    listed = await async_client.get("/teacher/boards", headers=_bearer(teacher_token))
+    meta = next(item for item in listed.json() if item["id"] == board["id"])
+    assert meta["objectCount"] == 2
+    assert meta["title"] == "Новая"
+
+    again = await _connect(f"/teacher/boards/{board['id']}/ws", teacher_token)
+    reopened = await again.expect("snapshot")
+    assert [obj["id"] for obj in reopened["board"]["objects"]] == ["d1", "s1"]
+    await again.close()
+
+
+@pytest.mark.asyncio
+async def test_socket_checks_access(
+    async_client: AsyncClient, teacher_token: str, student_token: str, student2_token: str, admin_token: str
+) -> None:
+    _, student_id = await _link(async_client, admin_token, teacher_token, student_token)
+    board = await _board_for(async_client, teacher_token, student_id)
+
+    stranger = await _connect(f"/student/boards/{board['id']}/ws", student2_token)
+    assert (await stranger.recv())["code"] == 4403
+    await stranger.close()
+
+    anonymous = await _connect(f"/student/boards/{board['id']}/ws", None)
+    assert (await anonymous.recv())["code"] == 4401
+    await anonymous.close()
+
+    missing = await _connect("/teacher/boards/00000000-0000-0000-0000-000000000000/ws", teacher_token)
+    assert (await missing.recv())["code"] == 4404
+    await missing.close()
+
+
+@pytest.mark.asyncio
+async def test_delete_closes_room_and_removes_images(
     async_client: AsyncClient, teacher_token: str, student_token: str, admin_token: str, r2: _FakeS3
 ) -> None:
     _, student_id = await _link(async_client, admin_token, teacher_token, student_token)
-    created = await async_client.post(
-        "/teacher/boards",
-        json={"title": "С картинкой", "studentIds": [student_id]},
-        headers=_bearer(teacher_token),
-    )
-    board = created.json()
+    board = await _board_for(async_client, teacher_token, student_id, "С картинкой")
     uploaded = await async_client.post(
         "/teacher/boards/images",
         files={"file": ("a.png", MINI_PNG, "image/png")},
         headers=_bearer(teacher_token),
     )
     assert uploaded.status_code == 200, uploaded.text
+
+    student = await _connect(f"/student/boards/{board['id']}/ws", student_token)
+    await student.expect("snapshot")
     image = {
         "id": "img1", "type": "image", "x": 0, "y": 0, "w": 10, "h": 10, "rotation": 0,
         "props": {"fileId": uploaded.json()["fileId"], "src": "", "name": "a.png"},
     }
-    saved = await async_client.put(
-        f"/teacher/boards/{board['id']}",
-        json=_put_body(board, [image]),
-        headers=_bearer(teacher_token),
-    )
-    assert saved.status_code == 200, saved.text
-    assert saved.json()["objects"][0]["props"]["src"].endswith(".png")
+    await student.send({"type": "upsert", "opId": "i1", "object": image})
+    ack = await student.expect("ack")
+    assert ack["object"]["props"]["src"].endswith(".png")
 
     deleted = await async_client.delete(f"/teacher/boards/{board['id']}", headers=_bearer(teacher_token))
     assert deleted.status_code == 200, deleted.text
+    notice = await student.expect("deleted")
+    assert notice["id"] == board["id"]
+    assert (await student.recv())["code"] == 4404
+    await student.close()
+
     assert r2.store == {}
     missing = await async_client.get(f"/student/boards/{board['id']}", headers=_bearer(student_token))
     assert missing.status_code == 404
@@ -250,7 +387,7 @@ async def test_delete_board_removes_images(
 async def test_template_stays_out_of_the_board_document(
     async_client: AsyncClient, teacher_token: str, student_token: str, admin_token: str
 ) -> None:
-    teacher_id, student_id = await _link(async_client, admin_token, teacher_token, student_token)
+    _, student_id = await _link(async_client, admin_token, teacher_token, student_token)
     uploaded = await async_client.post(
         "/teacher/geogebra-templates",
         data={"id": "circle", "title": "Окружность", "appName": "geometry"},
@@ -258,27 +395,24 @@ async def test_template_stays_out_of_the_board_document(
         headers=_bearer(teacher_token),
     )
     assert uploaded.status_code == 200, uploaded.text
-    created = await async_client.post(
-        "/teacher/boards",
-        json={"title": "Чертёж", "studentIds": [student_id]},
-        headers=_bearer(teacher_token),
-    )
-    board = created.json()
+    board = await _board_for(async_client, teacher_token, student_id, "Чертёж")
+
     ggb = {
         "id": "g1", "type": "geogebra", "x": 0, "y": 0, "w": 10, "h": 10, "rotation": 0,
         "props": {"appName": "geometry", "ggbBase64": "", "templateId": "circle", "custom": True},
     }
-    saved = await async_client.put(
-        f"/student/boards/{board['id']}",
-        json=_put_body(board, [ggb]),
-        headers=_bearer(student_token),
-    )
-    assert saved.status_code == 200, saved.text
-    props = saved.json()["objects"][0]["props"]
+    student = await _connect(f"/student/boards/{board['id']}/ws", student_token)
+    await student.expect("snapshot")
+    await student.send({"type": "upsert", "opId": "g", "object": ggb})
+    ack = await student.expect("ack")
+    assert "object" not in ack
+    await student.close()
+
+    stored = await async_client.get(f"/student/boards/{board['id']}", headers=_bearer(student_token))
+    props = stored.json()["objects"][0]["props"]
     assert props["ggbBase64"] == ""
     assert props["templateId"] == "circle"
     assert props["custom"] is True
-    assert saved.json()["teacherId"] == teacher_id
 
     catalog = await async_client.get("/board/geogebra-templates", headers=_bearer(student_token))
     assert catalog.status_code == 200, catalog.text
@@ -329,120 +463,3 @@ async def test_document_update_matches_revision(db: AsyncSession, teacher_user: 
     assert fresh.revision == 2
     assert fresh.object_count == 1
     assert fresh.objects[0]["id"] == "s1"
-
-
-def _take_sse(buffer: str) -> tuple[str, dict, str] | None:
-    if "\n\n" not in buffer:
-        return None
-    chunk, rest = buffer.split("\n\n", 1)
-    if chunk.startswith(":"):
-        return _take_sse(rest)
-    event = "message"
-    data = None
-    for line in chunk.split("\n"):
-        if line.startswith("event:"):
-            event = line.split(":", 1)[1].strip()
-        elif line.startswith("data:"):
-            data = line.split(":", 1)[1].strip()
-    if data is None:
-        return None
-    return event, json.loads(data), rest
-
-
-async def _open_events(path: str, token: str):
-    """Читает SSE по мере чанков. httpx в тестах ждёт конец тела и для потока не годится."""
-    from main import app
-
-    chunks: asyncio.Queue = asyncio.Queue()
-    disconnected = asyncio.Event()
-    sent_request = False
-
-    scope = {
-        "type": "http",
-        "asgi": {"version": "3.0"},
-        "http_version": "1.1",
-        "method": "GET",
-        "headers": [(b"authorization", f"Bearer {token}".encode())],
-        "scheme": "http",
-        "path": path,
-        "raw_path": path.encode(),
-        "query_string": b"",
-        "server": ("test", 80),
-        "client": ("test", 123),
-        "root_path": "",
-    }
-
-    async def receive():
-        nonlocal sent_request
-        if not sent_request:
-            sent_request = True
-            return {"type": "http.request", "body": b"", "more_body": False}
-        await disconnected.wait()
-        return {"type": "http.disconnect"}
-
-    async def send(message):
-        await chunks.put(message)
-
-    task = asyncio.create_task(app(scope, receive, send))
-    start = await asyncio.wait_for(chunks.get(), timeout=3)
-    assert start["type"] == "http.response.start"
-    assert start["status"] == 200
-    return task, chunks, disconnected
-
-
-async def _next_event(chunks: asyncio.Queue, pending: str) -> tuple[str, dict, str]:
-    while True:
-        parsed = _take_sse(pending)
-        if parsed is not None:
-            return parsed
-        message = await asyncio.wait_for(chunks.get(), timeout=3)
-        assert message["type"] == "http.response.body"
-        pending += message.get("body", b"").decode()
-
-
-@pytest.mark.asyncio
-async def test_events_push_revision_not_the_document(
-    async_client: AsyncClient, teacher_token: str, student_token: str, student2_token: str, admin_token: str
-) -> None:
-    _, student_id = await _link(async_client, admin_token, teacher_token, student_token)
-    created = await async_client.post(
-        "/teacher/boards",
-        json={"title": "Живая", "studentIds": [student_id]},
-        headers=_bearer(teacher_token),
-    )
-    board = created.json()
-    stranger = await async_client.get(
-        f"/student/boards/{board['id']}/events",
-        headers=_bearer(student2_token),
-    )
-    assert stranger.status_code == 403
-
-    task, chunks, disconnected = await _open_events(
-        f"/student/boards/{board['id']}/events", student_token
-    )
-    event, payload, pending = await _next_event(chunks, "")
-    assert event == "update"
-    assert payload["revision"] == 1
-    assert "objects" not in payload
-
-    saved = await async_client.put(
-        f"/teacher/boards/{board['id']}",
-        json=_put_body(board, [_sticky()]),
-        headers=_bearer(teacher_token),
-    )
-    assert saved.status_code == 200, saved.text
-    event, payload, pending = await _next_event(chunks, pending)
-    assert event == "update"
-    assert payload["revision"] == 2
-    assert "objects" not in payload
-
-    deleted = await async_client.delete(
-        f"/teacher/boards/{board['id']}", headers=_bearer(teacher_token)
-    )
-    assert deleted.status_code == 200, deleted.text
-    event, payload, _pending = await _next_event(chunks, pending)
-    assert event == "delete"
-    assert payload["id"] == board["id"]
-
-    disconnected.set()
-    await asyncio.wait_for(task, timeout=3)

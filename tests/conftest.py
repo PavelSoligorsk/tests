@@ -26,7 +26,7 @@ from sqlalchemy.pool import StaticPool
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from main import app
-from core.database import Base, get_db
+from core.database import Base, get_db, get_session_factory
 import core.models as models
 import core.cache
 
@@ -62,6 +62,7 @@ async def override_get_db() -> Any:
 
 
 app.dependency_overrides[get_db] = override_get_db
+app.dependency_overrides[get_session_factory] = lambda: TestingAsyncSessionLocal
 
 
 # ==================== HELPERS ====================

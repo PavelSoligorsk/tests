@@ -59,6 +59,15 @@ class BoardRepository:
             found.setdefault(board_id, []).append(student_id)
         return found
 
+    async def is_board_member(self, board_id: uuid.UUID, student_id: int) -> bool:
+        result = await self.db.execute(
+            select(BoardStudent.student_id).where(
+                BoardStudent.board_id == board_id,
+                BoardStudent.student_id == student_id,
+            )
+        )
+        return result.first() is not None
+
     async def owns_students(self, teacher_id: int, student_ids: list[int]) -> bool:
         result = await self.db.execute(
             select(TeacherStudent.student_id).where(
@@ -116,10 +125,18 @@ class BoardRepository:
     def add_image(self, image: BoardImage) -> None:
         self.db.add(image)
 
-    async def images_by_ids(self, file_ids: list[uuid.UUID]) -> dict[uuid.UUID, BoardImage]:
+    async def images_for_board(
+        self, board_id: uuid.UUID, file_ids: list[uuid.UUID]
+    ) -> dict[uuid.UUID, BoardImage]:
+        """Картинки этой доски и ещё ни к одной не привязанные. Чужие не отдаются."""
         if not file_ids:
             return {}
-        result = await self.db.execute(select(BoardImage).where(BoardImage.file_id.in_(file_ids)))
+        result = await self.db.execute(
+            select(BoardImage).where(
+                BoardImage.file_id.in_(file_ids),
+                or_(BoardImage.board_id == board_id, BoardImage.board_id.is_(None)),
+            )
+        )
         return {row.file_id: row for row in result.scalars().all()}
 
     async def attach_images(self, board_id: uuid.UUID, file_ids: list[uuid.UUID]) -> None:
@@ -172,7 +189,7 @@ class BoardRepository:
     async def update_document(
         self,
         board_id: uuid.UUID,
-        expected_revision: int,
+        expected_revision: Optional[int],
         *,
         title: str,
         camera: dict,
@@ -180,10 +197,13 @@ class BoardRepository:
         object_count: int,
         updated_at: datetime,
     ) -> Optional[tuple[int, datetime]]:
-        """Пишет документ, только если ревизия в базе всё ещё та, что читал клиент."""
+        """Пишет документ. С expected_revision — только если ревизия в базе всё ещё та."""
+        conditions = [Board.id == board_id]
+        if expected_revision is not None:
+            conditions.append(Board.revision == expected_revision)
         result = await self.db.execute(
             update(Board)
-            .where(Board.id == board_id, Board.revision == expected_revision)
+            .where(*conditions)
             .values(
                 title=title,
                 camera=camera,
