@@ -259,17 +259,32 @@ class BoardService:
         if client_revision != board.revision:
             raise BoardServiceError(409, (await self._document(board)).model_dump(by_alias=True))
 
-        title = body.get("title", board.title)
+        title = _clean_board_title(body.get("title", board.title))
         camera, objects = _validate_scene(body.get("camera"), body.get("objects"))
-        await self._fill_templates(objects, board.teacher_id)
         _reject_huge(camera, objects)
-        board.title = _clean_board_title(title)
-        board.camera = camera
-        board.objects = objects
-        board.revision = board.revision + 1
-        board.updated_at = datetime.utcnow()
+        saved = await self.repo.update_document(
+            board.id,
+            client_revision,
+            title=title,
+            camera=camera,
+            objects=objects,
+            object_count=len(objects),
+            updated_at=datetime.utcnow(),
+        )
+        if saved is None:
+            fresh = await self.repo.get_board(board.id, refresh=True)
+            if fresh is None:
+                raise BoardServiceError(404, "Доска не найдена")
+            raise BoardServiceError(409, (await self._document(fresh)).model_dump(by_alias=True))
+        new_revision, updated_at = saved
         await self.repo.attach_images(board.id, _image_ids(objects))
         await self.repo.commit()
+        board.title = title
+        board.camera = camera
+        board.objects = objects
+        board.object_count = len(objects)
+        board.revision = new_revision
+        board.updated_at = updated_at
         document = await self._document(board)
         board_events.publish(str(board.id), {
             "event": "update",
@@ -278,22 +293,6 @@ class BoardService:
             "updatedAt": document.updated_at,
         })
         return document
-
-    async def _fill_templates(self, objects: list[dict], teacher_id: int) -> None:
-        for obj in objects:
-            if obj.get("type") != "geogebra":
-                continue
-            props = obj.get("props") or {}
-            template_id = props.get("templateId")
-            if not isinstance(template_id, str) or not template_id.strip():
-                continue
-            current = props.get("ggbBase64")
-            if isinstance(current, str) and current.strip():
-                continue
-            row = await self.repo.get_template(teacher_id, template_id.strip())
-            if row is not None:
-                props["ggbBase64"] = row.ggb_base64
-                obj["props"] = props
 
     async def _delete_board(self, board: Board) -> None:
         keys = await self.repo.image_keys(board.id)
@@ -340,7 +339,7 @@ class BoardService:
             group_id=board.group_id,
             student_ids=[] if board.group_id else student_ids,
             updated_at=_iso(board.updated_at),
-            object_count=len(board.objects or []),
+            object_count=board.object_count,
         )
 
     async def _member_ids(self, board_id: uuid.UUID) -> list[int]:

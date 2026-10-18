@@ -6,6 +6,7 @@ from typing import Optional
 
 from sqlalchemy import delete, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import load_only
 
 from core.models import Board, BoardImage, BoardStudent, GeogebraTemplate, Group, GroupStudent, Lesson, TeacherStudent
 
@@ -18,13 +19,17 @@ class BoardRepository:
         result = await self.db.execute(select(Lesson).where(Lesson.id == lesson_id))
         return result.scalars().first()
 
-    async def get_board(self, board_id: uuid.UUID) -> Optional[Board]:
-        result = await self.db.execute(select(Board).where(Board.id == board_id))
+    async def get_board(self, board_id: uuid.UUID, *, refresh: bool = False) -> Optional[Board]:
+        stmt = select(Board).where(Board.id == board_id)
+        if refresh:
+            stmt = stmt.execution_options(populate_existing=True)
+        result = await self.db.execute(stmt)
         return result.scalars().first()
 
     async def list_for_teacher(self, teacher_id: int) -> list[Board]:
         result = await self.db.execute(
             select(Board)
+            .options(load_only(*_BOARD_LIST_COLUMNS))
             .where(Board.teacher_id == teacher_id)
             .order_by(Board.updated_at.desc(), Board.created_at.desc())
         )
@@ -35,6 +40,7 @@ class BoardRepository:
         groups = select(GroupStudent.group_id).where(GroupStudent.student_id == student_id)
         result = await self.db.execute(
             select(Board)
+            .options(load_only(*_BOARD_LIST_COLUMNS))
             .where(or_(Board.id.in_(assigned), Board.group_id.in_(groups)))
             .order_by(Board.updated_at.desc(), Board.created_at.desc())
         )
@@ -152,10 +158,47 @@ class BoardRepository:
             return []
         result = await self.db.execute(
             select(GeogebraTemplate)
+            .options(load_only(
+                GeogebraTemplate.teacher_id,
+                GeogebraTemplate.id,
+                GeogebraTemplate.title,
+                GeogebraTemplate.app_name,
+            ))
             .where(GeogebraTemplate.teacher_id.in_(teacher_ids))
             .order_by(GeogebraTemplate.teacher_id.asc(), GeogebraTemplate.id.asc())
         )
         return list(result.scalars().all())
+
+    async def update_document(
+        self,
+        board_id: uuid.UUID,
+        expected_revision: int,
+        *,
+        title: str,
+        camera: dict,
+        objects: list,
+        object_count: int,
+        updated_at: datetime,
+    ) -> Optional[tuple[int, datetime]]:
+        """Пишет документ, только если ревизия в базе всё ещё та, что читал клиент."""
+        result = await self.db.execute(
+            update(Board)
+            .where(Board.id == board_id, Board.revision == expected_revision)
+            .values(
+                title=title,
+                camera=camera,
+                objects=objects,
+                object_count=object_count,
+                revision=Board.revision + 1,
+                updated_at=updated_at,
+            )
+            .returning(Board.revision, Board.updated_at)
+            .execution_options(synchronize_session=False)
+        )
+        row = result.first()
+        if row is None:
+            return None
+        return int(row.revision), row.updated_at
 
     def add_template(self, template: GeogebraTemplate) -> None:
         self.db.add(template)
@@ -173,6 +216,17 @@ class BoardRepository:
         await self.db.rollback()
 
 
+_BOARD_LIST_COLUMNS = (
+    Board.id,
+    Board.teacher_id,
+    Board.group_id,
+    Board.title,
+    Board.object_count,
+    Board.created_at,
+    Board.updated_at,
+)
+
+
 def empty_camera() -> dict:
     return {"x": 0, "y": 0, "zoom": 1}
 
@@ -187,6 +241,7 @@ def new_board(*, title: str, teacher_id: int, group_id: Optional[int]) -> Board:
         revision=1,
         camera=empty_camera(),
         objects=[],
+        object_count=0,
         created_at=now,
         updated_at=now,
     )

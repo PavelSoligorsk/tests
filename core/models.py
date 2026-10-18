@@ -1,6 +1,6 @@
 import enum
 import uuid
-from sqlalchemy import CheckConstraint, Column, Integer, BigInteger, String, Boolean, JSON, ForeignKey, Enum, Text, DateTime, UniqueConstraint, Uuid
+from sqlalchemy import CheckConstraint, Column, Index, Integer, BigInteger, String, Boolean, JSON, ForeignKey, Enum, Text, DateTime, UniqueConstraint, Uuid
 from sqlalchemy.orm import relationship
 from core.database import Base
 import datetime
@@ -77,7 +77,7 @@ class GroupStudent(Base):
     __tablename__ = "group_students"
     
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="CASCADE"), primary_key=True)
-    student_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    student_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
     added_at = Column(DateTime, default=datetime.datetime.utcnow)
 
 
@@ -203,7 +203,7 @@ class TeacherStudent(Base):
     """Связь учитель-ученик (многие ко многим)"""
     __tablename__ = "teacher_students"
     teacher_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
-    student_id = Column(Integer, ForeignKey("users.id"), primary_key=True)
+    student_id = Column(Integer, ForeignKey("users.id"), primary_key=True, index=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     teacher = relationship("User", foreign_keys=[teacher_id], back_populates="my_students")
@@ -351,12 +351,13 @@ class Board(Base):
     __tablename__ = "boards"
 
     id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
-    teacher_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    teacher_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False)
     group_id = Column(Integer, ForeignKey("groups.id", ondelete="SET NULL"), nullable=True, index=True)
     title = Column(String(255), nullable=False, default="")
     revision = Column(Integer, nullable=False, default=1)
     camera = Column(JSON, nullable=False)
     objects = Column(JSON, nullable=False)
+    object_count = Column(Integer, nullable=False, default=0, server_default="0")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -365,13 +366,17 @@ class Board(Base):
     images = relationship("BoardImage", cascade="all, delete-orphan")
     members = relationship("BoardStudent", cascade="all, delete-orphan")
 
+    __table_args__ = (
+        Index("ix_boards_teacher_updated", "teacher_id", "updated_at"),
+    )
+
 
 class BoardStudent(Base):
     """Ученики именной доски, если она не на всю группу."""
     __tablename__ = "board_students"
 
     board_id = Column(Uuid(as_uuid=True), ForeignKey("boards.id", ondelete="CASCADE"), primary_key=True)
-    student_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True)
+    student_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), primary_key=True, index=True)
 
 
 class BoardImage(Base):

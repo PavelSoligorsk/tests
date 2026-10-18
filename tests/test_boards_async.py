@@ -4,10 +4,13 @@ from __future__ import annotations
 import asyncio
 import base64
 import json
+from datetime import datetime
 
 import pytest
 from httpx import AsyncClient
+from sqlalchemy.ext.asyncio import AsyncSession
 
+from repositories.board_repository import BoardRepository, new_board
 from tests.helpers_async import _bearer
 
 MINI_PNG = base64.b64decode(
@@ -133,6 +136,12 @@ async def test_teacher_names_a_board_for_students(
     assert teacher_saved.status_code == 200, teacher_saved.text
     assert teacher_saved.json()["objects"][0]["id"] == "t1"
 
+    listed_after = await async_client.get("/teacher/boards", headers=_bearer(teacher_token))
+    assert listed_after.status_code == 200
+    saved_meta = next(item for item in listed_after.json() if item["id"] == board["id"])
+    assert saved_meta["objectCount"] == 1
+    assert "objects" not in saved_meta
+
     stale = await async_client.put(
         f"/student/boards/{board['id']}",
         json=_put_body(board, [_sticky("old")], revision=1),
@@ -238,7 +247,7 @@ async def test_delete_board_removes_images(
 
 
 @pytest.mark.asyncio
-async def test_template_comes_from_the_board_teacher(
+async def test_template_stays_out_of_the_board_document(
     async_client: AsyncClient, teacher_token: str, student_token: str, admin_token: str
 ) -> None:
     teacher_id, student_id = await _link(async_client, admin_token, teacher_token, student_token)
@@ -266,9 +275,60 @@ async def test_template_comes_from_the_board_teacher(
     )
     assert saved.status_code == 200, saved.text
     props = saved.json()["objects"][0]["props"]
-    assert props["ggbBase64"] == base64.b64encode(b"AAA").decode("ascii")
+    assert props["ggbBase64"] == ""
+    assert props["templateId"] == "circle"
     assert props["custom"] is True
     assert saved.json()["teacherId"] == teacher_id
+
+    catalog = await async_client.get("/board/geogebra-templates", headers=_bearer(student_token))
+    assert catalog.status_code == 200, catalog.text
+    assert catalog.json()[0]["id"] == "circle"
+    assert "ggbBase64" not in catalog.json()[0]
+
+    fetched = await async_client.get(
+        "/board/geogebra-templates/circle", headers=_bearer(student_token)
+    )
+    assert fetched.status_code == 200, fetched.text
+    assert fetched.json()["ggbBase64"] == base64.b64encode(b"AAA").decode("ascii")
+
+
+@pytest.mark.asyncio
+async def test_document_update_matches_revision(db: AsyncSession, teacher_user: dict) -> None:
+    board = new_board(title="Гонка", teacher_id=teacher_user["id"], group_id=None)
+    repo = BoardRepository(db)
+    repo.add_board(board)
+    await repo.commit()
+
+    camera = {"x": 0, "y": 0, "zoom": 1}
+    first = await repo.update_document(
+        board.id,
+        1,
+        title="Гонка",
+        camera=camera,
+        objects=[_sticky()],
+        object_count=1,
+        updated_at=datetime.utcnow(),
+    )
+    assert first is not None
+    assert first[0] == 2
+    await repo.commit()
+
+    stale = await repo.update_document(
+        board.id,
+        1,
+        title="Старое",
+        camera=camera,
+        objects=[],
+        object_count=0,
+        updated_at=datetime.utcnow(),
+    )
+    assert stale is None
+
+    fresh = await repo.get_board(board.id, refresh=True)
+    assert fresh is not None
+    assert fresh.revision == 2
+    assert fresh.object_count == 1
+    assert fresh.objects[0]["id"] == "s1"
 
 
 def _take_sse(buffer: str) -> tuple[str, dict, str] | None:
