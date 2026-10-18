@@ -35,6 +35,7 @@ class BoardMeta(BaseModel):
     teacher_id: int = Field(alias="teacherId")
     group_id: Optional[int] = Field(None, alias="groupId")
     student_ids: list[int] = Field(default_factory=list, alias="studentIds")
+    created_at: str = Field(alias="createdAt")
     updated_at: str = Field(alias="updatedAt")
     object_count: int = Field(alias="objectCount")
 

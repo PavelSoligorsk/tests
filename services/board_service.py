@@ -256,6 +256,7 @@ class BoardService:
             teacher_id=board.teacher_id,
             group_id=board.group_id,
             student_ids=[] if board.group_id else student_ids,
+            created_at=scene.iso_time(board.created_at),
             updated_at=scene.iso_time(board.updated_at),
             object_count=board.object_count,
         )
