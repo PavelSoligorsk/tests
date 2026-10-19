@@ -9,7 +9,7 @@ from typing import Any, Optional
 
 OBJECT_TYPES = {"sticky", "text", "shape", "arrow", "draw", "image", "geogebra"}
 GEOMETRY = ("x", "y", "w", "h", "rotation")
-MAX_OBJECTS = 200
+MAX_OBJECTS = 3000
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
 MAX_POINTS_PER_MESSAGE = 10_000
 MAX_DEPTH = 32
