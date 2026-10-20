@@ -58,8 +58,11 @@ class RoomClient:
     def peer(self) -> dict[str, Any]:
         return {"clientId": self.id, "userId": self.user_id, "name": self.name, "role": self.role}
 
-    def send(self, text: str) -> None:
+    def send(self, text: str, droppable: bool = False) -> None:
         if self.close_code is not None:
+            return
+        # Курсор устаревает через 50 мс: при отставании клиента его можно пропустить, а не копить.
+        if droppable and self.outbox.qsize() >= OUTBOX_SIZE // 2:
             return
         try:
             self.outbox.put_nowait(text)
@@ -316,7 +319,7 @@ class BoardRoom:
             y = scene.finite(message.get("y"), "y")
         except scene.SceneError:
             return
-        self._broadcast({"type": "cursor", "clientId": client.id, "x": x, "y": y}, skip=client)
+        self._broadcast({"type": "cursor", "clientId": client.id, "x": x, "y": y}, skip=client, droppable=True)
 
     def _snapshot(self, client: RoomClient) -> str:
         board = self.document()
@@ -333,7 +336,7 @@ class BoardRoom:
     def _reject(self, client: RoomClient, op_id: Any, detail: str) -> None:
         client.send(_encode({"type": "error", "opId": op_id, "detail": detail}))
 
-    def _broadcast(self, payload: dict[str, Any], skip: Optional[RoomClient] = None) -> None:
+    def _broadcast(self, payload: dict[str, Any], skip: Optional[RoomClient] = None, droppable: bool = False) -> None:
         text = _encode(payload)
         public_text = text
         op = payload.get("op")
@@ -341,7 +344,7 @@ class BoardRoom:
             public_text = _encode({**payload, "op": scene.public_op(op)})
         for client in list(self.clients.values()):
             if client is not skip:
-                client.send(text if client.trusted else public_text)
+                client.send(text if client.trusted else public_text, droppable=droppable)
 
     # ── Сохранение ────────────────────────────────────────────
 
