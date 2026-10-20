@@ -235,17 +235,30 @@ class BoardRoom:
             self._put(updated, size=self.sizes[current["id"]])
         return Applied({"type": "patch", "id": current["id"], "set": changes}, object=resolved_object)
 
-    async def _append_points(self, message: dict) -> Applied:
+    async def _append_points(self, message: dict) -> Optional[Applied]:
         current = self._existing(message.get("id"))
         if current["type"] != "draw":
             raise scene.SceneError("Точки дописываются только к объекту draw")
-        points = scene.validate_points(message.get("points"))
+        compact = "pts" in message
+        points = scene.decode_pts(message.get("pts")) if compact else scene.validate_points(message.get("points"))
         existing = current["props"].get("points")
         if not isinstance(existing, list):
             existing = []
+        start = message.get("from")
+        if start is not None:
+            if isinstance(start, bool) or not isinstance(start, int) or start < 0:
+                raise scene.SceneError("from должен быть неотрицательным целым")
+            # Повтор после переподключения: уже принятые точки отбрасываются. Дыру не заполнить, ждём полный штрих.
+            if start > len(existing):
+                return None
+            points = points[len(existing) - start:]
+            if not points:
+                return None
         updated = {**current, "props": {**current["props"], "points": existing + points}}
         self._put(updated, size=self.sizes[current["id"]] + scene.json_size(points))
-        return Applied({"type": "append_points", "id": current["id"], "points": points})
+        if not compact:
+            return Applied({"type": "append_points", "id": current["id"], "points": points})
+        return Applied({"type": "append_points", "id": current["id"], "from": len(existing), "pts": scene.encode_pts(points)})
 
     async def _delete(self, message: dict) -> Optional[Applied]:
         ids = message.get("ids")

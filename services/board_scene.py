@@ -123,6 +123,35 @@ def validate_points(raw: Any) -> list[dict]:
     return raw
 
 
+# Сжатые точки штриха: целые десятые доли, первая пара абсолютная, дальше разности.
+def decode_pts(raw: Any) -> list[dict]:
+    if not isinstance(raw, list) or not raw or len(raw) % 2:
+        raise SceneError("pts должен быть непустым массивом пар чисел")
+    if len(raw) > MAX_POINTS_PER_MESSAGE * 2:
+        raise SceneError(f"Не больше {MAX_POINTS_PER_MESSAGE} точек за раз")
+    points = []
+    x = y = 0
+    for index in range(0, len(raw), 2):
+        dx, dy = raw[index], raw[index + 1]
+        if isinstance(dx, bool) or isinstance(dy, bool) or not isinstance(dx, int) or not isinstance(dy, int):
+            raise SceneError(f"pts[{index}] должны быть целыми")
+        x += dx
+        y += dy
+        points.append({"x": x / 10, "y": y / 10})
+    return points
+
+
+def encode_pts(points: list[dict]) -> list[int]:
+    out: list[int] = []
+    px = py = 0
+    for point in points:
+        x = round(point["x"] * 10)
+        y = round(point["y"] * 10)
+        out += [x - px, y - py]
+        px, py = x, y
+    return out
+
+
 def assert_finite_tree(value: Any, label: str, depth: int = 0) -> None:
     if depth > MAX_DEPTH:
         raise SceneError(f"Слишком глубокая вложенность в {label}")
