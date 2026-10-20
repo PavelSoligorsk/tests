@@ -248,7 +248,7 @@ class BoardRoom:
         if start is not None:
             if isinstance(start, bool) or not isinstance(start, int) or start < 0:
                 raise scene.SceneError("from должен быть неотрицательным целым")
-            # Повтор после переподключения: уже принятые точки отбрасываются. Дыру не заполнить, ждём полный штрих.
+            # Повтор после переподключения: уже п ринятые точки отбрасываются. Дыру не заполнить, ждём полный штрих.
             if start > len(existing):
                 return None
             points = points[len(existing) - start:]
