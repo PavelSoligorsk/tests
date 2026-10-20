@@ -7,7 +7,9 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-OBJECT_TYPES = {"sticky", "text", "shape", "arrow", "draw", "image", "geogebra"}
+OBJECT_TYPES = {"sticky", "text", "shape", "arrow", "draw", "image", "geogebra", "task"}
+# Поле props, которое видит только учитель: ответ и решение задания.
+PRIVATE_PROP = "teacherOnly"
 GEOMETRY = ("x", "y", "w", "h", "rotation")
 MAX_OBJECTS = 10_000
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
@@ -81,6 +83,30 @@ def validate_patch(raw: Any) -> dict:
         else:
             raise SceneError(f"Поле {key} нельзя менять через patch")
     return clean
+
+
+def public_object(obj: dict) -> dict:
+    props = obj.get("props")
+    if not isinstance(props, dict) or PRIVATE_PROP not in props:
+        return obj
+    return {**obj, "props": {key: value for key, value in props.items() if key != PRIVATE_PROP}}
+
+
+def public_op(op: dict) -> dict:
+    """Операция в том виде, в каком её получает ученик."""
+    kind = op.get("type")
+    if kind == "upsert" and isinstance(op.get("object"), dict):
+        return {**op, "object": public_object(op["object"])}
+    if kind == "patch" and isinstance(op.get("set"), dict):
+        changes = op["set"]
+        props = changes.get("props")
+        if isinstance(props, dict) and PRIVATE_PROP in props:
+            return {**op, "set": {**changes, "props": {k: v for k, v in props.items() if k != PRIVATE_PROP}}}
+    return op
+
+
+def has_private(op: dict) -> bool:
+    return public_op(op) is not op
 
 
 def validate_points(raw: Any) -> list[dict]:

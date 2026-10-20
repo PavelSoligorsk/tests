@@ -79,7 +79,7 @@ async def _board_socket(
             await websocket.close(code=code, reason=_close_reason(exc.detail))
             return
         name = " ".join(part for part in (user.first_name, user.last_name) if part) or user.username
-        client = RoomClient(user_id=user.id, name=name, role=user.role)
+        client = RoomClient(user_id=user.id, name=name, role=user.role, trusted=as_teacher)
 
     room = await board_rooms.join(str(board_id), client, DbBoardStore(session_factory))
     if room is None:

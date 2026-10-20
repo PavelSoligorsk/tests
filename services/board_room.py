@@ -45,11 +45,13 @@ def _encode(payload: dict[str, Any]) -> str:
 class RoomClient:
     """Одно подключение. Сообщения копятся в outbox, медленный клиент не тормозит комнату."""
 
-    def __init__(self, user_id: int, name: str, role: str) -> None:
+    def __init__(self, user_id: int, name: str, role: str, trusted: bool = False) -> None:
         self.id = uuid.uuid4().hex[:12]
         self.user_id = user_id
         self.name = name
         self.role = role
+        # Владелец доски: видит и меняет props.teacherOnly.
+        self.trusted = trusted
         self.outbox: asyncio.Queue[Optional[str]] = asyncio.Queue(OUTBOX_SIZE)
         self.close_code: Optional[int] = None
 
@@ -161,6 +163,8 @@ class BoardRoom:
         async with self.lock:
             if self.closed:
                 return
+            if not client.trusted:
+                message = self._guard_private(kind, message)
             try:
                 applied = await handler(message)
             except scene.SceneError as exc:
@@ -181,6 +185,27 @@ class BoardRoom:
                     ack["object"] = applied.object
                 self._schedule_flush()
             client.send(_encode(ack))
+
+    def _guard_private(self, kind: Any, message: dict) -> dict:
+        """Ученик не видит props.teacherOnly, поэтому не может ни задать, ни стереть его."""
+        private = scene.PRIVATE_PROP
+        if kind == "upsert" and isinstance(message.get("object"), dict):
+            obj = message["object"]
+            props = obj.get("props")
+            if not isinstance(props, dict):
+                return message
+            props = {key: value for key, value in props.items() if key != private}
+            current = self.objects.get(obj.get("id")) if isinstance(obj.get("id"), str) else None
+            kept = (current or {}).get("props", {}).get(private)
+            if kept is not None:
+                props[private] = kept
+            return {**message, "object": {**obj, "props": props}}
+        if kind == "patch" and isinstance(message.get("set"), dict):
+            changes = message["set"]
+            props = changes.get("props")
+            if isinstance(props, dict) and private in props:
+                return {**message, "set": {**changes, "props": {k: v for k, v in props.items() if k != private}}}
+        return message
 
     # ── Операции ──────────────────────────────────────────────
 
@@ -294,11 +319,14 @@ class BoardRoom:
         self._broadcast({"type": "cursor", "clientId": client.id, "x": x, "y": y}, skip=client)
 
     def _snapshot(self, client: RoomClient) -> str:
+        board = self.document()
+        if not client.trusted:
+            board["objects"] = [scene.public_object(obj) for obj in board["objects"]]
         return _encode({
             "type": "snapshot",
             "seq": self.seq,
             "clientId": client.id,
-            "board": self.document(),
+            "board": board,
             "peers": [other.peer() for other in self.clients.values() if other is not client],
         })
 
@@ -307,9 +335,13 @@ class BoardRoom:
 
     def _broadcast(self, payload: dict[str, Any], skip: Optional[RoomClient] = None) -> None:
         text = _encode(payload)
+        public_text = text
+        op = payload.get("op")
+        if payload.get("type") == "op" and isinstance(op, dict) and scene.has_private(op):
+            public_text = _encode({**payload, "op": scene.public_op(op)})
         for client in list(self.clients.values()):
             if client is not skip:
-                client.send(text)
+                client.send(text if client.trusted else public_text)
 
     # ── Сохранение ────────────────────────────────────────────
 

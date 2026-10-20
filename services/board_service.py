@@ -71,7 +71,10 @@ class BoardService:
 
     async def get_for_student(self, student: User, board_id: uuid.UUID) -> BoardDocument:
         board = await self._student_board(student, board_id)
-        return await self._live_or_stored(board)
+        document = await self._live_or_stored(board)
+        return document.model_copy(update={
+            "objects": [scene.public_object(obj) for obj in document.objects],
+        })
 
     async def get_for_teacher(self, teacher: User, board_id: uuid.UUID) -> BoardDocument:
         self._require_teacher(teacher)
