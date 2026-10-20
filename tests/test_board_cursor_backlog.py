@@ -44,7 +44,7 @@ def test_slow_viewer_is_not_kicked_by_cursor_flood():
         await room.handle(drawer, json.dumps({"type": "upsert", "opId": 1, "object": stroke}))
         for index in range(OUTBOX_SIZE // 4):
             await room.handle(drawer, json.dumps({
-                "type": "append_points", "opId": index + 2, "id": "s1", "points": [{"x": index, "y": index}],
+                "type": "patch", "opId": index + 2, "id": "s1", "set": {"x": index},
             }))
         assert viewer.close_code is None
 
@@ -65,7 +65,7 @@ def _stroke(points):
     }
 
 
-def test_compact_points_roundtrip_and_replay():
+def test_finished_stroke_replaces_the_previous_one():
     async def run():
         room = _room()
         drawer = RoomClient(1, "Учитель", "teacher", trusted=True)
@@ -74,22 +74,15 @@ def test_compact_points_roundtrip_and_replay():
         await room.join(viewer)
         _drain(drawer)
         _drain(viewer)
-        await room.handle(drawer, json.dumps({"type": "upsert", "opId": 1, "object": _stroke([{"x": 0, "y": 0}, {"x": 1, "y": 1}])}))
+        first = _stroke([{"x": 0, "y": 0}, {"x": 1, "y": 1}])
+        await room.handle(drawer, json.dumps({"type": "upsert", "opId": 1, "object": first}))
         _drain(viewer)
 
-        await room.handle(drawer, json.dumps({"type": "append_points", "opId": 2, "id": "s1", "from": 2, "pts": [12, 34, 5, -2]}))
+        finished = _stroke([{"x": 0, "y": 0}, {"x": 1, "y": 1}, {"x": 4, "y": 5}])
+        await room.handle(drawer, json.dumps({"type": "upsert", "opId": 2, "object": finished}))
+        assert room.objects["s1"]["props"]["points"] == finished["props"]["points"]
         op = next(item["op"] for item in _drain(viewer) if item["type"] == "op")
-        assert op["from"] == 2
-        assert op["pts"] == [12, 34, 5, -2]
-        stored = room.objects["s1"]["props"]["points"]
-        assert stored[-2:] == [{"x": 1.2, "y": 3.4}, {"x": 1.7, "y": 3.2}]
-
-        await room.handle(drawer, json.dumps({"type": "append_points", "opId": 3, "id": "s1", "from": 2, "pts": [12, 34, 5, -2]}))
-        assert room.objects["s1"]["props"]["points"] == stored
-        assert not [item for item in _drain(viewer) if item["type"] == "op"]
-
-        await room.handle(drawer, json.dumps({"type": "append_points", "opId": 4, "id": "s1", "from": 99, "pts": [1, 1]}))
-        assert room.objects["s1"]["props"]["points"] == stored
+        assert op["object"]["props"]["points"] == finished["props"]["points"]
 
     asyncio.run(run())
 
@@ -108,7 +101,7 @@ def test_viewer_that_never_reads_ops_is_still_closed():
         await room.handle(drawer, json.dumps({"type": "upsert", "opId": 0, "object": stroke}))
         for index in range(OUTBOX_SIZE + 5):
             await room.handle(drawer, json.dumps({
-                "type": "append_points", "opId": index + 1, "id": "s1", "points": [{"x": index, "y": 0}],
+                "type": "patch", "opId": index + 1, "id": "s1", "set": {"x": index},
             }))
         assert viewer.close_code == CLOSE_TOO_SLOW
 

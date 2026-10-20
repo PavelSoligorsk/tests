@@ -13,7 +13,6 @@ PRIVATE_PROP = "teacherOnly"
 GEOMETRY = ("x", "y", "w", "h", "rotation")
 MAX_OBJECTS = 10_000
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
-MAX_POINTS_PER_MESSAGE = 10_000
 MAX_DEPTH = 32
 
 
@@ -107,49 +106,6 @@ def public_op(op: dict) -> dict:
 
 def has_private(op: dict) -> bool:
     return public_op(op) is not op
-
-
-def validate_points(raw: Any) -> list[dict]:
-    if not isinstance(raw, list) or not raw:
-        raise SceneError("points должен быть непустым массивом")
-    if len(raw) > MAX_POINTS_PER_MESSAGE:
-        raise SceneError(f"Не больше {MAX_POINTS_PER_MESSAGE} точек за раз")
-    for index, point in enumerate(raw):
-        if not isinstance(point, dict):
-            raise SceneError(f"points[{index}] должен быть объектом")
-        finite(point.get("x"), f"points[{index}].x")
-        finite(point.get("y"), f"points[{index}].y")
-    assert_finite_tree(raw, "points")
-    return raw
-
-
-# Сжатые точки штриха: целые десятые доли, первая пара абсолютная, дальше разности.
-def decode_pts(raw: Any) -> list[dict]:
-    if not isinstance(raw, list) or not raw or len(raw) % 2:
-        raise SceneError("pts должен быть непустым массивом пар чисел")
-    if len(raw) > MAX_POINTS_PER_MESSAGE * 2:
-        raise SceneError(f"Не больше {MAX_POINTS_PER_MESSAGE} точек за раз")
-    points = []
-    x = y = 0
-    for index in range(0, len(raw), 2):
-        dx, dy = raw[index], raw[index + 1]
-        if isinstance(dx, bool) or isinstance(dy, bool) or not isinstance(dx, int) or not isinstance(dy, int):
-            raise SceneError(f"pts[{index}] должны быть целыми")
-        x += dx
-        y += dy
-        points.append({"x": x / 10, "y": y / 10})
-    return points
-
-
-def encode_pts(points: list[dict]) -> list[int]:
-    out: list[int] = []
-    px = py = 0
-    for point in points:
-        x = round(point["x"] * 10)
-        y = round(point["y"] * 10)
-        out += [x - px, y - py]
-        px, py = x, y
-    return out
 
 
 def assert_finite_tree(value: Any, label: str, depth: int = 0) -> None:

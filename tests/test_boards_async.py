@@ -274,13 +274,12 @@ async def test_ops_reach_the_other_participant(
     moved = await student.expect("op")
     assert moved["op"] == {"type": "patch", "id": "s1", "set": {"x": 99, "props": {"text": "ok"}}}
 
-    await teacher.send({"type": "upsert", "opId": "t2", "object": _draw()})
+    stroke = _draw()
+    stroke["props"]["points"] = [{"x": 0, "y": 0}, {"x": 5, "y": 6}]
+    await teacher.send({"type": "upsert", "opId": "t2", "object": stroke})
     await teacher.expect("ack")
-    await student.expect("op")
-    await student.send({"type": "append_points", "opId": "a2", "id": "d1", "points": [{"x": 5, "y": 6}]})
-    await student.expect("ack")
-    appended = await teacher.expect("op")
-    assert appended["op"] == {"type": "append_points", "id": "d1", "points": [{"x": 5, "y": 6}]}
+    drawn = await student.expect("op")
+    assert drawn["op"]["object"]["props"]["points"] == stroke["props"]["points"]
 
     await teacher.send({"type": "reorder", "opId": "t3", "ids": ["d1", "s1"]})
     await teacher.expect("ack")
