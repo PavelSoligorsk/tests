@@ -65,6 +65,38 @@ def _stroke(points):
     }
 
 
+def test_laser_is_broadcast_and_not_stored():
+    async def run():
+        room = _room()
+        drawer = RoomClient(1, "Учитель", "teacher", trusted=True)
+        viewer = RoomClient(2, "Ученик", "student")
+        await room.join(drawer)
+        await room.join(viewer)
+        _drain(drawer)
+        _drain(viewer)
+
+        await room.handle(drawer, json.dumps({
+            "type": "laser",
+            "points": [{"x": 1, "y": 2}, {"x": 8, "y": 9}],
+        }))
+        seen = next(item for item in _drain(viewer) if item["type"] == "laser")
+        assert seen["clientId"] == drawer.id
+        assert seen["points"] == [{"x": 1, "y": 2}, {"x": 8, "y": 9}]
+        assert seen["color"] == "#fde047"
+        assert seen["width"] == 18
+        assert seen["fadeMs"] == 2000
+        assert room.objects == {}
+        assert room.dirty is False
+        assert _drain(drawer) == []
+
+        await room.handle(drawer, json.dumps({"type": "laser", "opId": "bad", "points": [{"x": 1, "y": 2}]}))
+        error = next(item for item in _drain(drawer) if item["type"] == "error")
+        assert error["opId"] == "bad"
+        assert _drain(viewer) == []
+
+    asyncio.run(run())
+
+
 def test_finished_stroke_replaces_the_previous_one():
     async def run():
         room = _room()

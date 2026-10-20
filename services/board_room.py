@@ -154,6 +154,9 @@ class BoardRoom:
         if kind == "cursor":
             self._cursor(client, message)
             return
+        if kind == "laser":
+            self._laser(client, message, op_id)
+            return
         if kind == "sync":
             async with self.lock:
                 client.send(self._snapshot(client))
@@ -307,6 +310,16 @@ class BoardRoom:
         except scene.SceneError:
             return
         self._broadcast({"type": "cursor", "clientId": client.id, "x": x, "y": y}, skip=client, droppable=True)
+
+    def _laser(self, client: RoomClient, message: dict, op_id: Any) -> None:
+        if client.id not in self.clients:
+            return
+        try:
+            stroke = scene.validate_laser(message)
+        except scene.SceneError as exc:
+            self._reject(client, op_id, str(exc))
+            return
+        self._broadcast({"type": "laser", "clientId": client.id, **stroke}, skip=client)
 
     def _snapshot(self, client: RoomClient) -> str:
         board = self.document()

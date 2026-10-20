@@ -14,6 +14,8 @@ GEOMETRY = ("x", "y", "w", "h", "rotation")
 MAX_OBJECTS = 10_000
 MAX_DOCUMENT_BYTES = 8 * 1024 * 1024
 MAX_DEPTH = 32
+LASER_FADE_MS = 2000
+MAX_LASER_POINTS = 2000
 
 
 class SceneError(ValueError):
@@ -82,6 +84,31 @@ def validate_patch(raw: Any) -> dict:
         else:
             raise SceneError(f"Поле {key} нельзя менять через patch")
     return clean
+
+
+def validate_laser(message: dict) -> dict:
+    """Полоска указки. В документ не входит: клиенты сами гасят её за LASER_FADE_MS."""
+    raw = message.get("points")
+    if not isinstance(raw, list) or len(raw) < 2:
+        raise SceneError("У указки нужно хотя бы две точки")
+    if len(raw) > MAX_LASER_POINTS:
+        raise SceneError(f"У указки не больше {MAX_LASER_POINTS} точек")
+    points = []
+    for index, point in enumerate(raw):
+        if not isinstance(point, dict):
+            raise SceneError(f"points[{index}] должен быть объектом")
+        points.append({
+            "x": finite(point.get("x"), f"points[{index}].x"),
+            "y": finite(point.get("y"), f"points[{index}].y"),
+        })
+    color = message.get("color", "#fde047")
+    if not isinstance(color, str) or not color.strip() or len(color) > 32:
+        raise SceneError("color указки — короткая строка")
+    width = message.get("width", 18)
+    width = finite(width, "width")
+    if width <= 0 or width > 80:
+        raise SceneError("width указки от 0 до 80")
+    return {"points": points, "color": color.strip(), "width": width, "fadeMs": LASER_FADE_MS}
 
 
 def public_object(obj: dict) -> dict:
