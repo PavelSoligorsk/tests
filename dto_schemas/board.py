@@ -48,6 +48,14 @@ class BoardCreate(BaseModel):
     group_id: Optional[int] = Field(None, alias="groupId")
 
 
+class TheoryBoardImport(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    theory_id: int = Field(alias="theoryId")
+    title: str
+    objects: list[dict[str, Any]]
+
+
 class BoardImageUpload(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 

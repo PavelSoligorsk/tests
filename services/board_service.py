@@ -7,13 +7,15 @@ import uuid
 from datetime import datetime
 from typing import Any, Callable, Optional
 
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.models import Board, BoardImage, BoardStudent, GeogebraTemplate, User
+from core.models import Board, BoardImage, BoardStudent, GeogebraTemplate, Theory, User
 from dto_schemas.board import (
     BoardDocument,
     BoardImageUpload,
     BoardMeta,
+    TheoryBoardImport,
     Camera,
     GeogebraTemplateDocument,
     GeogebraTemplateMeta,
@@ -22,6 +24,7 @@ from repositories.board_repository import BoardRepository, new_board
 from services import board_scene as scene
 from services.board_files import delete_keys, public_src, put_bytes
 from services.board_room import board_rooms
+from services.theory_board import layout_theory
 
 MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_GGB_BYTES = 8 * 1024 * 1024
@@ -103,6 +106,18 @@ class BoardService:
         await self.repo.commit()
         await board_rooms.close_board(board_key)
         await delete_keys(keys)
+
+    async def theory_for_board(self, teacher: User, theory_id: int) -> TheoryBoardImport:
+        self._require_teacher(teacher)
+        result = await self.db.execute(select(Theory).where(Theory.id == theory_id))
+        theory = result.scalars().first()
+        if theory is None:
+            raise BoardServiceError(404, "Теория не найдена")
+        return TheoryBoardImport(
+            theory_id=theory.id,
+            title=f"{theory.topic}: {theory.section}",
+            objects=layout_theory(theory.id, theory.content or ""),
+        )
 
     async def upload_image(self, user: User, filename: str, data: bytes) -> BoardImageUpload:
         if user.role not in ("student", "teacher", "admin"):

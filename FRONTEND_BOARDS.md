@@ -84,7 +84,8 @@
 | `arrow` | `x1`, `y1`, `x2`, `y2` относительно рамки, `color`, `width` |
 | `draw` | `points`: `[{ "x", "y" }]`, `color`, `width` |
 | `image` | `fileId`, `src`, `name` |
-| `geogebra` | `appName`: `geometry` или `graphing`, `ggbBase64`, `templateId` |
+| `geogebra` | `appName`: `geometry` или `graphing`, `ggbBase64`, `templateId`. У импортированной теории ещё `commands` и `block: "geogebra"` |
+| `text` из теории | `block`: `heading`, `paragraph` или `formula`, плюс `text`, `fontSize`, `theoryId` |
 
 Лимит: до 10 000 объектов и до 8 МБ на документ. Операцию сверх лимита сервер отклоняет сообщением `error`.
 
@@ -247,6 +248,23 @@ Content-Type: application/json
 Ученики должны быть привязаны к этому учителю, иначе `400`. Чужая группа — `404`. Пустое название — `400`.
 
 **Ответ 200:** полный пустой документ, `revision` равен `1`.
+
+### Импорт теории
+
+```
+GET /teacher/boards/theory/{theoryId}
+```
+
+Ответ не пишет на доску. Это готовые объекты: каждый блок теории своим размером. Их ставят на холст обычным `upsert`.
+
+| `props.block` | Объект | Как выглядит |
+| --- | --- | --- |
+| `heading` | `text` | широкий заголовок, `fontSize` 32 |
+| `paragraph` | `text` | абзац, `fontSize` 18 |
+| `formula` | `text` | формула `$$...$$`, выше абзаца, `fontSize` 26 |
+| `geogebra` | `geogebra` | чертёж из блока ` ```geogebra ``` `. Команды в `props.commands`, `ggbBase64` пустой |
+
+`id` объекта — `theory-{theoryId}-{номер}`, повторный импорт заменяет те же объекты. Неизвестная теория — `404`.
 
 ### Список, открытие, правки, удаление
 

@@ -19,6 +19,7 @@ from dto_schemas.board import (
     BoardDocument,
     BoardImageUpload,
     BoardMeta,
+    TheoryBoardImport,
     GeogebraTemplateDocument,
     GeogebraTemplateMeta,
 )
@@ -206,6 +207,18 @@ async def upload_teacher_image(
     data, name = await _read_upload(file)
     try:
         return await service.upload_image(current_user, name, data)
+    except BoardServiceError as exc:
+        return _error(exc)
+
+
+@teacher_board_router.get("/boards/theory/{theory_id}", response_model=TheoryBoardImport)
+async def theory_for_board(
+    theory_id: int,
+    current_user: User = Depends(auth.check_teacher),
+    service: BoardService = Depends(get_board_service),
+):
+    try:
+        return await service.theory_for_board(current_user, theory_id)
     except BoardServiceError as exc:
         return _error(exc)
 
