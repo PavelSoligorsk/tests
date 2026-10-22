@@ -19,6 +19,9 @@ from dto_schemas.board import (
     BoardDocument,
     BoardImageUpload,
     BoardMeta,
+    BoardShare,
+    BoardShareUpdate,
+    SharedBoardDocument,
     TheoryBoardImport,
     GeogebraTemplateDocument,
     GeogebraTemplateMeta,
@@ -60,6 +63,10 @@ def _close_reason(text: str) -> str:
     return encoded.decode("utf-8", errors="ignore")
 
 
+def _named(user) -> str:
+    return " ".join(part for part in (user.first_name, user.last_name) if part) or user.username
+
+
 async def _board_socket(
     websocket: WebSocket,
     board_id: uuid.UUID,
@@ -79,8 +86,36 @@ async def _board_socket(
             code = CLOSE_NOT_FOUND if exc.status == 404 else CLOSE_FORBIDDEN
             await websocket.close(code=code, reason=_close_reason(exc.detail))
             return
-        name = " ".join(part for part in (user.first_name, user.last_name) if part) or user.username
-        client = RoomClient(user_id=user.id, name=name, role=user.role, trusted=as_teacher)
+        client = RoomClient(user_id=user.id, name=_named(user), role=user.role, trusted=as_teacher)
+
+    room = await board_rooms.join(str(board_id), client, DbBoardStore(session_factory))
+    if room is None:
+        await websocket.close(code=CLOSE_NOT_FOUND, reason=_close_reason("Доска не найдена"))
+        return
+    await _serve(websocket, room, client)
+
+
+async def _shared_socket(
+    websocket: WebSocket,
+    share_token: str,
+    token: Optional[str],
+    session_factory: async_sessionmaker[AsyncSession],
+) -> None:
+    await websocket.accept()
+    async with session_factory() as db:
+        user = await auth.user_from_token(token, db)
+        if user is None:
+            await websocket.close(code=CLOSE_UNAUTHORIZED, reason="Нужен вход")
+            return
+        try:
+            board_id, can_edit = await BoardService(db).authorize_share(share_token)
+        except BoardServiceError as exc:
+            code = CLOSE_NOT_FOUND if exc.status == 404 else CLOSE_FORBIDDEN
+            await websocket.close(code=code, reason=_close_reason(exc.detail))
+            return
+        client = RoomClient(
+            user_id=user.id, name=_named(user), role=user.role, trusted=False, can_edit=can_edit,
+        )
 
     room = await board_rooms.join(str(board_id), client, DbBoardStore(session_factory))
     if room is None:
@@ -235,6 +270,19 @@ async def get_teacher_board(
         return _error(exc)
 
 
+@teacher_board_router.patch("/boards/{board_id}/share", response_model=BoardShare)
+async def update_board_share(
+    board_id: uuid.UUID,
+    body: BoardShareUpdate,
+    current_user: User = Depends(auth.check_teacher),
+    service: BoardService = Depends(get_board_service),
+):
+    try:
+        return await service.update_share(current_user, board_id, body.access, body.reset_link)
+    except BoardServiceError as exc:
+        return _error(exc)
+
+
 @teacher_board_router.delete("/boards/{board_id}")
 async def delete_teacher_board(
     board_id: uuid.UUID,
@@ -306,6 +354,28 @@ async def delete_geogebra_template(
 
 
 # ── Каталог шаблонов ──────────────────────────────────────────
+
+
+@template_router.get("/shared/{share_token}", response_model=SharedBoardDocument)
+async def open_shared_board(
+    share_token: str,
+    _: User = Depends(auth.get_current_user),
+    service: BoardService = Depends(get_board_service),
+):
+    try:
+        return await service.open_shared(share_token)
+    except BoardServiceError as exc:
+        return _error(exc)
+
+
+@template_router.websocket("/shared/{share_token}/ws")
+async def shared_board_socket(
+    websocket: WebSocket,
+    share_token: str,
+    token: Optional[str] = Query(None),
+    session_factory: async_sessionmaker[AsyncSession] = Depends(get_session_factory),
+):
+    await _shared_socket(websocket, share_token, token, session_factory)
 
 
 @template_router.get("/geogebra-templates", response_model=list[GeogebraTemplateMeta])

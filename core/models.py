@@ -347,7 +347,7 @@ class Payment(Base):
 
 
 class Board(Base):
-    """Именной холст учителя. Привязан к ученикам или к группе, не к занятию."""
+    """Холст учителя. Сам по себе, на учеников или на группу. Не привязан к занятию."""
     __tablename__ = "boards"
 
     id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -358,6 +358,8 @@ class Board(Base):
     camera = Column(JSON, nullable=False)
     objects = Column(JSON, nullable=False)
     object_count = Column(Integer, nullable=False, default=0, server_default="0")
+    share_token = Column(String(64), nullable=True, unique=True)
+    share_access = Column(String(8), nullable=False, default="off", server_default="off")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow)
 
@@ -368,6 +370,7 @@ class Board(Base):
 
     __table_args__ = (
         Index("ix_boards_teacher_updated", "teacher_id", "updated_at"),
+        CheckConstraint("share_access IN ('off', 'view', 'edit')", name="ck_boards_share_access"),
     )
 
 

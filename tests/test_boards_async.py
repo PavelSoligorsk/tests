@@ -176,16 +176,76 @@ async def test_teacher_names_a_board_for_students(
     assert same.status_code == 200
     assert same.json()["id"] == board["id"]
 
-    neither = await async_client.post(
-        "/teacher/boards", json={"title": "Пусто"}, headers=_bearer(teacher_token)
-    )
-    assert neither.status_code == 400
     both = await async_client.post(
         "/teacher/boards",
         json={"title": "И то и то", "studentIds": [student_id], "groupId": 1},
         headers=_bearer(teacher_token),
     )
     assert both.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_personal_board_opens_by_share_link(
+    async_client: AsyncClient, teacher_token: str, student_token: str, admin_token: str
+) -> None:
+    await _link(async_client, admin_token, teacher_token, student_token)
+    created = await async_client.post(
+        "/teacher/boards", json={"title": "Черновик"}, headers=_bearer(teacher_token)
+    )
+    assert created.status_code == 200, created.text
+    board = created.json()
+    assert board["studentIds"] == []
+    assert board["groupId"] is None
+    assert board["shareAccess"] == "off"
+    assert board["shareToken"] is None
+
+    hidden = await async_client.get(f"/student/boards/{board['id']}", headers=_bearer(student_token))
+    assert hidden.status_code == 403
+
+    opened = await async_client.patch(
+        f"/teacher/boards/{board['id']}/share",
+        json={"access": "edit"},
+        headers=_bearer(teacher_token),
+    )
+    assert opened.status_code == 200, opened.text
+    token = opened.json()["shareToken"]
+    assert opened.json()["shareAccess"] == "edit"
+    assert token
+
+    shared = await async_client.get(f"/board/shared/{token}", headers=_bearer(student_token))
+    assert shared.status_code == 200, shared.text
+    assert shared.json()["canEdit"] is True
+    assert shared.json()["id"] == board["id"]
+    assert "shareToken" not in shared.json() or shared.json()["shareToken"] is None
+
+    viewed = await async_client.patch(
+        f"/teacher/boards/{board['id']}/share",
+        json={"access": "view"},
+        headers=_bearer(teacher_token),
+    )
+    assert viewed.status_code == 200
+    assert (await async_client.get(f"/board/shared/{token}", headers=_bearer(student_token))).json()["canEdit"] is False
+
+    reset = await async_client.patch(
+        f"/teacher/boards/{board['id']}/share",
+        json={"access": "edit", "resetLink": True},
+        headers=_bearer(teacher_token),
+    )
+    assert reset.status_code == 200
+    assert reset.json()["shareToken"] != token
+    gone = await async_client.get(f"/board/shared/{token}", headers=_bearer(student_token))
+    assert gone.status_code == 404
+
+    closed = await async_client.patch(
+        f"/teacher/boards/{board['id']}/share",
+        json={"access": "off"},
+        headers=_bearer(teacher_token),
+    )
+    assert closed.status_code == 200
+    dead = await async_client.get(
+        f"/board/shared/{reset.json()['shareToken']}", headers=_bearer(student_token)
+    )
+    assert dead.status_code == 404
 
 
 @pytest.mark.asyncio

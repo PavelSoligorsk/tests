@@ -23,6 +23,32 @@ def _room() -> BoardRoom:
     }, _Store())
 
 
+def test_teacher_hides_cursors_and_anyone_can_pull_view():
+    async def run():
+        room = _room()
+        teacher = RoomClient(1, "Учитель", "teacher", trusted=True)
+        student = RoomClient(2, "Ученик", "student", can_edit=True)
+        await room.join(teacher)
+        await room.join(student)
+        _drain(teacher)
+        _drain(student)
+
+        await room.handle(student, json.dumps({"type": "cursors", "enabled": False}))
+        assert room.cursors is True
+        assert any(item.get("type") == "error" for item in _drain(student))
+
+        await room.handle(teacher, json.dumps({"type": "cursors", "enabled": False}))
+        assert room.cursors is False
+        assert next(item for item in _drain(student) if item["type"] == "cursors")["enabled"] is False
+
+        await room.handle(student, json.dumps({"type": "pull", "camera": {"x": 10, "y": 20, "zoom": 2}}))
+        pulled = next(item for item in _drain(teacher) if item["type"] == "pull")
+        assert pulled["camera"] == {"x": 10, "y": 20, "zoom": 2}
+        assert room.camera["zoom"] == 1
+
+    asyncio.run(run())
+
+
 def test_slow_viewer_is_not_kicked_by_cursor_flood():
     async def run():
         room = _room()
@@ -93,6 +119,30 @@ def test_laser_is_broadcast_and_not_stored():
         error = next(item for item in _drain(drawer) if item["type"] == "error")
         assert error["opId"] == "bad"
         assert _drain(viewer) == []
+
+    asyncio.run(run())
+
+
+def test_view_only_guest_cannot_change_the_board():
+    async def run():
+        room = _room()
+        owner = RoomClient(1, "Учитель", "teacher", trusted=True)
+        guest = RoomClient(2, "Гость", "student", can_edit=False)
+        await room.join(owner)
+        await room.join(guest)
+        _drain(owner)
+        _drain(guest)
+        await room.handle(guest, json.dumps({
+            "type": "upsert", "opId": "no", "object": {
+                "id": "s1", "type": "sticky", "x": 0, "y": 0, "w": 10, "h": 10, "rotation": 0, "props": {},
+            },
+        }))
+        error = next(item for item in _drain(guest) if item["type"] == "error")
+        assert error["detail"] == "Доска только для просмотра"
+        assert room.objects == {}
+        await room.handle(guest, json.dumps({"type": "cursor", "x": 3, "y": 4}))
+        cursor = next(item for item in _drain(owner) if item["type"] == "cursor")
+        assert cursor["x"] == 3
 
     asyncio.run(run())
 

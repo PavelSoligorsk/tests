@@ -25,6 +25,8 @@ class BoardDocument(BaseModel):
     updated_at: str = Field(alias="updatedAt")
     camera: Camera
     objects: list[dict[str, Any]]
+    share_access: Optional[str] = Field(None, alias="shareAccess")
+    share_token: Optional[str] = Field(None, alias="shareToken")
 
 
 class BoardMeta(BaseModel):
@@ -38,6 +40,7 @@ class BoardMeta(BaseModel):
     created_at: str = Field(alias="createdAt")
     updated_at: str = Field(alias="updatedAt")
     object_count: int = Field(alias="objectCount")
+    share_access: Optional[str] = Field(None, alias="shareAccess")
 
 
 class BoardCreate(BaseModel):
@@ -46,6 +49,24 @@ class BoardCreate(BaseModel):
     title: str
     student_ids: Optional[list[int]] = Field(None, alias="studentIds")
     group_id: Optional[int] = Field(None, alias="groupId")
+
+
+class BoardShareUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    access: str
+    reset_link: bool = Field(False, alias="resetLink")
+
+
+class BoardShare(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    share_access: str = Field(alias="shareAccess")
+    share_token: Optional[str] = Field(None, alias="shareToken")
+
+
+class SharedBoardDocument(BoardDocument):
+    can_edit: bool = Field(alias="canEdit")
 
 
 class TheoryBoardImport(BaseModel):

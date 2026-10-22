@@ -19,6 +19,10 @@ class BoardRepository:
         result = await self.db.execute(select(Lesson).where(Lesson.id == lesson_id))
         return result.scalars().first()
 
+    async def get_by_share_token(self, share_token: str) -> Optional[Board]:
+        result = await self.db.execute(select(Board).where(Board.share_token == share_token))
+        return result.scalars().first()
+
     async def get_board(self, board_id: uuid.UUID, *, refresh: bool = False) -> Optional[Board]:
         stmt = select(Board).where(Board.id == board_id)
         if refresh:
@@ -244,6 +248,7 @@ _BOARD_LIST_COLUMNS = (
     Board.object_count,
     Board.created_at,
     Board.updated_at,
+    Board.share_access,
 )
 
 
@@ -262,6 +267,8 @@ def new_board(*, title: str, teacher_id: int, group_id: Optional[int]) -> Board:
         camera=empty_camera(),
         objects=[],
         object_count=0,
+        share_access="off",
+        share_token=None,
         created_at=now,
         updated_at=now,
     )

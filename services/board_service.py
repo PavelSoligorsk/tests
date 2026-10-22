@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import re
+import secrets
 import uuid
 from datetime import datetime
 from typing import Any, Callable, Optional
@@ -15,6 +16,8 @@ from dto_schemas.board import (
     BoardDocument,
     BoardImageUpload,
     BoardMeta,
+    BoardShare,
+    SharedBoardDocument,
     TheoryBoardImport,
     Camera,
     GeogebraTemplateDocument,
@@ -30,6 +33,7 @@ MAX_IMAGE_BYTES = 10 * 1024 * 1024
 MAX_GGB_BYTES = 8 * 1024 * 1024
 TEMPLATE_ID = re.compile(r"^[a-z0-9][a-z0-9_-]{0,63}$")
 APP_NAMES = {"geometry", "graphing"}
+SHARE_ACCESS = {"off", "view", "edit"}
 
 EXT_BY_TYPE = {
     "image/jpeg": "jpg",
@@ -57,7 +61,7 @@ class BoardService:
     async def list_teacher_boards(self, teacher: User) -> list[BoardMeta]:
         self._require_teacher(teacher)
         boards = await self.repo.list_for_teacher(teacher.id)
-        return await self._metas(boards)
+        return await self._metas(boards, with_share=True)
 
     async def create_board(
         self, teacher: User, title: str, student_ids: Optional[list[int]], group_id: Optional[int]
@@ -70,7 +74,7 @@ class BoardService:
         for student_id in members:
             self.repo.add_member(BoardStudent(board_id=board.id, student_id=student_id))
         await self.repo.commit()
-        return await self._document(board)
+        return self._with_share(await self._document(board), board)
 
     async def get_for_student(self, student: User, board_id: uuid.UUID) -> BoardDocument:
         board = await self._student_board(student, board_id)
@@ -82,7 +86,7 @@ class BoardService:
     async def get_for_teacher(self, teacher: User, board_id: uuid.UUID) -> BoardDocument:
         self._require_teacher(teacher)
         board = await self._owned_board(teacher, board_id)
-        return await self._live_or_stored(board)
+        return self._with_share(await self._live_or_stored(board), board)
 
     async def authorize_room(self, user: User, board_id: uuid.UUID, as_teacher: bool) -> None:
         if as_teacher:
@@ -90,6 +94,31 @@ class BoardService:
             await self._owned_board(user, board_id)
         else:
             await self._student_board(user, board_id)
+
+    async def update_share(
+        self, teacher: User, board_id: uuid.UUID, access: str, reset_link: bool
+    ) -> BoardShare:
+        self._require_teacher(teacher)
+        if access not in SHARE_ACCESS:
+            raise BoardServiceError(400, "access должен быть off, view или edit")
+        board = await self._owned_board(teacher, board_id)
+        if reset_link or (access != "off" and not board.share_token):
+            board.share_token = secrets.token_urlsafe(24)
+        board.share_access = access
+        await self.repo.commit()
+        return BoardShare(share_access=board.share_access, share_token=board.share_token)
+
+    async def open_shared(self, share_token: str) -> SharedBoardDocument:
+        board, can_edit = await self._shared_board(share_token)
+        document = await self._live_or_stored(board)
+        public = document.model_copy(update={
+            "objects": [scene.public_object(obj) for obj in document.objects],
+        })
+        return SharedBoardDocument(**public.model_dump(), can_edit=can_edit)
+
+    async def authorize_share(self, share_token: str) -> tuple[uuid.UUID, bool]:
+        board, can_edit = await self._shared_board(share_token)
+        return board.id, can_edit
 
     async def load_document(self, board_id: uuid.UUID) -> Optional[BoardDocument]:
         board = await self.repo.get_board(board_id)
@@ -262,12 +291,24 @@ class BoardService:
             objects=objects,
         )
 
-    async def _metas(self, boards: list[Board]) -> list[BoardMeta]:
+    async def _shared_board(self, share_token: str) -> tuple[Board, bool]:
+        board = await self.repo.get_by_share_token(share_token)
+        if board is None or board.share_access == "off":
+            raise BoardServiceError(404, "Ссылка не действует")
+        return board, board.share_access == "edit"
+
+    def _with_share(self, document: BoardDocument, board: Board) -> BoardDocument:
+        return document.model_copy(update={
+            "share_access": board.share_access,
+            "share_token": board.share_token,
+        })
+
+    async def _metas(self, boards: list[Board], *, with_share: bool = False) -> list[BoardMeta]:
         direct = [board.id for board in boards if board.group_id is None]
         members = await self.repo.student_ids_map(direct)
-        return [self._meta(board, members.get(board.id, [])) for board in boards]
+        return [self._meta(board, members.get(board.id, []), with_share=with_share) for board in boards]
 
-    def _meta(self, board: Board, student_ids: list[int]) -> BoardMeta:
+    def _meta(self, board: Board, student_ids: list[int], *, with_share: bool = False) -> BoardMeta:
         return BoardMeta(
             id=str(board.id),
             title=board.title,
@@ -277,6 +318,7 @@ class BoardService:
             created_at=scene.iso_time(board.created_at),
             updated_at=scene.iso_time(board.updated_at),
             object_count=board.object_count,
+            share_access=board.share_access if with_share else None,
         )
 
     async def _member_ids(self, board_id: uuid.UUID) -> list[int]:
@@ -288,8 +330,10 @@ class BoardService:
     ) -> tuple[Optional[int], list[int]]:
         has_students = bool(student_ids)
         has_group = group_id is not None
-        if has_students == has_group:
+        if has_students and has_group:
             raise BoardServiceError(400, "Нужны ученики или группа, что-то одно")
+        if not has_students and not has_group:
+            return None, []
         if has_group:
             group = await self.repo.owned_group(group_id, teacher_id)
             if group is None:

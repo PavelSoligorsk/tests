@@ -45,13 +45,14 @@ def _encode(payload: dict[str, Any]) -> str:
 class RoomClient:
     """Одно подключение. Сообщения копятся в outbox, медленный клиент не тормозит комнату."""
 
-    def __init__(self, user_id: int, name: str, role: str, trusted: bool = False) -> None:
+    def __init__(self, user_id: int, name: str, role: str, trusted: bool = False, can_edit: bool = True) -> None:
         self.id = uuid.uuid4().hex[:12]
         self.user_id = user_id
         self.name = name
         self.role = role
         # Владелец доски: видит и меняет props.teacherOnly.
         self.trusted = trusted
+        self.can_edit = can_edit
         self.outbox: asyncio.Queue[Optional[str]] = asyncio.Queue(OUTBOX_SIZE)
         self.close_code: Optional[int] = None
 
@@ -104,6 +105,7 @@ class BoardRoom:
         self.dirty = False
         self.closed = False
         self.clients: dict[str, RoomClient] = {}
+        self.cursors = True
         self.lock = asyncio.Lock()
         self._flush_lock = asyncio.Lock()
         self._flush_task: Optional[asyncio.Task] = None
@@ -151,6 +153,9 @@ class BoardRoom:
         if isinstance(op_id, bool) or not isinstance(op_id, (str, int)):
             op_id = None
         kind = message.get("type")
+        if not client.can_edit and kind not in ("cursor", "laser", "sync"):
+            self._reject(client, op_id, "Доска только для просмотра")
+            return
         if kind == "cursor":
             self._cursor(client, message)
             return
@@ -160,6 +165,12 @@ class BoardRoom:
         if kind == "sync":
             async with self.lock:
                 client.send(self._snapshot(client))
+            return
+        if kind == "cursors":
+            self._cursors(client, message, op_id)
+            return
+        if kind == "pull":
+            self._pull(client, message, op_id)
             return
         handler = self._ops.get(kind)
         if handler is None:
@@ -321,6 +332,30 @@ class BoardRoom:
             return
         self._broadcast({"type": "laser", "clientId": client.id, **stroke}, skip=client)
 
+    def _cursors(self, client: RoomClient, message: dict, op_id: Any) -> None:
+        if not client.trusted:
+            self._reject(client, op_id, "Курсоры участников выключает учитель")
+            return
+        enabled = message.get("enabled")
+        if not isinstance(enabled, bool):
+            self._reject(client, op_id, "enabled должен быть true или false")
+            return
+        self.cursors = enabled
+        self._broadcast({"type": "cursors", "enabled": enabled})
+
+    def _pull(self, client: RoomClient, message: dict, op_id: Any) -> None:
+        try:
+            camera = scene.validate_camera(message.get("camera"))
+        except scene.SceneError as exc:
+            self._reject(client, op_id, str(exc))
+            return
+        self._broadcast({
+            "type": "pull",
+            "clientId": client.id,
+            "name": client.name,
+            "camera": camera,
+        }, skip=client)
+
     def _snapshot(self, client: RoomClient) -> str:
         board = self.document()
         if not client.trusted:
@@ -331,6 +366,7 @@ class BoardRoom:
             "clientId": client.id,
             "board": board,
             "peers": [other.peer() for other in self.clients.values() if other is not client],
+            "cursors": self.cursors,
         })
 
     def _reject(self, client: RoomClient, op_id: Any, detail: str) -> None:
