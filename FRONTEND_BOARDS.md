@@ -267,6 +267,7 @@ GET /board/shared/{shareToken}
 WS  /board/shared/{shareToken}/ws?token=<token>
 ```
 
+
 `GET` — тот же документ, плюс `canEdit`. `props.teacherOnly` гость не видит. `shareToken` в ответе нет. Недействующая ссылка — `404`.
 
 По WebSocket при `canEdit: false` курсор и указка уходят, а `upsert`, `patch`, `delete` и остальные правки получают `error`: «Доска только для просмотра».
