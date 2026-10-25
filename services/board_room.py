@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import time
 import uuid
 from contextlib import suppress
 from dataclasses import dataclass
@@ -17,6 +18,7 @@ from typing import Any, Optional, Protocol
 from services import board_scene as scene
 
 FLUSH_SECONDS = 2.0
+GEOCAM_HOLD = 1.5
 OUTBOX_SIZE = 512
 MAX_MESSAGE_CHARS = scene.MAX_DOCUMENT_BYTES
 
@@ -106,6 +108,8 @@ class BoardRoom:
         self.closed = False
         self.clients: dict[str, RoomClient] = {}
         self.cursors = True
+        self.geocams: dict[str, dict] = {}
+        self.geocam_owner: dict[str, tuple[str, float]] = {}
         self.lock = asyncio.Lock()
         self._flush_lock = asyncio.Lock()
         self._flush_task: Optional[asyncio.Task] = None
@@ -155,6 +159,12 @@ class BoardRoom:
         kind = message.get("type")
         if not client.can_edit and kind not in ("cursor", "laser", "sync"):
             self._reject(client, op_id, "Доска только для просмотра")
+            return
+        if kind == "geocam":
+            self._geocam(client, message)
+            return
+        if kind == "geoinput":
+            self._geoinput(client, message)
             return
         if kind == "cursor":
             self._cursor(client, message)
@@ -256,6 +266,8 @@ class BoardRoom:
         for object_id in ids:
             if self.objects.pop(object_id, None) is not None:
                 self.total_size -= self.sizes.pop(object_id)
+                self.geocams.pop(object_id, None)
+                self.geocam_owner.pop(object_id, None)
                 removed.append(object_id)
         if not removed:
             return None
@@ -312,8 +324,61 @@ class BoardRoom:
 
     # ── Рассылка ──────────────────────────────────────────────
 
+    def _geocam(self, client: RoomClient, message: dict) -> None:
+        if client.id not in self.clients:
+            return
+        try:
+            payload = scene.validate_geocam(message)
+        except scene.SceneError:
+            return
+        oid = payload["id"]
+        now = time.monotonic()
+        owner = self.geocam_owner.get(oid)
+        if owner and owner[0] != client.id and now - owner[1] < GEOCAM_HOLD:
+            return
+        self.geocam_owner[oid] = (client.id, now)
+        self.geocams[oid] = {**payload, "clientId": client.id}
+        self._broadcast(
+            {"type": "geocam", "clientId": client.id, **payload},
+            skip=client,
+            droppable=True,
+        )
+
+    def _geoinput(self, client: RoomClient, message: dict) -> None:
+        if client.id not in self.clients:
+            return
+        object_id = message.get("id")
+        event = message.get("ev")
+        if not isinstance(object_id, str) or not object_id.strip() or len(object_id) > 80:
+            return
+        if event not in ("hover", "down", "move", "up", "wheel"):
+            return
+        oid = object_id.strip()
+        now = time.monotonic()
+        owner = self.geocam_owner.get(oid)
+        if owner and owner[0] != client.id and now - owner[1] < GEOCAM_HOLD:
+            return
+        if event in ("down", "move"):
+            self.geocam_owner[oid] = (client.id, now)
+        try:
+            out = {
+                "id": oid,
+                "ev": event,
+                "t": scene.finite(message.get("t", 0), "t"),
+                "u": scene.finite(message.get("u", 0), "u"),
+                "v": scene.finite(message.get("v", 0), "v"),
+                "dy": scene.finite(message.get("dy", 0), "dy"),
+                "b": 2 if message.get("b") == 2 else 0,
+            }
+        except scene.SceneError:
+            return
+        self._broadcast({"type": "geoinput", "clientId": client.id, **out}, skip=client)
+
     def _cursor(self, client: RoomClient, message: dict) -> None:
         if client.id not in self.clients:
+            return
+        if message.get("hidden") is True:
+            self._broadcast({"type": "cursor", "clientId": client.id, "hidden": True}, skip=client, droppable=True)
             return
         try:
             x = scene.finite(message.get("x"), "x")
@@ -367,6 +432,7 @@ class BoardRoom:
             "board": board,
             "peers": [other.peer() for other in self.clients.values() if other is not client],
             "cursors": self.cursors,
+            "geocams": list(self.geocams.values()),
         })
 
     def _reject(self, client: RoomClient, op_id: Any, detail: str) -> None:

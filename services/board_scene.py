@@ -33,6 +33,40 @@ def clean_board_title(value: Any) -> str:
     return cleaned
 
 
+def validate_geocam(message: dict) -> dict:
+    object_id = message.get("id")
+    if not isinstance(object_id, str) or not object_id.strip() or len(object_id) > 80:
+        raise SceneError("Нужен id объекта")
+    seq = message.get("seq")
+    if isinstance(seq, bool) or not isinstance(seq, int) or seq < 0:
+        raise SceneError("seq должен быть целым числом")
+    center = message.get("c")
+    if not isinstance(center, list) or len(center) != 3:
+        raise SceneError("c должен быть тремя числами")
+    return {
+        "id": object_id.strip(),
+        "seq": seq,
+        "az": finite(message.get("az"), "az"),
+        "el": _elevation(message.get("el")),
+        "z": _positive(message.get("z"), "z"),
+        "c": [finite(center[0], "c"), finite(center[1], "c"), finite(center[2], "c")],
+    }
+
+
+def _positive(value: Any, label: str) -> int | float:
+    number = finite(value, label)
+    if number <= 0:
+        raise SceneError(f"Поле {label} должно быть положительным")
+    return number
+
+
+def _elevation(value: Any) -> int | float:
+    number = finite(value, "el")
+    if number < -90 or number > 90:
+        raise SceneError("el вне диапазона")
+    return number
+
+
 def finite(value: Any, label: str) -> int | float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)):
         raise SceneError(f"Поле {label} должно быть конечным числом")

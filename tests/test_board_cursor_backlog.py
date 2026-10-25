@@ -91,6 +91,50 @@ def _stroke(points):
     }
 
 
+def test_geocam_is_broadcast_and_not_stored():
+    async def run():
+        room = _room()
+        drawer = RoomClient(1, "Учитель", "teacher", trusted=True)
+        viewer = RoomClient(2, "Ученик", "student")
+        await room.join(drawer)
+        await room.join(viewer)
+        _drain(drawer)
+        _drain(viewer)
+        await room.handle(drawer, json.dumps({
+            "type": "geocam",
+            "id": "geo-1",
+            "seq": 4,
+            "az": 20,
+            "el": -15,
+            "z": 0.01,
+            "c": [1, 2, 3],
+        }))
+        seen = next(item for item in _drain(viewer) if item["type"] == "geocam")
+        assert seen["id"] == "geo-1"
+        assert seen["seq"] == 4
+        assert seen["z"] == 0.01
+        assert room.geocams["geo-1"]["seq"] == 4
+        assert room.objects == {}
+        assert room.dirty is False
+        assert _drain(drawer) == []
+        snap = json.loads(room._snapshot(viewer))
+        assert snap["geocams"][0]["id"] == "geo-1"
+
+        await room.handle(viewer, json.dumps({
+            "type": "geocam",
+            "id": "geo-1",
+            "seq": 5,
+            "az": 40,
+            "el": 0,
+            "z": 0.02,
+            "c": [0, 0, 0],
+        }))
+        assert _drain(drawer) == []
+        assert room.geocams["geo-1"]["seq"] == 4
+
+    asyncio.run(run())
+
+
 def test_laser_is_broadcast_and_not_stored():
     async def run():
         room = _room()
