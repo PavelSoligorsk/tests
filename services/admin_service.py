@@ -22,6 +22,7 @@ from repositories.group_repository import GroupRepository
 from repositories.teacher_student_repository import TeacherStudentRepository
 from repositories.allowed_email_repository import AllowedEmailRepository
 from repositories.theory_repository import TheoryRepository
+from core.cache import invalidate_user_cache
 from core.models import Task, Test, TestResult, UserAnswer, TestAssignment, TestTaskAssociation, UserRole
 
 from dto_schemas.user import UserResponse, MessageResponse
@@ -385,17 +386,26 @@ class AdminService:
         if not student or student.role != "student":
             raise ValueError("Ученик не найден")
         
+        previous = await self.teacher_student_repo.get_links_by_student_ids([student_id])
         await self.teacher_student_repo.create_link(teacher_id, student_id)
         await self.db.commit()
-        
+        self._drop_student_lists(teacher_id, *(link.teacher_id for link in previous))
+
         return MessageResponse(message=f"Ученик {student.username} назначен учителю {teacher.username}")
     
     async def remove_student_from_teacher(self, student_id: int):
+        previous = await self.teacher_student_repo.get_links_by_student_ids([student_id])
         if not await self.teacher_student_repo.delete_link_by_student(student_id):
             raise ValueError("Связь не найдена")
         
         await self.db.commit()
+        self._drop_student_lists(*(link.teacher_id for link in previous))
         return MessageResponse(message="Связь удалена")
+
+    @staticmethod
+    def _drop_student_lists(*teacher_ids: int) -> None:
+        for teacher_id in set(teacher_ids):
+            invalidate_user_cache(teacher_id, "teacher_students")
     
     # ==================== ТЕОРИЯ ====================
     
