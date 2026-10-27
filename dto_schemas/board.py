@@ -27,6 +27,7 @@ class BoardDocument(BaseModel):
     objects: list[dict[str, Any]]
     share_access: Optional[str] = Field(None, alias="shareAccess")
     share_token: Optional[str] = Field(None, alias="shareToken")
+    series_id: Optional[str] = Field(None, alias="seriesId")
 
 
 class BoardMeta(BaseModel):
@@ -41,6 +42,7 @@ class BoardMeta(BaseModel):
     updated_at: str = Field(alias="updatedAt")
     object_count: int = Field(alias="objectCount")
     share_access: Optional[str] = Field(None, alias="shareAccess")
+    series_id: Optional[str] = Field(None, alias="seriesId")
 
 
 class BoardCreate(BaseModel):
@@ -49,6 +51,8 @@ class BoardCreate(BaseModel):
     title: str
     student_ids: Optional[list[int]] = Field(None, alias="studentIds")
     group_id: Optional[int] = Field(None, alias="groupId")
+    # Новая страница серии: id любой доски этой серии.
+    series_id: Optional[str] = Field(None, alias="seriesId")
 
 
 class BoardShareUpdate(BaseModel):

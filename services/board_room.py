@@ -8,6 +8,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import math
 import time
 import uuid
 from contextlib import suppress
@@ -27,7 +28,7 @@ CLOSE_FORBIDDEN = 4403
 CLOSE_NOT_FOUND = 4404
 CLOSE_TOO_SLOW = 4408
 
-META_KEYS = ("id", "title", "teacherId", "groupId", "studentIds", "revision", "createdAt", "updatedAt")
+META_KEYS = ("id", "title", "teacherId", "groupId", "studentIds", "revision", "createdAt", "updatedAt", "seriesId")
 
 log = logging.getLogger(__name__)
 
@@ -95,7 +96,7 @@ class BoardRoom:
     def __init__(self, document: dict, store: BoardStore) -> None:
         self.board_id: str = document["id"]
         self.store = store
-        self.meta = {key: document[key] for key in META_KEYS}
+        self.meta = {key: document.get(key) for key in META_KEYS}
         self.camera = dict(document["camera"])
         self.objects: dict[str, dict] = {}
         self.sizes: dict[str, int] = {}
@@ -157,6 +158,12 @@ class BoardRoom:
         if isinstance(op_id, bool) or not isinstance(op_id, (str, int)):
             op_id = None
         kind = message.get("type")
+        if kind == "ping":
+            # Сердцебиение: клиент по ответу видит, что соединение живое.
+            stamp = message.get("t")
+            valid = isinstance(stamp, (int, float)) and not isinstance(stamp, bool) and math.isfinite(stamp)
+            client.send(_encode({"type": "pong", "t": stamp if valid else None}))
+            return
         if not client.can_edit and kind not in ("cursor", "laser", "sync"):
             self._reject(client, op_id, "Доска только для просмотра")
             return
@@ -165,6 +172,9 @@ class BoardRoom:
             return
         if kind == "geoinput":
             self._geoinput(client, message)
+            return
+        if kind == "geomove":
+            self._geomove(client, message)
             return
         if kind == "cursor":
             self._cursor(client, message)
@@ -190,7 +200,7 @@ class BoardRoom:
             if self.closed:
                 return
             if not client.trusted:
-                message = self._guard_private(kind, message)
+                message = self._guard_untrusted(kind, message)
             try:
                 applied = await handler(message)
             except scene.SceneError as exc:
@@ -212,15 +222,18 @@ class BoardRoom:
                 self._schedule_flush()
             client.send(_encode(ack))
 
-    def _guard_private(self, kind: Any, message: dict) -> dict:
-        """Ученик не видит props.teacherOnly, поэтому не может ни задать, ни стереть его."""
+    def _guard_untrusted(self, kind: Any, message: dict) -> dict:
+        """Ученик не видит props.teacherOnly, поэтому не может ни задать, ни стереть его.
+
+        Сырой HTML в блоках теории тоже ставит только владелец доски.
+        """
         private = scene.PRIVATE_PROP
         if kind == "upsert" and isinstance(message.get("object"), dict):
             obj = message["object"]
             props = obj.get("props")
             if not isinstance(props, dict):
                 return message
-            props = {key: value for key, value in props.items() if key != private}
+            props = scene.strip_untrusted_markup({key: value for key, value in props.items() if key != private})
             current = self.objects.get(obj.get("id")) if isinstance(obj.get("id"), str) else None
             kept = (current or {}).get("props", {}).get(private)
             if kept is not None:
@@ -229,8 +242,10 @@ class BoardRoom:
         if kind == "patch" and isinstance(message.get("set"), dict):
             changes = message["set"]
             props = changes.get("props")
-            if isinstance(props, dict) and private in props:
-                return {**message, "set": {**changes, "props": {k: v for k, v in props.items() if k != private}}}
+            if isinstance(props, dict):
+                cleaned = scene.strip_untrusted_markup({k: v for k, v in props.items() if k != private})
+                if cleaned != props:
+                    return {**message, "set": {**changes, "props": cleaned}}
         return message
 
     # ── Операции ──────────────────────────────────────────────
@@ -343,6 +358,15 @@ class BoardRoom:
             skip=client,
             droppable=True,
         )
+
+    def _geomove(self, client: RoomClient, message: dict) -> None:
+        if client.id not in self.clients:
+            return
+        try:
+            payload = scene.validate_geomove(message)
+        except scene.SceneError:
+            return
+        self._broadcast({"type": "geomove", "clientId": client.id, **payload}, skip=client, droppable=True)
 
     def _geoinput(self, client: RoomClient, message: dict) -> None:
         if client.id not in self.clients:
