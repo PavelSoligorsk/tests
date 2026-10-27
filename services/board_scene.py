@@ -7,7 +7,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Optional
 
-OBJECT_TYPES = {"sticky", "text", "shape", "arrow", "draw", "image", "geogebra", "task"}
+OBJECT_TYPES = {"sticky", "text", "shape", "arrow", "draw", "image", "geogebra", "task", "point"}
 # Поле props, которое видит только учитель: ответ и решение задания.
 PRIVATE_PROP = "teacherOnly"
 GEOMETRY = ("x", "y", "w", "h", "rotation")
