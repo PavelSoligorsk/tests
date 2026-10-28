@@ -360,6 +360,8 @@ class Board(Base):
     object_count = Column(Integer, nullable=False, default=0, server_default="0")
     share_token = Column(String(64), nullable=True, unique=True)
     share_access = Column(String(8), nullable=False, default="off", server_default="off")
+    # Страницы одной серии: id первой доски серии. Пусто у старых записей — тогда серия = id.
+    series_id = Column(Uuid(as_uuid=True), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow)
 

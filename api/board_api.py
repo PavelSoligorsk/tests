@@ -228,7 +228,9 @@ async def create_board(
     service: BoardService = Depends(get_board_service),
 ):
     try:
-        return await service.create_board(current_user, body.title, body.student_ids, body.group_id)
+        return await service.create_board(
+            current_user, body.title, body.student_ids, body.group_id, series_id=body.series_id,
+        )
     except BoardServiceError as exc:
         return _error(exc)
 
