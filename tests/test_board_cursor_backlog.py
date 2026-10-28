@@ -234,6 +234,23 @@ def test_viewer_that_never_reads_ops_is_still_closed():
     asyncio.run(run())
 
 
+def test_ping_replies_only_to_the_sender():
+    async def run():
+        room = _room()
+        one = RoomClient(1, "Учитель", "teacher", trusted=True)
+        two = RoomClient(2, "Ученик", "student")
+        await room.join(one)
+        await room.join(two)
+        _drain(one)
+        _drain(two)
+        await room.handle(one, json.dumps({"type": "ping", "opId": "p"}))
+        assert _drain(one) == [{"type": "pong", "opId": "p"}]
+        assert _drain(two) == []
+        assert room.dirty is False
+
+    asyncio.run(run())
+
+
 def test_point_and_vertex_names_are_stored():
     async def run():
         room = _room()

@@ -157,8 +157,15 @@ class BoardRoom:
         if isinstance(op_id, bool) or not isinstance(op_id, (str, int)):
             op_id = None
         kind = message.get("type")
-        if not client.can_edit and kind not in ("cursor", "laser", "sync"):
+        if not client.can_edit and kind not in ("cursor", "laser", "sync", "ping"):
             self._reject(client, op_id, "Доска только для просмотра")
+            return
+        if kind == "ping":
+            if client.id in self.clients:
+                payload = {"type": "pong"}
+                if op_id is not None:
+                    payload["opId"] = op_id
+                client.send(_encode(payload))
             return
         if kind == "geocam":
             self._geocam(client, message)
