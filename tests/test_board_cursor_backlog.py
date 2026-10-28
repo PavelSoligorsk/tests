@@ -232,3 +232,44 @@ def test_viewer_that_never_reads_ops_is_still_closed():
         assert viewer.close_code == CLOSE_TOO_SLOW
 
     asyncio.run(run())
+
+
+def test_point_and_vertex_names_are_stored():
+    async def run():
+        room = _room()
+        teacher = RoomClient(1, "Учитель", "teacher", trusted=True)
+        await room.join(teacher)
+        shape = {
+            "id": "fig", "type": "shape", "x": 0, "y": 0, "w": 100, "h": 80, "rotation": 0,
+            "props": {"shape": "polygon", "fill": "#fff"},
+        }
+        point = {
+            "id": "p1", "type": "point", "x": 120.5, "y": 80.2, "w": 8, "h": 8, "rotation": 0,
+            "props": {
+                "letter": "A",
+                "sub": "1",
+                "cross": [{"id": "fig", "edge": 0}, {"id": "seg", "edge": 1}],
+            },
+        }
+        await room.handle(teacher, json.dumps({"type": "upsert", "opId": 1, "object": shape}))
+        await room.handle(teacher, json.dumps({"type": "upsert", "opId": 2, "object": point}))
+        await room.handle(teacher, json.dumps({
+            "type": "patch", "opId": 3, "id": "fig",
+            "set": {"props": {
+                "names": [{"letter": "B", "sub": "2"}, None, {"letter": "C", "sub": ""}],
+                "verts": [[0, 0], [100, 50], [10, 100]],
+            }},
+        }))
+        await room.handle(teacher, json.dumps({
+            "type": "patch", "opId": 4, "id": "p1", "set": {"props": {"cross": None}},
+        }))
+
+        assert room.objects["p1"]["props"]["letter"] == "A"
+        assert room.objects["p1"]["props"]["sub"] == "1"
+        assert room.objects["p1"]["props"]["cross"] is None
+        assert room.objects["fig"]["props"]["shape"] == "polygon"
+        assert room.objects["fig"]["props"]["names"][1] is None
+        assert room.objects["fig"]["props"]["names"][2] == {"letter": "C", "sub": ""}
+        assert room.objects["fig"]["props"]["verts"] == [[0, 0], [100, 50], [10, 100]]
+
+    asyncio.run(run())

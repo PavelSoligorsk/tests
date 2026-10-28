@@ -82,7 +82,8 @@
 | --- | --- |
 | `sticky` | `text`, `color` (`#fde68a` и другие), `fontSize` |
 | `text` | `text`, `fontSize` |
-| `shape` | `shape`: `rect` или `ellipse`, `fill`, `stroke` |
+| `shape` | `shape`: `rect` или `ellipse`, `fill`, `stroke`. Подписи вершин — `names`: на каждую вершину `{ "letter", "sub" }` или `null`. Сдвинутые вершины — `verts`: `[[u, v], …]` от 0 до 100 |
+| `point` | `letter` — одна заглавная латинская буква, `sub` — до трёх цифр или `""`, `cross` — два ребра `{ "id", "edge" }` или `null`, если точку сдвинули |
 | `arrow` | `x1`, `y1`, `x2`, `y2` относительно рамки, `color`, `width` |
 | `draw` | `points`: `[{ "x", "y" }]`, `color`, `width` |
 | `image` | `fileId`, `src`, `name` |
