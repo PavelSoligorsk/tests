@@ -382,10 +382,25 @@ cmds = [
 ## 🧪 Тесты
 
 ```bash
+pip install -r requirements-dev.txt
 pytest tests/ -v
 ```
 
 Конфигурация — `tests/pytest.ini`, фикстуры — `tests/conftest.py`, async-хелперы — `tests/helpers_async.py`.
+Тестам не нужны ни база, ни секреты: `conftest.py` подставляет SQLite в памяти и тестовые ключи.
+
+Python — 3.13, как в `.python-version` и на Railway: на 3.14 закреплённые версии не ставятся
+(`fastapi-cloud-cli` требует там `pydantic>=2.12`).
+
+Миграции досок на настоящем PostgreSQL проверяет `tests/test_migrations_postgres.py`; без переменной он пропускается.
+Тест пересоздаёт схему `public` — указывайте только пустую одноразовую базу:
+
+```bash
+docker run -d --rm -e POSTGRES_PASSWORD=pg -p 5433:5432 postgres:16
+TEST_POSTGRES_URL=postgresql://postgres:pg@localhost:5433/postgres pytest tests/test_migrations_postgres.py
+```
+
+В CI (`.github/workflows/ci.yml`) тесты идут на Python 3.13 с сервисом PostgreSQL 16.
 
 ---
 

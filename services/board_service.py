@@ -64,12 +64,18 @@ class BoardService:
         return await self._metas(boards, with_share=True)
 
     async def create_board(
-        self, teacher: User, title: str, student_ids: Optional[list[int]], group_id: Optional[int]
+        self,
+        teacher: User,
+        title: str,
+        student_ids: Optional[list[int]],
+        group_id: Optional[int],
+        series_id: Optional[str] = None,
     ) -> BoardDocument:
         self._require_teacher(teacher)
         clean = _clean_board_title(title)
         group_id, members = await self._audience(teacher.id, student_ids, group_id)
-        board = new_board(title=clean, teacher_id=teacher.id, group_id=group_id)
+        series = await self._series_of(teacher, series_id) if series_id else None
+        board = new_board(title=clean, teacher_id=teacher.id, group_id=group_id, series_id=series)
         self.repo.add_board(board)
         for student_id in members:
             self.repo.add_member(BoardStudent(board_id=board.id, student_id=student_id))
@@ -289,6 +295,7 @@ class BoardService:
             updated_at=scene.iso_time(board.updated_at),
             camera=Camera(x=camera["x"], y=camera["y"], zoom=camera["zoom"]),
             objects=objects,
+            series_id=str(board.series_id or board.id),
         )
 
     async def _shared_board(self, share_token: str) -> tuple[Board, bool]:
@@ -319,7 +326,15 @@ class BoardService:
             updated_at=scene.iso_time(board.updated_at),
             object_count=board.object_count,
             share_access=board.share_access if with_share else None,
+            series_id=str(board.series_id or board.id),
         )
+
+    async def _series_of(self, teacher: User, series_id: str) -> uuid.UUID:
+        parsed = scene.parse_uuid(series_id)
+        if parsed is None:
+            raise BoardServiceError(400, "seriesId — id доски")
+        board = await self._owned_board(teacher, parsed)
+        return board.series_id or board.id
 
     async def _member_ids(self, board_id: uuid.UUID) -> list[int]:
         found = await self.repo.student_ids_map([board_id])

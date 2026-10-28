@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 import uuid
 from datetime import datetime
 from typing import Any, Optional
@@ -51,6 +52,36 @@ def validate_geocam(message: dict) -> dict:
         "z": _positive(message.get("z"), "z"),
         "c": [finite(center[0], "c"), finite(center[1], "c"), finite(center[2], "c")],
     }
+
+
+MAX_GEOMOVES = 64
+
+
+def validate_geomove(message: dict) -> dict:
+    """Дельта построения GeoGebra: новые координаты свободных точек и значения чисел.
+
+    В документ не пишется: состояние приходит отдельно патчем ggbXml, дельты нужны
+    только чтобы у зрителей точки двигались плавно, а не раз в несколько сотен мс.
+    """
+    object_id = message.get("id")
+    if not isinstance(object_id, str) or not object_id.strip() or len(object_id) > 80:
+        raise SceneError("Нужен id объекта")
+    moves = message.get("moves")
+    if not isinstance(moves, list) or not moves or len(moves) > MAX_GEOMOVES:
+        raise SceneError(f"moves — от 1 до {MAX_GEOMOVES} элементов")
+    clean = []
+    for index, move in enumerate(moves):
+        if not isinstance(move, dict):
+            raise SceneError(f"moves[{index}] должен быть объектом")
+        name = move.get("n")
+        values = move.get("v")
+        if not isinstance(name, str) or not name or len(name) > 64:
+            raise SceneError(f"moves[{index}].n — имя объекта")
+        if not isinstance(values, list) or not 1 <= len(values) <= 3:
+            raise SceneError(f"moves[{index}].v — от 1 до 3 чисел")
+        clean.append({"n": name, "v": [finite(value, f"moves[{index}].v") for value in values]})
+    stamp = message.get("t", 0)
+    return {"id": object_id.strip(), "t": finite(stamp, "t"), "moves": clean}
 
 
 def _positive(value: Any, label: str) -> int | float:
@@ -143,6 +174,31 @@ def validate_laser(message: dict) -> dict:
     if width <= 0 or width > 80:
         raise SceneError("width указки от 0 до 80")
     return {"points": points, "color": color.strip(), "width": width, "fadeMs": LASER_FADE_MS}
+
+
+RAW_HTML_TAG = re.compile(r"<\s*html\b[\s\S]*?(?:<\s*/\s*html\s*>|$)", re.IGNORECASE)
+
+
+def _without_raw_html(block: Any) -> Any:
+    if isinstance(block, str):
+        return RAW_HTML_TAG.sub("", block)
+    if isinstance(block, list):
+        return [item for item in (_without_raw_html(entry) for entry in block) if item is not None]
+    if isinstance(block, dict):
+        if block.get("type") == "html":
+            return None
+        return {key: _without_raw_html(value) for key, value in block.items()}
+    return block
+
+
+def strip_untrusted_markup(props: dict) -> dict:
+    """Ученик и гость не ставят на доску сырой HTML: блоки html из теории вырезаются.
+
+    Клиент всё равно чистит HTML перед показом, это вторая линия защиты.
+    """
+    if "theoryBlock" not in props:
+        return props
+    return {**props, "theoryBlock": _without_raw_html(props["theoryBlock"])}
 
 
 def public_object(obj: dict) -> dict:

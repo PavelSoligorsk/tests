@@ -244,7 +244,7 @@ def test_ping_replies_only_to_the_sender():
         _drain(one)
         _drain(two)
         await room.handle(one, json.dumps({"type": "ping", "opId": "p"}))
-        assert _drain(one) == [{"type": "pong", "opId": "p"}]
+        assert _drain(one) == [{"type": "pong", "t": None, "opId": "p"}]
         assert _drain(two) == []
         assert room.dirty is False
 

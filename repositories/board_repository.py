@@ -249,6 +249,7 @@ _BOARD_LIST_COLUMNS = (
     Board.created_at,
     Board.updated_at,
     Board.share_access,
+    Board.series_id,
 )
 
 
@@ -256,10 +257,14 @@ def empty_camera() -> dict:
     return {"x": 0, "y": 0, "zoom": 1}
 
 
-def new_board(*, title: str, teacher_id: int, group_id: Optional[int]) -> Board:
+def new_board(
+    *, title: str, teacher_id: int, group_id: Optional[int], series_id: Optional[uuid.UUID] = None,
+) -> Board:
     now = datetime.utcnow()
+    board_id = uuid.uuid4()
     return Board(
-        id=uuid.uuid4(),
+        id=board_id,
+        series_id=series_id or board_id,
         teacher_id=teacher_id,
         group_id=group_id,
         title=title,

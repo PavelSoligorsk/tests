@@ -522,3 +522,41 @@ async def test_document_update_matches_revision(db: AsyncSession, teacher_user: 
     assert fresh.revision == 2
     assert fresh.object_count == 1
     assert fresh.objects[0]["id"] == "s1"
+
+
+async def test_pages_share_an_explicit_series(
+    async_client: AsyncClient, teacher_token: str, student_token: str, admin_token: str
+) -> None:
+    _, student_id = await _link(async_client, admin_token, teacher_token, student_token)
+    first = (await async_client.post(
+        "/teacher/boards", json={"title": "Черновик"}, headers=_bearer(teacher_token),
+    )).json()
+    assert first["seriesId"] == first["id"]
+
+    page = await async_client.post(
+        "/teacher/boards",
+        json={"title": "Страница 2", "seriesId": first["id"]},
+        headers=_bearer(teacher_token),
+    )
+    assert page.status_code == 200, page.text
+    assert page.json()["seriesId"] == first["id"]
+
+    third = (await async_client.post(
+        "/teacher/boards",
+        json={"title": "Страница 3", "seriesId": page.json()["id"]},
+        headers=_bearer(teacher_token),
+    )).json()
+    assert third["seriesId"] == first["id"]
+
+    other = await _board_for(async_client, teacher_token, student_id, "Другая")
+    assert other["seriesId"] == other["id"]
+
+    listed = (await async_client.get("/teacher/boards", headers=_bearer(teacher_token))).json()
+    series = {row["id"]: row["seriesId"] for row in listed}
+    assert series[first["id"]] == series[page.json()["id"]] == series[third["id"]] == first["id"]
+    assert series[other["id"]] == other["id"]
+
+    bad = await async_client.post(
+        "/teacher/boards", json={"title": "x", "seriesId": "не uuid"}, headers=_bearer(teacher_token),
+    )
+    assert bad.status_code == 400

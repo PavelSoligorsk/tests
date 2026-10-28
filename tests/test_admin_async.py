@@ -1733,7 +1733,7 @@ async def test_admin_classify_tasks_with_ids(
     - С мокнутым AI классификация topic/section проходит без ошибок.
     - В ответе есть корректные счётчики processed/classified/failed.
     """
-    from unittest.mock import AsyncMock, patch
+    from unittest.mock import patch
 
     # Создаём несколько заданий с уже заданными topic/section
     # (для построения topics_structure в сервисе)
@@ -1753,7 +1753,7 @@ async def test_admin_classify_tasks_with_ids(
                 "hint": "Isolate x",
                 "solution": "x = -b/a",
             },
-            headers={"Authorization": f"******"},
+            headers={"Authorization": f"Bearer {admin_token}"},
         )
         assert resp.status_code == 200, f"Task {i} creation failed: {resp.text}"
 
@@ -1788,20 +1788,17 @@ async def test_admin_classify_tasks_with_ids(
                 "hint": "Power rule",
                 "solution": "2^n",
             },
-            headers={"Authorization": f"******"},
+            headers={"Authorization": f"Bearer {admin_token}"},
         )
         assert resp.status_code == 200, f"Unclassified task {i} failed: {resp.text}"
         unclassified_ids.append(resp.json()["id"])
 
-    with patch(
-        "services.ai_service.AIService._chat_completion",
-        new_callable=AsyncMock,
-        side_effect=mock_chat_completion,
-    ):
+    # Обычная функция на месте метода получает self, как и настоящий _chat_completion.
+    with patch("services.ai_service.AIService._chat_completion", new=mock_chat_completion):
         resp = await async_client.post(
             "/admin/classify-tasks",
             json={"task_ids": unclassified_ids},
-            headers={"Authorization": f"******"},
+            headers={"Authorization": f"Bearer {admin_token}"},
         )
 
     assert resp.status_code == 200, f"classify-tasks failed: {resp.text}"
@@ -1845,7 +1842,7 @@ async def test_admin_classify_tasks_empty_request(
         resp = await async_client.post(
             "/admin/classify-tasks",
             json={"task_ids": []},
-            headers={"Authorization": f"******"},
+            headers={"Authorization": f"Bearer {admin_token}"},
         )
 
     assert resp.status_code == 200, resp.text
