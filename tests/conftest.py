@@ -25,6 +25,14 @@ from sqlalchemy.pool import StaticPool
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
+# Тестам не нужны настоящая база и секреты: значения по умолчанию задаём до импорта приложения
+# (load_dotenv их не перетрёт). База всё равно подменяется in-memory SQLite ниже.
+os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///:memory:")
+os.environ.setdefault("SECRET_KEY", "test-secret-key")
+os.environ.setdefault("ALGORITHM", "HS256")
+# Клиент DeepSeek создаётся в конструкторе AIService; сами ответы модели тесты подменяют.
+os.environ.setdefault("DEEPSEEK_API_KEY", "test-deepseek-key")
+
 from main import app
 from core.database import Base, get_db, get_session_factory
 import core.models as models
