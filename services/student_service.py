@@ -1,3 +1,5 @@
+import ast
+import json
 import re
 import random
 from typing import List, Dict, Optional
@@ -172,7 +174,7 @@ class StudentService:
                 total_points += current_points
                 
                 await self.result_repo.save_answer(
-                    result.id, task.id, str(ans['user_answer']), is_correct, current_points
+                    result.id, task.id, self._serialize_answer(ans['user_answer']), is_correct, current_points
                 )
         else:
             # ── Finalize-only: score previously saved answers ──
@@ -189,7 +191,7 @@ class StudentService:
                 task = await self.task_repo.get_task_by_id(ua.task_id)
                 if not task:
                     continue
-                is_correct = self._check_answer(task, ua.user_text_answer)
+                is_correct = self._check_answer(task, self._parse_stored_answer(ua.user_text_answer))
                 current_points = 2 if (is_correct and task.is_open_answer) else (1 if is_correct else 0)
                 ua.is_correct = is_correct
                 ua.points_earned = current_points
@@ -253,10 +255,12 @@ class StudentService:
             task = await self.task_repo.get_task_by_id(ans['task_id'])
             if not task:
                 continue
-            # Save with is_correct=False / points=0 for now —
-            # real scoring happens on final submit()
+            # Баллы считаются сразу: иначе каждый выход затирает is_correct в false,
+            # а список вариантов сохраняется строкой и потом уже не сходится с ответом.
+            is_correct = self._check_answer(task, ans['user_answer'])
+            current_points = 2 if (is_correct and task.is_open_answer) else (1 if is_correct else 0)
             await self.result_repo.save_answer(
-                result.id, task.id, str(ans['user_answer']), False, 0
+                result.id, task.id, self._serialize_answer(ans['user_answer']), is_correct, current_points
             )
             saved_count += 1
 
@@ -960,7 +964,7 @@ class StudentService:
             # Restore previously saved answers so the frontend can pre-fill them
             saved = await self.result_repo.get_user_answers_for_result(result.id)
             previous_answers = [
-                {"task_id": sa.task_id, "user_answer": sa.user_text_answer}
+                {"task_id": sa.task_id, "user_answer": self._parse_stored_answer(sa.user_text_answer)}
                 for sa in saved
             ]
         else:
@@ -1031,6 +1035,24 @@ class StudentService:
 
         # 3. Build fresh start (retake always creates new, never resumes)
         return await self._build_test_start_response(user_id, test, force_new=True)
+
+    def _serialize_answer(self, user_answer) -> str:
+        if isinstance(user_answer, list):
+            return json.dumps([str(item) for item in user_answer], ensure_ascii=False)
+        return "" if user_answer is None else str(user_answer)
+
+    def _parse_stored_answer(self, stored):
+        """Вернуть список, если ответ закрытого вопроса так и сохранялся."""
+        text = "" if stored is None else str(stored)
+        if text.startswith("["):
+            for loader in (json.loads, ast.literal_eval):
+                try:
+                    parsed = loader(text)
+                except (ValueError, SyntaxError, json.JSONDecodeError):
+                    continue
+                if isinstance(parsed, list):
+                    return [str(item) for item in parsed]
+        return text
 
     def _check_answer(self, task, user_answer) -> bool:
         """Проверить правильность ответа"""
