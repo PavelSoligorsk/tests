@@ -28,6 +28,8 @@ class BoardDocument(BaseModel):
     share_access: Optional[str] = Field(None, alias="shareAccess")
     share_token: Optional[str] = Field(None, alias="shareToken")
     series_id: Optional[str] = Field(None, alias="seriesId")
+    page_number: int = Field(alias="pageNumber")
+    collection_title: Optional[str] = Field(None, alias="collectionTitle")
 
 
 class BoardMeta(BaseModel):
@@ -43,6 +45,34 @@ class BoardMeta(BaseModel):
     object_count: int = Field(alias="objectCount")
     share_access: Optional[str] = Field(None, alias="shareAccess")
     series_id: Optional[str] = Field(None, alias="seriesId")
+    page_number: int = Field(alias="pageNumber")
+    collection_title: Optional[str] = Field(None, alias="collectionTitle")
+
+
+class BoardPageMeta(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    title: str
+    page_number: int = Field(alias="pageNumber")
+    object_count: int = Field(alias="objectCount")
+    created_at: str = Field(alias="createdAt")
+    updated_at: str = Field(alias="updatedAt")
+    share_access: Optional[str] = Field(None, alias="shareAccess")
+
+
+class BoardCollectionMeta(BaseModel):
+    """Папка без холста: аудитория и страницы по номерам."""
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    teacher_id: int = Field(alias="teacherId")
+    kind: str
+    title: Optional[str] = None
+    group_id: Optional[int] = Field(None, alias="groupId")
+    student_ids: list[int] = Field(default_factory=list, alias="studentIds")
+    updated_at: str = Field(alias="updatedAt")
+    pages: list[BoardPageMeta]
 
 
 class BoardCreate(BaseModel):
@@ -51,7 +81,7 @@ class BoardCreate(BaseModel):
     title: str
     student_ids: Optional[list[int]] = Field(None, alias="studentIds")
     group_id: Optional[int] = Field(None, alias="groupId")
-    # Новая страница серии: id любой доски этой серии.
+    # Страница уже существующей коллекции: id любой её страницы или id коллекции.
     series_id: Optional[str] = Field(None, alias="seriesId")
 
 

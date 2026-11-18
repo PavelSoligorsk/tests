@@ -25,11 +25,16 @@
   "createdAt": "2026-09-28T00:13:00.000Z",
   "updatedAt": "2026-09-28T00:13:00.000Z",
   "camera": { "x": 0, "y": 0, "zoom": 1 },
-  "objects": []
+  "objects": [],
+  "seriesId": "6f1c2a40-7b1e-4d2a-9c33-0a1b2c3d4e5f",
+  "pageNumber": 1,
+  "collectionTitle": null
 }
 ```
 
-Если доска на группу, `groupId` — id группы, `studentIds` — пустой массив. Состав берётся из группы: ученик, которого добавили позже, увидит доску сам. Если доска на конкретных учеников, `groupId` равен `null`, а `studentIds` — их id. Если доска сама по себе, оба поля пустые: `groupId` равен `null`, `studentIds` — `[]`.
+Страницы одной папки делят `seriesId`. `pageNumber` — номер страницы внутри папки, с 1. У личной папки `collectionTitle` — её название. У папки ученика, группы и старого набора учеников `collectionTitle` равен `null`.
+
+Если доска на группу, `groupId` — id группы, `studentIds` — пустой массив. Состав берётся из группы: ученик, которого добавили позже, увидит доску сам. Если доска на одного ученика, `groupId` равен `null`, а `studentIds` — его id. Старые доски могут по-прежнему перечислять нескольких учеников. Если доска сама по себе, оба поля пустые: `groupId` равен `null`, `studentIds` — `[]`.
 
 Учителю в документе его доски ещё приходят `shareAccess` (`off`, `view` или `edit`) и `shareToken`. Ученикам и гостям по ссылке этих полей нет.
 
@@ -53,9 +58,44 @@
   "groupId": null,
   "studentIds": [45, 46],
   "updatedAt": "2026-09-28T00:40:12.000Z",
-  "objectCount": 4
+  "objectCount": 4,
+  "seriesId": "6f1c2a40-7b1e-4d2a-9c33-0a1b2c3d4e5f",
+  "pageNumber": 1,
+  "collectionTitle": null
 }
 ```
+
+Список страниц плоский. Готовые папки отдаёт отдельный адрес, без `objects`:
+
+```
+GET /teacher/boards/collections
+GET /student/boards/collections
+```
+
+```json
+{
+  "id": "6f1c2a40-7b1e-4d2a-9c33-0a1b2c3d4e5f",
+  "teacherId": 7,
+  "kind": "personal",
+  "title": "Черновик",
+  "groupId": null,
+  "studentIds": [],
+  "updatedAt": "2026-09-28T00:40:12.000Z",
+  "pages": [
+    {
+      "id": "6f1c2a40-7b1e-4d2a-9c33-0a1b2c3d4e5f",
+      "title": "Черновик",
+      "pageNumber": 1,
+      "objectCount": 4,
+      "createdAt": "2026-09-28T00:13:00.000Z",
+      "updatedAt": "2026-09-28T00:40:12.000Z",
+      "shareAccess": "off"
+    }
+  ]
+}
+```
+
+`kind`: `student`, `group`, `personal` или `legacy` (старый набор учеников). `title` заполнен только у `personal`. `id` коллекции совпадает с `seriesId` её страниц. Страницы в `pages` идут по `pageNumber`. Папки — по `updatedAt` самой свежей страницы, свежие сверху. Ученик видит только папки, где у него есть страница. `shareAccess` у страницы есть в учительском ответе.
 
 ---
 
@@ -239,13 +279,23 @@ POST /teacher/boards
 Content-Type: application/json
 ```
 
-Либо ученики, либо одна группа, либо ни того ни другого — доска только создателя. Оба поля вместе — `400`, «Нужны ученики или группа, что-то одно».
+Один ученик, одна группа или доска только создателя. Оба поля вместе — `400`, «Нужны ученики или группа, что-то одно». Два и больше `studentIds` без `seriesId` — `400`, «Нужен один ученик».
 
 ```json
 { "title": "Черновик" }
 ```
 
-У такой доски `shareAccess` равен `off`, `shareToken` равен `null`. Пока ссылка выключена, открыть её может только создатель.
+Без ученика и группы это новая личная коллекция: `title` — её название и название первой страницы, `pageNumber` равен `1`, `seriesId` равен `id` страницы. Следующая такая просьба заводит другую личную коллекцию, а не страницу первой.
+
+```json
+{ "title": "Страница 2", "seriesId": "6f1c2a40-7b1e-4d2a-9c33-0a1b2c3d4e5f" }
+```
+
+`seriesId` — id любой страницы коллекции или id самой коллекции. Сервер добавляет страницу в эту коллекцию и копирует аудиторию. Если в теле ещё указаны ученик или группа, они должны совпасть с коллекцией.
+
+Повторный `POST` с тем же одним учеником или той же группой без `seriesId` не заводит вторую папку: это следующая страница уже существующей, со следующим `pageNumber`.
+
+У новой доски `shareAccess` равен `off`, `shareToken` равен `null`. Пока ссылка выключена, открыть её может только создатель.
 
 ### Ссылка
 
@@ -275,7 +325,7 @@ WS  /board/shared/{shareToken}/ws?token=<token>
 По WebSocket при `canEdit: false` курсор и указка уходят, а `upsert`, `patch`, `delete` и остальные правки получают `error`: «Доска только для просмотра».
 
 ```json
-{ "title": "Дроби", "studentIds": [45, 46] }
+{ "title": "Дроби", "studentIds": [45] }
 ```
 
 ```json
@@ -307,6 +357,7 @@ GET /teacher/boards/theory/{theoryId}
 
 ```
 GET    /teacher/boards
+GET    /teacher/boards/collections
 GET    /teacher/boards/{id}
 WS     /teacher/boards/{id}/ws?token=<token>
 DELETE /teacher/boards/{id}
@@ -314,7 +365,7 @@ DELETE /teacher/boards/{id}
 
 `GET /teacher/boards` — доски этого учителя, без `objects`, свежие сверху. `objectCount` и `updatedAt` в списке отстают от открытой доски на пару секунд.
 
-`DELETE` удаляет доску и её картинки. Все, у кого доска открыта, получают `deleted`.
+`DELETE` удаляет страницу и её картинки. Все, у кого она открыта, получают `deleted`. Если страница была последней в коллекции, коллекция тоже удаляется. Номера оставшихся страниц не сдвигаются.
 
 **Ответ 200:** `{ "ok": true }`.
 
@@ -328,6 +379,7 @@ DELETE /teacher/boards/{id}
 
 ```
 GET /student/boards
+GET /student/boards/collections
 GET /student/boards/{id}
 WS  /student/boards/{id}/ws?token=<token>
 ```

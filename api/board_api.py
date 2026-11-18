@@ -15,6 +15,7 @@ from core import auth
 from core.database import get_db, get_session_factory
 from core.models import User
 from dto_schemas.board import (
+    BoardCollectionMeta,
     BoardCreate,
     BoardDocument,
     BoardImageUpload,
@@ -172,6 +173,17 @@ async def list_student_boards(
         return _error(exc)
 
 
+@student_board_router.get("/boards/collections", response_model=list[BoardCollectionMeta])
+async def list_student_collections(
+    current_user: User = Depends(auth.get_current_user),
+    service: BoardService = Depends(get_board_service),
+):
+    try:
+        return await service.list_student_collections(current_user)
+    except BoardServiceError as exc:
+        return _error(exc)
+
+
 @student_board_router.post("/boards/images", response_model=BoardImageUpload)
 async def upload_student_image(
     file: UploadFile = File(...),
@@ -217,6 +229,17 @@ async def list_teacher_boards(
 ):
     try:
         return await service.list_teacher_boards(current_user)
+    except BoardServiceError as exc:
+        return _error(exc)
+
+
+@teacher_board_router.get("/boards/collections", response_model=list[BoardCollectionMeta])
+async def list_teacher_collections(
+    current_user: User = Depends(auth.check_teacher),
+    service: BoardService = Depends(get_board_service),
+):
+    try:
+        return await service.list_teacher_collections(current_user)
     except BoardServiceError as exc:
         return _error(exc)
 

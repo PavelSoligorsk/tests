@@ -4,11 +4,21 @@ import uuid
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import delete, or_, select, update
+from sqlalchemy import delete, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import load_only
 
-from core.models import Board, BoardImage, BoardStudent, GeogebraTemplate, Group, GroupStudent, Lesson, TeacherStudent
+from core.models import (
+    Board,
+    BoardCollection,
+    BoardImage,
+    BoardStudent,
+    GeogebraTemplate,
+    Group,
+    GroupStudent,
+    Lesson,
+    TeacherStudent,
+)
 
 
 class BoardRepository:
@@ -110,6 +120,74 @@ class BoardRepository:
         )
         return [row[0] for row in result.all()]
 
+    def add_collection(self, collection: BoardCollection) -> None:
+        self.db.add(collection)
+
+    async def get_collection(self, collection_id: uuid.UUID) -> Optional[BoardCollection]:
+        result = await self.db.execute(select(BoardCollection).where(BoardCollection.id == collection_id))
+        return result.scalars().first()
+
+    async def find_student_collection(self, teacher_id: int, student_id: int) -> Optional[BoardCollection]:
+        result = await self.db.execute(
+            select(BoardCollection).where(
+                BoardCollection.teacher_id == teacher_id,
+                BoardCollection.kind == "student",
+                BoardCollection.student_id == student_id,
+            )
+        )
+        return result.scalars().first()
+
+    async def find_group_collection(self, teacher_id: int, group_id: int) -> Optional[BoardCollection]:
+        result = await self.db.execute(
+            select(BoardCollection).where(
+                BoardCollection.teacher_id == teacher_id,
+                BoardCollection.kind == "group",
+                BoardCollection.group_id == group_id,
+            )
+        )
+        return result.scalars().first()
+
+    async def collections_by_ids(self, collection_ids: list[uuid.UUID]) -> dict[uuid.UUID, BoardCollection]:
+        if not collection_ids:
+            return {}
+        result = await self.db.execute(
+            select(BoardCollection).where(BoardCollection.id.in_(collection_ids))
+        )
+        return {row.id: row for row in result.scalars().all()}
+
+    async def collection_titles(self, collection_ids: list[uuid.UUID]) -> dict[uuid.UUID, Optional[str]]:
+        if not collection_ids:
+            return {}
+        result = await self.db.execute(
+            select(BoardCollection.id, BoardCollection.title).where(BoardCollection.id.in_(collection_ids))
+        )
+        return {row.id: row.title for row in result.all()}
+
+    async def next_page_number(self, collection_id: uuid.UUID) -> int:
+        result = await self.db.execute(
+            select(func.max(Board.page_number)).where(Board.series_id == collection_id)
+        )
+        current = result.scalar()
+        return int(current or 0) + 1
+
+    async def page_count(self, collection_id: uuid.UUID) -> int:
+        result = await self.db.execute(
+            select(func.count()).select_from(Board).where(Board.series_id == collection_id)
+        )
+        return int(result.scalar() or 0)
+
+    async def legacy_member_ids(self, collection_id: uuid.UUID) -> list[int]:
+        result = await self.db.execute(
+            select(Board.id)
+            .where(Board.series_id == collection_id)
+            .order_by(Board.page_number.asc(), Board.created_at.asc())
+            .limit(1)
+        )
+        board_id = result.scalar()
+        if board_id is None:
+            return []
+        return (await self.student_ids_map([board_id])).get(board_id, [])
+
     def add_board(self, board: Board) -> None:
         self.db.add(board)
 
@@ -119,6 +197,9 @@ class BoardRepository:
     async def delete_board(self, board: Board) -> None:
         await self.db.execute(delete(BoardImage).where(BoardImage.board_id == board.id))
         await self.db.delete(board)
+
+    async def delete_collection(self, collection: BoardCollection) -> None:
+        await self.db.delete(collection)
 
     async def image_keys(self, board_id: uuid.UUID) -> list[str]:
         result = await self.db.execute(
@@ -250,6 +331,7 @@ _BOARD_LIST_COLUMNS = (
     Board.updated_at,
     Board.share_access,
     Board.series_id,
+    Board.page_number,
 )
 
 
@@ -258,7 +340,12 @@ def empty_camera() -> dict:
 
 
 def new_board(
-    *, title: str, teacher_id: int, group_id: Optional[int], series_id: Optional[uuid.UUID] = None,
+    *,
+    title: str,
+    teacher_id: int,
+    group_id: Optional[int],
+    series_id: Optional[uuid.UUID] = None,
+    page_number: int = 1,
 ) -> Board:
     now = datetime.utcnow()
     board_id = uuid.uuid4()
@@ -274,6 +361,7 @@ def new_board(
         object_count=0,
         share_access="off",
         share_token=None,
+        page_number=page_number,
         created_at=now,
         updated_at=now,
     )

@@ -11,11 +11,13 @@ from typing import Any, Callable, Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from core.models import Board, BoardImage, BoardStudent, GeogebraTemplate, Theory, User
+from core.models import Board, BoardCollection, BoardImage, BoardStudent, GeogebraTemplate, Theory, User
 from dto_schemas.board import (
+    BoardCollectionMeta,
     BoardDocument,
     BoardImageUpload,
     BoardMeta,
+    BoardPageMeta,
     BoardShare,
     SharedBoardDocument,
     TheoryBoardImport,
@@ -63,6 +65,16 @@ class BoardService:
         boards = await self.repo.list_for_teacher(teacher.id)
         return await self._metas(boards, with_share=True)
 
+    async def list_student_collections(self, student: User) -> list[BoardCollectionMeta]:
+        self._require_student(student)
+        boards = await self.repo.list_for_student(student.id)
+        return await self._collection_metas(boards)
+
+    async def list_teacher_collections(self, teacher: User) -> list[BoardCollectionMeta]:
+        self._require_teacher(teacher)
+        boards = await self.repo.list_for_teacher(teacher.id)
+        return await self._collection_metas(boards, with_share=True)
+
     async def create_board(
         self,
         teacher: User,
@@ -73,10 +85,41 @@ class BoardService:
     ) -> BoardDocument:
         self._require_teacher(teacher)
         clean = _clean_board_title(title)
-        group_id, members = await self._audience(teacher.id, student_ids, group_id)
-        series = await self._series_of(teacher, series_id) if series_id else None
-        board = new_board(title=clean, teacher_id=teacher.id, group_id=group_id, series_id=series)
-        self.repo.add_board(board)
+        if series_id:
+            collection = await self._collection_from_ref(teacher, series_id)
+            group_id, members = await self._audience_of(teacher.id, collection, student_ids, group_id)
+            board = new_board(
+                title=clean,
+                teacher_id=teacher.id,
+                group_id=group_id,
+                series_id=collection.id,
+                page_number=await self.repo.next_page_number(collection.id),
+            )
+            self.repo.add_board(board)
+        else:
+            group_id, members, kind = await self._new_audience(teacher.id, student_ids, group_id)
+            collection = await self._collection_for_new(teacher.id, kind, group_id, members)
+            if collection is None:
+                board = new_board(title=clean, teacher_id=teacher.id, group_id=group_id, page_number=1)
+                self.repo.add_collection(BoardCollection(
+                    id=board.id,
+                    teacher_id=teacher.id,
+                    kind=kind,
+                    student_id=members[0] if kind == "student" else None,
+                    group_id=group_id if kind == "group" else None,
+                    title=clean if kind == "personal" else None,
+                    created_at=board.created_at,
+                ))
+                await self.repo.flush()
+            else:
+                board = new_board(
+                    title=clean,
+                    teacher_id=teacher.id,
+                    group_id=group_id,
+                    series_id=collection.id,
+                    page_number=await self.repo.next_page_number(collection.id),
+                )
+            self.repo.add_board(board)
         for student_id in members:
             self.repo.add_member(BoardStudent(board_id=board.id, student_id=student_id))
         await self.repo.commit()
@@ -137,7 +180,13 @@ class BoardService:
         board = await self._owned_board(teacher, board_id)
         board_key = str(board.id)
         keys = await self.repo.image_keys(board.id)
+        collection_id = board.series_id
         await self.repo.delete_board(board)
+        await self.repo.flush()
+        if await self.repo.page_count(collection_id) == 0:
+            collection = await self.repo.get_collection(collection_id)
+            if collection is not None:
+                await self.repo.delete_collection(collection)
         await self.repo.commit()
         await board_rooms.close_board(board_key)
         await delete_keys(keys)
@@ -284,6 +333,7 @@ class BoardService:
             obj["props"] = props
         camera = board.camera or {"x": 0, "y": 0, "zoom": 1}
         student_ids = [] if board.group_id else await self._member_ids(board.id)
+        collection = await self.repo.get_collection(board.series_id) if board.series_id else None
         return BoardDocument(
             id=str(board.id),
             title=board.title,
@@ -296,6 +346,8 @@ class BoardService:
             camera=Camera(x=camera["x"], y=camera["y"], zoom=camera["zoom"]),
             objects=objects,
             series_id=str(board.series_id or board.id),
+            page_number=board.page_number,
+            collection_title=collection.title if collection is not None else None,
         )
 
     async def _shared_board(self, share_token: str) -> tuple[Board, bool]:
@@ -313,9 +365,20 @@ class BoardService:
     async def _metas(self, boards: list[Board], *, with_share: bool = False) -> list[BoardMeta]:
         direct = [board.id for board in boards if board.group_id is None]
         members = await self.repo.student_ids_map(direct)
-        return [self._meta(board, members.get(board.id, []), with_share=with_share) for board in boards]
+        titles = await self.repo.collection_titles([board.series_id for board in boards if board.series_id])
+        return [
+            self._meta(board, members.get(board.id, []), titles.get(board.series_id), with_share=with_share)
+            for board in boards
+        ]
 
-    def _meta(self, board: Board, student_ids: list[int], *, with_share: bool = False) -> BoardMeta:
+    def _meta(
+        self,
+        board: Board,
+        student_ids: list[int],
+        collection_title: Optional[str],
+        *,
+        with_share: bool = False,
+    ) -> BoardMeta:
         return BoardMeta(
             id=str(board.id),
             title=board.title,
@@ -327,42 +390,145 @@ class BoardService:
             object_count=board.object_count,
             share_access=board.share_access if with_share else None,
             series_id=str(board.series_id or board.id),
+            page_number=board.page_number,
+            collection_title=collection_title,
         )
 
-    async def _series_of(self, teacher: User, series_id: str) -> uuid.UUID:
+    async def _collection_metas(self, boards: list[Board], *, with_share: bool = False) -> list[BoardCollectionMeta]:
+        if not boards:
+            return []
+        metas = {
+            uuid.UUID(meta.id): meta
+            for meta in await self._metas(boards, with_share=with_share)
+        }
+        rows = await self.repo.collections_by_ids([board.series_id for board in boards if board.series_id])
+        grouped: dict[uuid.UUID, list[Board]] = {}
+        for board in boards:
+            grouped.setdefault(board.series_id, []).append(board)
+        result: list[BoardCollectionMeta] = []
+        for collection_id, pages in grouped.items():
+            row = rows.get(collection_id)
+            if row is None:
+                continue
+            pages.sort(key=lambda page: (page.page_number, page.created_at or datetime.min))
+            latest = max((page.updated_at for page in pages if page.updated_at), default=None)
+            sample = metas[pages[0].id]
+            if row.kind == "student" and row.student_id is not None:
+                student_ids = [row.student_id]
+            elif row.kind == "legacy":
+                student_ids = sample.student_ids
+            else:
+                student_ids = []
+            result.append(BoardCollectionMeta(
+                id=str(row.id),
+                teacher_id=row.teacher_id,
+                kind=row.kind,
+                title=row.title,
+                group_id=row.group_id,
+                student_ids=student_ids,
+                updated_at=scene.iso_time(latest),
+                pages=[
+                    BoardPageMeta(
+                        id=meta.id,
+                        title=meta.title,
+                        page_number=meta.page_number,
+                        object_count=meta.object_count,
+                        created_at=meta.created_at,
+                        updated_at=meta.updated_at,
+                        share_access=meta.share_access if with_share else None,
+                    )
+                    for page in pages
+                    if (meta := metas[page.id])
+                ],
+            ))
+        result.sort(key=lambda item: item.updated_at, reverse=True)
+        return result
+
+    async def _collection_from_ref(self, teacher: User, series_id: str) -> BoardCollection:
         parsed = scene.parse_uuid(series_id)
         if parsed is None:
             raise BoardServiceError(400, "seriesId — id доски")
-        board = await self._owned_board(teacher, parsed)
-        return board.series_id or board.id
+        board = await self.repo.get_board(parsed)
+        if board is not None:
+            if board.teacher_id != teacher.id:
+                raise BoardServiceError(403, "Нет доступа к этой доске")
+            collection = await self.repo.get_collection(board.series_id)
+        else:
+            collection = await self.repo.get_collection(parsed)
+            if collection is not None and collection.teacher_id != teacher.id:
+                raise BoardServiceError(403, "Нет доступа к этой доске")
+        if collection is None:
+            raise BoardServiceError(404, "Доска не найдена")
+        return collection
 
-    async def _member_ids(self, board_id: uuid.UUID) -> list[int]:
-        found = await self.repo.student_ids_map([board_id])
-        return found.get(board_id, [])
+    async def _collection_for_new(
+        self, teacher_id: int, kind: str, group_id: Optional[int], members: list[int],
+    ) -> Optional[BoardCollection]:
+        if kind == "student":
+            return await self.repo.find_student_collection(teacher_id, members[0])
+        if kind == "group":
+            return await self.repo.find_group_collection(teacher_id, group_id)
+        return None
 
-    async def _audience(
-        self, teacher_id: int, student_ids: Optional[list[int]], group_id: Optional[int]
-    ) -> tuple[Optional[int], list[int]]:
+    async def _new_audience(
+        self, teacher_id: int, student_ids: Optional[list[int]], group_id: Optional[int],
+    ) -> tuple[Optional[int], list[int], str]:
         has_students = bool(student_ids)
         has_group = group_id is not None
         if has_students and has_group:
             raise BoardServiceError(400, "Нужны ученики или группа, что-то одно")
-        if not has_students and not has_group:
-            return None, []
         if has_group:
             group = await self.repo.owned_group(group_id, teacher_id)
             if group is None:
                 raise BoardServiceError(404, "Группа не найдена")
-            return group_id, []
+            return group_id, [], "group"
+        if not has_students:
+            return None, [], "personal"
+        unique = self._unique_students(student_ids)
+        if len(unique) != 1:
+            raise BoardServiceError(400, "Нужен один ученик")
+        if not await self.repo.owns_students(teacher_id, unique):
+            raise BoardServiceError(400, "Ученик не привязан к учителю")
+        return None, unique, "student"
+
+    async def _audience_of(
+        self,
+        teacher_id: int,
+        collection: BoardCollection,
+        student_ids: Optional[list[int]],
+        group_id: Optional[int],
+    ) -> tuple[Optional[int], list[int]]:
+        if bool(student_ids) and group_id is not None:
+            raise BoardServiceError(400, "Нужны ученики или группа, что-то одно")
+        if student_ids is None and group_id is None:
+            return await self._copied_audience(collection)
+        expected_group, expected_members = await self._copied_audience(collection)
+        got_members = [] if student_ids is None else self._unique_students(student_ids)
+        if group_id != expected_group or sorted(got_members) != sorted(expected_members):
+            raise BoardServiceError(400, "Аудитория не совпадает с коллекцией")
+        return expected_group, expected_members
+
+    async def _copied_audience(self, collection: BoardCollection) -> tuple[Optional[int], list[int]]:
+        if collection.kind == "group":
+            return collection.group_id, []
+        if collection.kind == "student":
+            return None, [collection.student_id]
+        if collection.kind == "legacy":
+            return None, await self.repo.legacy_member_ids(collection.id)
+        return None, []
+
+    def _unique_students(self, student_ids: Optional[list[int]]) -> list[int]:
         unique: list[int] = []
         for student_id in student_ids or []:
             if isinstance(student_id, bool) or not isinstance(student_id, int):
                 raise BoardServiceError(400, "studentIds — список id учеников")
             if student_id not in unique:
                 unique.append(student_id)
-        if not await self.repo.owns_students(teacher_id, unique):
-            raise BoardServiceError(400, "Ученик не привязан к учителю")
-        return None, unique
+        return unique
+
+    async def _member_ids(self, board_id: uuid.UUID) -> list[int]:
+        found = await self.repo.student_ids_map([board_id])
+        return found.get(board_id, [])
 
     async def _student_board(self, student: User, board_id: uuid.UUID) -> Board:
         self._require_student(student)

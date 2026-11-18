@@ -10,6 +10,7 @@ import pytest
 from httpx import AsyncClient
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from core.models import BoardCollection
 from repositories.board_repository import BoardRepository, new_board
 from tests.helpers_async import _bearer
 
@@ -156,12 +157,22 @@ async def test_teacher_names_a_board_for_students(
         json={"title": "Дроби", "studentIds": [student_id, student2_id]},
         headers=_bearer(teacher_token),
     )
+    assert created.status_code == 400
+
+    created = await async_client.post(
+        "/teacher/boards",
+        json={"title": "Дроби", "studentIds": [student_id]},
+        headers=_bearer(teacher_token),
+    )
     assert created.status_code == 200, created.text
     board = created.json()
     assert board["title"] == "Дроби"
     assert board["teacherId"] == teacher_id
     assert board["groupId"] is None
-    assert board["studentIds"] == [student_id, student2_id]
+    assert board["studentIds"] == [student_id]
+    assert board["pageNumber"] == 1
+    assert board["collectionTitle"] is None
+    assert board["seriesId"] == board["id"]
     assert "lessonId" not in board
     assert board["revision"] == 1
     assert board["objects"] == []
@@ -170,11 +181,11 @@ async def test_teacher_names_a_board_for_students(
     assert listed.status_code == 200
     assert listed.json()[0]["id"] == board["id"]
     assert listed.json()[0]["objectCount"] == 0
+    assert listed.json()[0]["pageNumber"] == 1
     assert "objects" not in listed.json()[0]
 
-    same = await async_client.get(f"/student/boards/{board['id']}", headers=_bearer(student2_token))
-    assert same.status_code == 200
-    assert same.json()["id"] == board["id"]
+    hidden = await async_client.get(f"/student/boards/{board['id']}", headers=_bearer(student2_token))
+    assert hidden.status_code == 403
 
     both = await async_client.post(
         "/teacher/boards",
@@ -440,6 +451,9 @@ async def test_delete_closes_room_and_removes_images(
     assert r2.store == {}
     missing = await async_client.get(f"/student/boards/{board['id']}", headers=_bearer(student_token))
     assert missing.status_code == 404
+    fresh = await _board_for(async_client, teacher_token, student_id, "Снова")
+    assert fresh["pageNumber"] == 1
+    assert fresh["seriesId"] == fresh["id"]
 
 
 @pytest.mark.asyncio
@@ -489,6 +503,13 @@ async def test_template_stays_out_of_the_board_document(
 async def test_document_update_matches_revision(db: AsyncSession, teacher_user: dict) -> None:
     board = new_board(title="Гонка", teacher_id=teacher_user["id"], group_id=None)
     repo = BoardRepository(db)
+    repo.add_collection(BoardCollection(
+        id=board.id,
+        teacher_id=teacher_user["id"],
+        kind="personal",
+        title=board.title,
+        created_at=board.created_at,
+    ))
     repo.add_board(board)
     await repo.commit()
 
@@ -532,6 +553,8 @@ async def test_pages_share_an_explicit_series(
         "/teacher/boards", json={"title": "Черновик"}, headers=_bearer(teacher_token),
     )).json()
     assert first["seriesId"] == first["id"]
+    assert first["pageNumber"] == 1
+    assert first["collectionTitle"] == "Черновик"
 
     page = await async_client.post(
         "/teacher/boards",
@@ -540,6 +563,8 @@ async def test_pages_share_an_explicit_series(
     )
     assert page.status_code == 200, page.text
     assert page.json()["seriesId"] == first["id"]
+    assert page.json()["pageNumber"] == 2
+    assert page.json()["collectionTitle"] == "Черновик"
 
     third = (await async_client.post(
         "/teacher/boards",
@@ -547,16 +572,54 @@ async def test_pages_share_an_explicit_series(
         headers=_bearer(teacher_token),
     )).json()
     assert third["seriesId"] == first["id"]
+    assert third["pageNumber"] == 3
+
+    another = (await async_client.post(
+        "/teacher/boards", json={"title": "Йоу"}, headers=_bearer(teacher_token),
+    )).json()
+    assert another["seriesId"] == another["id"]
+    assert another["seriesId"] != first["seriesId"]
+    assert another["collectionTitle"] == "Йоу"
+    assert another["pageNumber"] == 1
 
     other = await _board_for(async_client, teacher_token, student_id, "Другая")
     assert other["seriesId"] == other["id"]
+    assert other["pageNumber"] == 1
+    assert other["collectionTitle"] is None
+    again = await _board_for(async_client, teacher_token, student_id, "Ещё")
+    assert again["seriesId"] == other["seriesId"]
+    assert again["pageNumber"] == 2
 
     listed = (await async_client.get("/teacher/boards", headers=_bearer(teacher_token))).json()
     series = {row["id"]: row["seriesId"] for row in listed}
     assert series[first["id"]] == series[page.json()["id"]] == series[third["id"]] == first["id"]
-    assert series[other["id"]] == other["id"]
+    assert series[another["id"]] == another["id"]
+    assert series[other["id"]] == series[again["id"]] == other["id"]
 
     bad = await async_client.post(
         "/teacher/boards", json={"title": "x", "seriesId": "не uuid"}, headers=_bearer(teacher_token),
     )
     assert bad.status_code == 400
+
+    listed_collections = (
+        await async_client.get("/teacher/boards/collections", headers=_bearer(teacher_token))
+    ).json()
+    folders = {row["id"]: row for row in listed_collections}
+    draft = folders[first["seriesId"]]
+    assert draft["kind"] == "personal"
+    assert draft["title"] == "Черновик"
+    assert draft["studentIds"] == []
+    assert [page["pageNumber"] for page in draft["pages"]] == [1, 2, 3]
+    assert [page["title"] for page in draft["pages"]] == ["Черновик", "Страница 2", "Страница 3"]
+    assert draft["pages"][0]["shareAccess"] == "off"
+    pupil = folders[other["seriesId"]]
+    assert pupil["kind"] == "student"
+    assert pupil["title"] is None
+    assert pupil["studentIds"] == [student_id]
+    assert [page["pageNumber"] for page in pupil["pages"]] == [1, 2]
+
+    visible = (
+        await async_client.get("/student/boards/collections", headers=_bearer(student_token))
+    ).json()
+    assert [row["id"] for row in visible] == [other["seriesId"]]
+    assert visible[0]["pages"][0]["shareAccess"] is None

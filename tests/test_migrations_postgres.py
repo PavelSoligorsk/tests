@@ -17,7 +17,7 @@ import sqlalchemy as sa
 
 PG_URL = os.getenv("TEST_POSTGRES_URL")
 ROOT = Path(__file__).resolve().parent.parent
-BOARD_TABLES = {"boards", "board_students", "board_images", "geogebra_templates"}
+BOARD_TABLES = {"boards", "board_students", "board_images", "geogebra_templates", "board_collections"}
 # Эти индексы есть в моделях, но в проде их создала миграция e6f7a8b9c0d1.
 LATER_INDEXES = ("ix_group_students_student_id", "ix_teacher_students_student_id")
 
@@ -112,15 +112,32 @@ def test_board_series_migration_groups_legacy_boards(pg_engine: sa.Engine) -> No
 
     _alembic("upgrade", "head")
     expected = {"b1": "b1", "b2": "b1", "b10": "b1", "b3": "b3", "b4": "b3", "b5": "b5",
-                "b6": "b6", "b7": "b7", "b8": "b8", "b9": "b9"}
+                "b6": "b6", "b7": "b6", "b8": "b8", "b9": "b9"}
     assert _series(pg_engine, names) == expected
     with pg_engine.connect() as conn:
         column = conn.execute(sa.text(
             "SELECT data_type, is_nullable FROM information_schema.columns "
             "WHERE table_name = 'boards' AND column_name = 'series_id'"
         )).one()
-        assert tuple(column) == ("uuid", "YES")
+        assert tuple(column) == ("uuid", "NO")
         assert conn.execute(sa.text("SELECT 1 FROM pg_indexes WHERE indexname = 'ix_boards_series_id'")).scalar() == 1
+        pages = {
+            names[board]: (names[series], number, kind, title)
+            for board, series, number, kind, title in conn.execute(sa.text(
+                "SELECT b.id, b.series_id, b.page_number, c.kind, c.title "
+                "FROM boards b JOIN board_collections c ON c.id = b.series_id"
+            ))
+        }
+    assert pages["b1"] == ("b1", 1, "group", None)
+    assert pages["b2"] == ("b1", 2, "group", None)
+    assert pages["b10"] == ("b1", 3, "group", None)
+    assert pages["b3"] == ("b3", 1, "legacy", None)
+    assert pages["b4"] == ("b3", 2, "legacy", None)
+    assert pages["b5"] == ("b5", 1, "student", None)
+    assert pages["b6"] == ("b6", 1, "personal", "Черновик")
+    assert pages["b7"] == ("b6", 2, "personal", "Черновик")
+    assert pages["b8"] == ("b8", 1, "legacy", None)
+    assert pages["b9"] == ("b9", 1, "group", None)
     pg_engine.dispose()
 
     _alembic("downgrade", "f7a8b9c0d1e2")

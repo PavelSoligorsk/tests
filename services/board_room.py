@@ -28,7 +28,10 @@ CLOSE_FORBIDDEN = 4403
 CLOSE_NOT_FOUND = 4404
 CLOSE_TOO_SLOW = 4408
 
-META_KEYS = ("id", "title", "teacherId", "groupId", "studentIds", "revision", "createdAt", "updatedAt", "seriesId")
+META_KEYS = (
+    "id", "title", "teacherId", "groupId", "studentIds", "revision",
+    "createdAt", "updatedAt", "seriesId", "pageNumber", "collectionTitle",
+)
 
 log = logging.getLogger(__name__)
 

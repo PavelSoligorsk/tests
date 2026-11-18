@@ -1,6 +1,6 @@
 import enum
 import uuid
-from sqlalchemy import CheckConstraint, Column, Index, Integer, BigInteger, String, Boolean, JSON, ForeignKey, Enum, Text, DateTime, UniqueConstraint, Uuid
+from sqlalchemy import CheckConstraint, Column, Index, Integer, BigInteger, String, Boolean, JSON, ForeignKey, Enum, Text, DateTime, UniqueConstraint, Uuid, text
 from sqlalchemy.orm import relationship
 from core.database import Base
 import datetime
@@ -346,8 +346,49 @@ class Payment(Base):
     student = relationship("User", foreign_keys=[student_id])
 
 
+class BoardCollection(Base):
+    """Папка страниц. Одна на ученика, одна на группу, личные — со своим названием."""
+    __tablename__ = "board_collections"
+
+    id = Column(Uuid(as_uuid=True), primary_key=True)
+    teacher_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    kind = Column(String(16), nullable=False)
+    student_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True)
+    group_id = Column(Integer, ForeignKey("groups.id", ondelete="SET NULL"), nullable=True)
+    title = Column(String(255), nullable=True)
+    created_at = Column(DateTime, default=datetime.datetime.utcnow)
+
+    teacher = relationship("User", foreign_keys=[teacher_id])
+    student = relationship("User", foreign_keys=[student_id])
+    group = relationship("Group", foreign_keys=[group_id])
+
+    __table_args__ = (
+        CheckConstraint(
+            "(kind = 'student' AND group_id IS NULL AND title IS NULL) OR "
+            "(kind = 'group' AND student_id IS NULL AND title IS NULL) OR "
+            "(kind = 'personal' AND student_id IS NULL AND group_id IS NULL AND title IS NOT NULL) OR "
+            "(kind = 'legacy' AND student_id IS NULL AND group_id IS NULL AND title IS NULL)",
+            name="ck_board_collections_shape",
+        ),
+        Index(
+            "uq_board_collections_student",
+            "teacher_id",
+            "student_id",
+            unique=True,
+            postgresql_where=text("kind = 'student'"),
+        ),
+        Index(
+            "uq_board_collections_group",
+            "teacher_id",
+            "group_id",
+            unique=True,
+            postgresql_where=text("kind = 'group' AND group_id IS NOT NULL"),
+        ),
+    )
+
+
 class Board(Base):
-    """Холст учителя. Сам по себе, на учеников или на группу. Не привязан к занятию."""
+    """Страница холста. Лежит в коллекции и не привязана к занятию."""
     __tablename__ = "boards"
 
     id = Column(Uuid(as_uuid=True), primary_key=True, default=uuid.uuid4)
@@ -360,13 +401,19 @@ class Board(Base):
     object_count = Column(Integer, nullable=False, default=0, server_default="0")
     share_token = Column(String(64), nullable=True, unique=True)
     share_access = Column(String(8), nullable=False, default="off", server_default="off")
-    # Страницы одной серии: id первой доски серии. Пусто у старых записей — тогда серия = id.
-    series_id = Column(Uuid(as_uuid=True), nullable=True, index=True)
+    series_id = Column(
+        Uuid(as_uuid=True),
+        ForeignKey("board_collections.id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    )
+    page_number = Column(Integer, nullable=False, default=1, server_default="1")
     created_at = Column(DateTime, default=datetime.datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.datetime.utcnow)
 
     teacher = relationship("User", foreign_keys=[teacher_id])
     group = relationship("Group", foreign_keys=[group_id])
+    collection = relationship("BoardCollection", foreign_keys=[series_id])
     images = relationship("BoardImage", cascade="all, delete-orphan")
     members = relationship("BoardStudent", cascade="all, delete-orphan")
 
