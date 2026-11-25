@@ -285,6 +285,9 @@ class StudentService:
                 user_id=r.user_id,
                 total_points=r.total_points or 0,
                 completed_at=r.completed_at,
+                is_completed=r.completed_at is not None,
+                started_at=r.started_at,
+                time_spent_seconds=r.time_spent_seconds or 0,
                 test_title=r.test.title if r.test else "Тест удалён",
                 test=TestSummaryResponse(
                     id=r.test.id,
@@ -306,6 +309,8 @@ class StudentService:
                 total_points=result.total_points or 0,
                 max_points=0,
                 completed_at=result.completed_at,
+                started_at=result.started_at,
+                time_spent_seconds=result.time_spent_seconds or 0,
                 difficulty_stats={},
                 details=[],
             )
@@ -345,6 +350,8 @@ class StudentService:
             total_points=result.total_points or 0,
             max_points=total_max_points,
             completed_at=result.completed_at,
+            started_at=result.started_at,
+            time_spent_seconds=result.time_spent_seconds or 0,
             difficulty_stats=stats,
             details=details,
         )
@@ -1011,9 +1018,9 @@ class StudentService:
     async def retake_test(self, result_id: int, user_id: int):
         """Пересдать тест — создать новую попытку на основе предыдущего result_id.
 
-        result_id — ID любого (обычно последнего) TestResult этого пользователя
-        для того же теста. Сервер находит test_id по этому result_id,
-        проверяет права и лимиты, затем создаёт новый TestResult.
+        result_id — эта же попытка. Ответы стираются, completed_at становится
+        пустым, таймер начинается заново. Лимит попыток и окно экзамена
+        проверяются до сброса.
         """
         # 1. Find the original result to identify which test
         old_result = await self.result_repo.get_result_by_id(result_id)
@@ -1033,8 +1040,126 @@ class StudentService:
         if not test.is_ai_generated and not test.is_autocompile:
             await self._check_attempt_limits(user_id, test)
 
-        # 3. Build fresh start (retake always creates new, never resumes)
-        return await self._build_test_start_response(user_id, test, force_new=True)
+        # 3. Та же попытка: стереть ответы и таймер, completed_at снова пустой.
+        saved = await self.result_repo.get_user_answers_for_result(old_result.id)
+        for answer in saved:
+            await self.db.delete(answer)
+        await self.db.flush()
+        now = datetime.utcnow()
+        old_result.completed_at = None
+        old_result.total_points = 0
+        old_result.started_at = now
+        old_result.time_spent_seconds = 0
+        await self.db.commit()
+
+        attempts_used = await self.result_repo.count_completed_attempts(user_id, test.id)
+        tasks = [
+            StartTestTaskItem(
+                id=task.id,
+                content=task.content,
+                options=task.options,
+                answer=task.answer,
+                is_open_answer=task.is_open_answer,
+                difficulty=task.difficulty,
+            )
+            for task in test.tasks
+        ]
+        return StartAssignedTestResponse(
+            result_id=old_result.id,
+            test_title=test.title,
+            tasks=tasks,
+            time_limit=None,
+            time_limit_minutes=test.time_limit_minutes,
+            allow_interruptions=test.allow_interruptions if test.allow_interruptions is not None else True,
+            time_spent_seconds=0,
+            attempts_used=attempts_used,
+            max_attempts=test.max_attempts,
+            previous_answers=[],
+        )
+
+    async def _owned_result(self, result_id: int, user_id: int):
+        result = await self.result_repo.get_result_by_id(result_id)
+        if not result or result.user_id != user_id:
+            raise ValueError("Результат не найден")
+        if not result.test:
+            raise ValueError("Тест не найден или удалён")
+        return result
+
+    def _mistake_task_ids(self, tasks, answers_map: dict) -> list:
+        missed = []
+        for task in tasks:
+            answer = answers_map.get(task.id)
+            if answer is None or not answer.is_correct:
+                missed.append(task)
+        return missed
+
+    async def start_mistake_work(self, result_id: int, user_id: int):
+        """Вернуть только задания с ошибкой. Верные ответы попытки не трогает."""
+        result = await self._owned_result(result_id, user_id)
+        if result.completed_at is None:
+            raise ValueError("Сначала завершите тест")
+        answers = await self.result_repo.get_user_answers_for_result(result.id)
+        answers_map = {answer.task_id: answer for answer in answers}
+        missed = self._mistake_task_ids(result.test.tasks, answers_map)
+        if not missed:
+            raise ValueError("Ошибок нет")
+        return MistakeWorkResponse(
+            result_id=result.id,
+            test_title=result.test.title,
+            tasks=[
+                MistakeTaskItem(
+                    id=task.id,
+                    content=task.content,
+                    options=task.options,
+                    is_open_answer=task.is_open_answer,
+                    difficulty=task.difficulty,
+                    user_answer=(
+                        answers_map[task.id].user_text_answer if task.id in answers_map else None
+                    ),
+                )
+                for task in missed
+            ],
+        )
+
+    async def submit_mistake_work(self, result_id: int, user_id: int, answers: list[dict]):
+        """Заменить ответы только в ошибочных заданиях и пересчитать баллы."""
+        result = await self._owned_result(result_id, user_id)
+        if result.completed_at is None:
+            raise ValueError("Сначала завершите тест")
+        if not answers:
+            raise ValueError("Нет ответов")
+        stored = await self.result_repo.get_user_answers_for_result(result.id)
+        answers_map = {answer.task_id: answer for answer in stored}
+        missed = {task.id: task for task in self._mistake_task_ids(result.test.tasks, answers_map)}
+        if any(item["task_id"] not in missed for item in answers):
+            raise ValueError("В работу над ошибками входят только неверные задания")
+        fixed = 0
+        for item in answers:
+            task = missed[item["task_id"]]
+            is_correct = self._check_answer(task, item["user_answer"])
+            points = 2 if (is_correct and task.is_open_answer) else (1 if is_correct else 0)
+            if is_correct:
+                fixed += 1
+            current = answers_map.get(task.id)
+            text = self._serialize_answer(item["user_answer"])
+            if current is None:
+                current = await self.result_repo.save_answer(result.id, task.id, text, is_correct, points)
+                answers_map[task.id] = current
+            else:
+                current.user_text_answer = text
+                current.is_correct = is_correct
+                current.points_earned = points
+        total_points = sum(answer.points_earned or 0 for answer in answers_map.values())
+        await self.result_repo.update_result_points(result.id, total_points)
+        remaining = len(self._mistake_task_ids(result.test.tasks, answers_map))
+        max_score = sum(2 if task.is_open_answer else 1 for task in result.test.tasks)
+        return MistakeSubmitResponse(
+            status="success",
+            score=total_points,
+            max_score_possible=max_score,
+            fixed=fixed,
+            remaining_mistakes=remaining,
+        )
 
     def _serialize_answer(self, user_answer) -> str:
         if isinstance(user_answer, list):

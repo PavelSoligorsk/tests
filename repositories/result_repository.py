@@ -59,7 +59,7 @@ class ResultRepository:
             select(TestResult)
             .options(joinedload(TestResult.test))
             .where(TestResult.user_id == user_id)
-            .order_by(TestResult.completed_at.desc())
+            .order_by(TestResult.completed_at.desc().nullsfirst(), TestResult.id.desc())
         )
         return r.unique().scalars().all()
     

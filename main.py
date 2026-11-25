@@ -1,3 +1,4 @@
+import asyncio
 import os
 import subprocess
 import sys
@@ -18,6 +19,8 @@ from api.board_api import (
     teacher_board_router,
     template_router,
 )
+from core.database import get_session_factory
+from services.attempt_cleanup import stale_attempt_loop
 from services.board_room import board_rooms
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -48,7 +51,11 @@ def _run_alembic_migrations() -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     _run_alembic_migrations()
+    stop_cleanup = asyncio.Event()
+    cleanup = asyncio.create_task(stale_attempt_loop(get_session_factory(), stop_cleanup))
     yield
+    stop_cleanup.set()
+    cleanup.cancel()
     await board_rooms.flush_all()
 
 

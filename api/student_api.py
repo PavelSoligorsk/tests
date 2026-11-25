@@ -10,6 +10,8 @@ from dto_schemas import (
     StudentAITestItemResponse, AvailableTestMetaResponse,
     TheoryQuestionRequest, TestAnswerSubmission, StartAssignedTestResponse,
     RetakeTestResponse,
+    MistakeWorkResponse,
+    MistakeSubmitResponse,
     SaveProgressRequest, SaveProgressResponse,
     FullStatsResponse,
 )
@@ -182,7 +184,7 @@ async def get_my_history(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
-    """Получить историю тестов студента"""
+    """Все попытки, включая незаконченные. У незаконченной completed_at пустой и is_completed равен false."""
     return await async_cache_result(
         "my_history",
         current_user.id,
@@ -496,11 +498,11 @@ async def retake_test(
     service: StudentService = Depends(get_student_service),
     current_user: User = Depends(auth.get_current_user)
 ):
-    """Пересдать тест — создать новую попытку по предыдущему result_id.
+    """Пересдать ту же попытку.
 
-    result_id — ID любого завершённого TestResult пользователя.
-    Сервер находит test_id, проверяет лимиты попыток, экзаменационное окно
-    и создаёт новый TestResult с заданиями.
+    result_id не меняется. Ответы стираются, completed_at становится пустым,
+    таймер начинается заново. Лимит попыток и окно экзамена проверяются
+    до сброса. Сданный AI-тест пересдать нельзя: он уже деактивирован.
     """
     try:
         result = await service.retake_test(result_id, current_user.id)
@@ -515,6 +517,45 @@ async def retake_test(
             "student_stats",
         )
 
+        return result
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/results/{result_id}/mistakes", response_model=MistakeWorkResponse)
+async def start_mistake_work(
+    result_id: int,
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user),
+):
+    """Задания этой попытки, в которых была ошибка. Верные ответы остаются."""
+    try:
+        return await service.start_mistake_work(result_id, current_user.id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/results/{result_id}/mistakes/submit", response_model=MistakeSubmitResponse)
+async def submit_mistake_work(
+    result_id: int,
+    answers: List[TestAnswerSubmission],
+    service: StudentService = Depends(get_student_service),
+    current_user: User = Depends(auth.get_current_user),
+):
+    """Принять новые ответы только по ошибочным заданиям и пересчитать баллы."""
+    try:
+        result = await service.submit_mistake_work(
+            result_id, current_user.id, [answer.model_dump() for answer in answers],
+        )
+        invalidate_user_cache(
+            current_user.id,
+            "student_profile",
+            "my_history",
+            "my_assignments",
+            "my_assignments_meta",
+            "my_ai_tests",
+            "student_stats",
+        )
         return result
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))

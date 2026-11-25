@@ -283,6 +283,9 @@ class TeacherService:
                     id=r.id,
                     total_points=r.total_points or 0,
                     completed_at=r.completed_at,
+                    is_completed=r.completed_at is not None,
+                    started_at=r.started_at,
+                    time_spent_seconds=r.time_spent_seconds or 0,
                 ),
             )
             for r in results
@@ -538,6 +541,8 @@ class TeacherService:
                 total_points=result.total_points or 0,
                 max_points=0,
                 completed_at=result.completed_at,
+                started_at=result.started_at,
+                time_spent_seconds=result.time_spent_seconds or 0,
                 difficulty_stats={},
                 user=ResultUserResponse(
                     first_name=result.user.first_name if result.user else "Неизвестный",
@@ -589,6 +594,8 @@ class TeacherService:
             total_points=result.total_points or 0,
             max_points=total_max_points,
             completed_at=result.completed_at,
+            started_at=result.started_at,
+            time_spent_seconds=result.time_spent_seconds or 0,
             difficulty_stats=difficulty_stats,
             user=ResultUserResponse(
                 first_name=result.user.first_name if result.user else "Неизвестный",

@@ -31,6 +31,9 @@ class StudentHistoryItemResponse(BaseModel):
     user_id: int
     total_points: int
     completed_at: Optional[datetime] = None
+    is_completed: bool = False
+    started_at: Optional[datetime] = None
+    time_spent_seconds: int = 0
     test_title: str
     test: Optional[TestSummaryResponse] = None
 
@@ -72,6 +75,8 @@ class DetailedResultResponse(BaseModel):
     total_points: int
     max_points: int
     completed_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    time_spent_seconds: int = 0
     difficulty_stats: dict[str, DifficultyStatResponse] = Field(default_factory=dict)
     details: list[DetailedResultDetailResponse] = Field(default_factory=list)
     user: Optional[ResultUserResponse] = None
@@ -219,6 +224,9 @@ class TeacherHistoryResultResponse(BaseModel):
     id: int
     total_points: int
     completed_at: Optional[datetime] = None
+    is_completed: bool = False
+    started_at: Optional[datetime] = None
+    time_spent_seconds: int = 0
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -439,7 +447,37 @@ class StartAssignedTestResponse(BaseModel):
 
 
 class RetakeTestResponse(StartAssignedTestResponse):
-    """Ответ на запрос пересдачи теста."""
+    """Ответ на запрос пересдачи теста. result_id тот же, попытка обнулена."""
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MistakeTaskItem(BaseModel):
+    id: int
+    content: str
+    options: Optional[list[str]] = None
+    is_open_answer: bool = False
+    difficulty: Optional[int] = None
+    user_answer: Optional[str] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MistakeWorkResponse(BaseModel):
+    """Задания, в которых была ошибка. Верные ответы попытки не входят."""
+    result_id: int
+    test_title: str
+    tasks: list[MistakeTaskItem] = Field(default_factory=list)
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class MistakeSubmitResponse(BaseModel):
+    status: str
+    score: int
+    max_score_possible: int
+    fixed: int
+    remaining_mistakes: int
+
     model_config = ConfigDict(from_attributes=True)
 
 

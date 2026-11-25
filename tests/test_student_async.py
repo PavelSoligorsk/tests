@@ -207,6 +207,126 @@ async def test_student_get_history(
     assert isinstance(resp.json(), list)
 
 
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_history_includes_unfinished_attempt(
+    async_client: AsyncClient, admin_token: str, teacher_token: str, student_token: str,
+) -> None:
+    """Начатая и не сданная попытка видна в истории."""
+    test = await _setup_teacher_test_with_limits(
+        async_client, admin_token, teacher_token, student_token,
+    )
+    started = await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(student_token),
+    )
+    assert started.status_code == 200, started.text
+
+    open_history = await async_client.get("/student/history", headers=_bearer(student_token))
+    assert open_history.status_code == 200, open_history.text
+    unfinished = [row for row in open_history.json() if row["test_id"] == test["id"]]
+    assert len(unfinished) == 1
+    assert unfinished[0]["id"] == started.json()["result_id"]
+    assert unfinished[0]["completed_at"] is None
+    assert unfinished[0]["is_completed"] is False
+    assert unfinished[0]["started_at"] is not None
+    assert unfinished[0]["time_spent_seconds"] == 0
+
+    submitted = await async_client.post(
+        f"/student/tests/{test['id']}/submit",
+        json=[{"task_id": test["tasks"][0]["id"], "user_answer": "4"}],
+        headers=_bearer(student_token),
+    )
+    assert submitted.status_code == 200, submitted.text
+
+    done = await async_client.get("/student/history", headers=_bearer(student_token))
+    match = [row for row in done.json() if row["test_id"] == test["id"]]
+    assert len(match) == 1
+    assert match[0]["completed_at"] is not None
+    assert match[0]["is_completed"] is True
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_teacher_and_admin_see_unfinished_attempt(
+    async_client: AsyncClient, admin_token: str, teacher_token: str, student_token: str,
+) -> None:
+    """Учитель и админ видят незаконченную попытку и время."""
+    test = await _setup_teacher_test_with_limits(
+        async_client, admin_token, teacher_token, student_token,
+    )
+    started = await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(student_token),
+    )
+    assert started.status_code == 200, started.text
+    result_id = started.json()["result_id"]
+    student_id = (await async_client.get("/student/me", headers=_bearer(student_token))).json()["user"]["id"]
+
+    teacher_hist = await async_client.get(
+        f"/teacher/students-history/{student_id}", headers=_bearer(teacher_token),
+    )
+    assert teacher_hist.status_code == 200, teacher_hist.text
+    row = next(item["result"] for item in teacher_hist.json() if item["result"]["id"] == result_id)
+    assert row["is_completed"] is False
+    assert row["completed_at"] is None
+    assert row["started_at"] is not None
+    assert row["time_spent_seconds"] == 0
+
+    admin_hist = await async_client.get(
+        f"/admin/users/{student_id}/history", headers=_bearer(admin_token),
+    )
+    assert admin_hist.status_code == 200, admin_hist.text
+    admin_row = next(item["result"] for item in admin_hist.json() if item["result"]["id"] == result_id)
+    assert admin_row["is_completed"] is False
+    assert admin_row["time_spent_seconds"] == 0
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_stale_incomplete_attempt_is_deleted(
+    async_client: AsyncClient, db: AsyncSession, admin_token: str, teacher_token: str, student_token: str,
+) -> None:
+    """Незаконченная попытка старше 10 дней удаляется, сданная остаётся."""
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import select
+
+    from core.models import TestResult
+    from services.attempt_cleanup import delete_stale_incomplete_attempts
+
+    test = await _setup_teacher_test_with_limits(
+        async_client, admin_token, teacher_token, student_token,
+    )
+    task_id = test["tasks"][0]["id"]
+    done = await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(student_token),
+    )
+    assert done.status_code == 200, done.text
+    done_id = done.json()["result_id"]
+    submitted = await async_client.post(
+        f"/student/tests/{test['id']}/submit",
+        json=[{"task_id": task_id, "user_answer": "4"}],
+        headers=_bearer(student_token),
+    )
+    assert submitted.status_code == 200, submitted.text
+
+    fresh = await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(student_token),
+    )
+    assert fresh.status_code == 200, fresh.text
+    fresh_id = fresh.json()["result_id"]
+    assert fresh_id != done_id
+
+    old = (await db.execute(select(TestResult).where(TestResult.id == fresh_id))).scalar_one()
+    old.started_at = datetime.utcnow() - timedelta(days=11)
+    await db.commit()
+
+    removed = await delete_stale_incomplete_attempts(db)
+    assert removed >= 1
+    left = (await db.execute(select(TestResult.id).where(TestResult.id.in_([done_id, fresh_id])))).scalars().all()
+    assert done_id in left
+    assert fresh_id not in left
+
+
 # ═══════════════════════════════════════════════════════════════
 # Назначения
 # ═══════════════════════════════════════════════════════════════
@@ -1334,6 +1454,101 @@ async def test_teacher_test_retake_after_max_attempts(
     assert retake.status_code == 400, \
         f"Expected 400, got {retake.status_code}: {retake.text}"
     assert "лимит" in retake.json()["detail"].lower()
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_retake_resets_the_same_attempt(
+    async_client: AsyncClient, admin_token: str, teacher_token: str, student_token: str,
+) -> None:
+    """Пересдача оставляет тот же result_id и обнуляет ответы и таймер."""
+    test = await _setup_teacher_test_with_limits(
+        async_client, admin_token, teacher_token, student_token, max_attempts=2,
+    )
+    task = test["tasks"][0]
+    await async_client.post(f"/student/start-test/{test['id']}", headers=_bearer(student_token))
+    submitted = await async_client.post(
+        f"/student/tests/{test['id']}/submit",
+        json=[{"task_id": task["id"], "user_answer": "3"}],
+        headers=_bearer(student_token),
+    )
+    assert submitted.status_code == 200, submitted.text
+
+    hist = await async_client.get("/student/history", headers=_bearer(student_token))
+    result_id = next(row["id"] for row in hist.json() if row["test_id"] == test["id"])
+
+    retake = await async_client.post(
+        f"/student/retake/{result_id}", headers=_bearer(student_token),
+    )
+    assert retake.status_code == 200, retake.text
+    body = retake.json()
+    assert body["result_id"] == result_id
+    assert body["time_spent_seconds"] == 0
+    assert body["previous_answers"] == []
+    assert body["attempts_used"] == 0
+
+    detail = await async_client.get(
+        f"/student/results/{result_id}", headers=_bearer(student_token),
+    )
+    assert detail.status_code == 200, detail.text
+    assert detail.json()["total_points"] == 0
+    assert detail.json()["completed_at"] is None
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
+async def test_mistake_work_keeps_correct_answers(
+    async_client: AsyncClient, admin_token: str, teacher_token: str, student_token: str,
+) -> None:
+    """Работа над ошибками принимает новый ответ только по неверному заданию."""
+    wrong = await async_create_task(async_client, admin_token, {
+        "task_class": "10", "topic_number": "1",
+        "topic": "algebra", "section": "equations",
+        "content": "3 + 3 = ?", "answer": "6", "is_open_answer": False,
+        "options": ["5", "6", "7", "8"],
+        "difficulty": 1, "hint": "h", "solution": "6",
+    })
+    test = await _setup_teacher_test_with_limits(
+        async_client, admin_token, teacher_token, student_token,
+        extra_tasks=[wrong["id"]],
+    )
+    right = next(task for task in test["tasks"] if task["id"] != wrong["id"])
+    await async_client.post(f"/student/start-test/{test['id']}", headers=_bearer(student_token))
+    submitted = await async_client.post(
+        f"/student/tests/{test['id']}/submit",
+        json=[
+            {"task_id": right["id"], "user_answer": "4"},
+            {"task_id": wrong["id"], "user_answer": "5"},
+        ],
+        headers=_bearer(student_token),
+    )
+    assert submitted.status_code == 200, submitted.text
+
+    hist = await async_client.get("/student/history", headers=_bearer(student_token))
+    result_id = next(row["id"] for row in hist.json() if row["test_id"] == test["id"])
+
+    mistakes = await async_client.post(
+        f"/student/results/{result_id}/mistakes", headers=_bearer(student_token),
+    )
+    assert mistakes.status_code == 200, mistakes.text
+    assert [task["id"] for task in mistakes.json()["tasks"]] == [wrong["id"]]
+    assert mistakes.json()["tasks"][0]["user_answer"] == "5"
+
+    fixed = await async_client.post(
+        f"/student/results/{result_id}/mistakes/submit",
+        json=[{"task_id": wrong["id"], "user_answer": "6"}],
+        headers=_bearer(student_token),
+    )
+    assert fixed.status_code == 200, fixed.text
+    assert fixed.json()["fixed"] == 1
+    assert fixed.json()["remaining_mistakes"] == 0
+    assert fixed.json()["score"] == 2
+
+    again = await async_client.post(
+        f"/student/results/{result_id}/mistakes", headers=_bearer(student_token),
+    )
+    assert again.status_code == 400
+    assert "ошибок нет" in again.json()["detail"].lower()
 
 
 # ═══════════════════════════════════════════════════════════════
