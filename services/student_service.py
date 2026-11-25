@@ -964,9 +964,11 @@ class StudentService:
         existing = await self.result_repo.get_incomplete_result(user_id, test_id)
 
         if not force_new and (test.allow_interruptions is None or test.allow_interruptions) and existing:
-            # ── Accumulative mode: resume existing attempt ──
+            # Продолжаем попытку. Пауза, пока тест был закрыт, в счёт не идёт:
+            # новый заход начинается сейчас, уже накопленные секунды остаются.
             result = existing
-            # time_spent_seconds already tracks accumulated time
+            result.started_at = now
+            await self.db.commit()
 
             # Restore previously saved answers so the frontend can pre-fill them
             saved = await self.result_repo.get_user_answers_for_result(result.id)

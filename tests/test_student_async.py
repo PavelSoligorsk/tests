@@ -282,6 +282,46 @@ async def test_teacher_and_admin_see_unfinished_attempt(
 
 @pytest.mark.student
 @pytest.mark.asyncio
+async def test_reopen_does_not_count_time_away(
+    async_client: AsyncClient, db: AsyncSession, admin_token: str, teacher_token: str, student_token: str,
+) -> None:
+    """Повторный вход не прибавляет паузу, пока тест был закрыт."""
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import select
+
+    from core.models import TestResult
+
+    test = await _setup_teacher_test_with_limits(
+        async_client, admin_token, teacher_token, student_token,
+    )
+    started = await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(student_token),
+    )
+    assert started.status_code == 200, started.text
+    result_id = started.json()["result_id"]
+
+    row = (await db.execute(select(TestResult).where(TestResult.id == result_id))).scalar_one()
+    row.started_at = datetime.utcnow() - timedelta(hours=2)
+    row.time_spent_seconds = 100
+    await db.commit()
+
+    again = await async_client.post(
+        f"/student/start-test/{test['id']}", headers=_bearer(student_token),
+    )
+    assert again.status_code == 200, again.text
+    body = again.json()
+    assert body["result_id"] == result_id
+    assert body["time_spent_seconds"] == 100
+
+    db.expire_all()
+    fresh = (await db.execute(select(TestResult).where(TestResult.id == result_id))).scalar_one()
+    assert fresh.time_spent_seconds == 100
+    assert fresh.started_at > datetime.utcnow() - timedelta(minutes=1)
+
+
+@pytest.mark.student
+@pytest.mark.asyncio
 async def test_stale_incomplete_attempt_is_deleted(
     async_client: AsyncClient, db: AsyncSession, admin_token: str, teacher_token: str, student_token: str,
 ) -> None:
